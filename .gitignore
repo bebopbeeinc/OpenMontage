@@ -36,9 +36,6 @@ projects/
 corpus/
 **/corpus/
 
-# User music library (personal royalty-free tracks — not part of repo)
-music_library/
-
 # Pipeline-local clip / image libraries (generated MP4s + PNGs from OpenArt,
 # moved here from ~/Downloads/*_Library so all paths are repo-local — but
 # the media itself is large and regenerable, never commit it).
