@@ -61,9 +61,13 @@
 
   .question .qtext { font-weight: 500; margin-bottom: 4px; }
   .question .mode { color: var(--muted); font-size: 11px; }
-  .question .answer { color: var(--accent); font-size: 11px; margin-top: 4px;
-                      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .question .answer b { font-weight: 600; }
+  .question .choices { margin-top: 6px; display: flex; flex-direction: column;
+                       gap: 2px; font-size: 11px;
+                       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .question .choice { color: var(--muted); display: flex; gap: 6px; align-items: baseline; }
+  .question .choice .marker { width: 12px; flex-shrink: 0; }
+  .question .choice.correct { color: var(--accent); font-weight: 600; }
+  .question .choice.correct .marker { color: var(--accent); }
 
   .answers-ref { background: var(--bg); border: 1px solid var(--border);
                  border-radius: 5px; padding: 10px 12px; font-size: 12px;
@@ -482,7 +486,7 @@ function renderRows() {
         <td class="question">
           <div class="qtext">${escapeHtml(r.question || '—')}</div>
           <div class="mode">${escapeHtml(r.mode || '')}</div>
-          ${r.answer_correct ? `<div class="answer">→ <b>${escapeHtml(r.answer_correct)}</b></div>` : ''}
+          ${choicesInline(r)}
         </td>
         <td class="thumb-cell">
           <div style="display:flex; gap:6px; align-items:flex-start;">
@@ -869,6 +873,25 @@ function showModal(src) {
 function closePromptEditor() {
   const root = $('modal-root');
   root.innerHTML = '';
+}
+
+// Inline (row-table) version of the answers — compact stack, correct
+// one highlighted. The modal's answersRefBlock has the same shape plus
+// response text + hint; this is the at-a-glance summary on the row.
+function choicesInline(r) {
+  const choices = [
+    {label: 'A', text: r.answer_correct, correct: true},
+    {label: 'B', text: r.answer_2,       correct: false},
+    {label: 'C', text: r.answer_3,       correct: false},
+    {label: 'D', text: r.answer_4,       correct: false},
+  ].filter(c => (c.text || '').trim());
+  if (!choices.length) return '';
+  return `<div class="choices">${choices.map(c => `
+    <div class="choice ${c.correct ? 'correct' : ''}">
+      <span class="marker">${c.correct ? '✓' : c.label}</span>
+      <span>${escapeHtml(c.text)}</span>
+    </div>
+  `).join('')}</div>`;
 }
 
 function answersRefBlock(r) {
