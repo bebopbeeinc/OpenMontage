@@ -5,6 +5,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
+
+# Piper TTS voice models (large binary .onnx files — fetch separately)
+.piper_voices/
 
 # Test/IDE
 .pytest_cache/
@@ -33,6 +38,12 @@ corpus/
 
 # User music library (personal royalty-free tracks — not part of repo)
 music_library/
+
+# Pipeline-local clip / image libraries (generated MP4s + PNGs from OpenArt,
+# moved here from ~/Downloads/*_Library so all paths are repo-local — but
+# the media itself is large and regenerable, never commit it).
+scripts/trivia/library/
+scripts/trivia_images/library/
 
 # Environment & credentials
 .env
@@ -79,3 +90,4 @@ remotion-composer/public/*
 remotion-composer/public/demo-props/test-*
 remotion-composer/public/demo-props/talking-head-*
 remotion-composer/public/demo-props/caption-burn-*
+.playwright/

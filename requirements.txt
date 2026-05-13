@@ -5,3 +5,15 @@ jsonschema>=4.20
 python-dotenv>=1.0
 Pillow>=10.0
 requests>=2.31
+
+# Local trivia pipeline (scripts/trivia/*, scripts/common/transcribe.py).
+# See scripts/trivia/docs/setup.md for the full setup walkthrough.
+anthropic>=0.25                  # SDK path for feedback_router / shorten_vo / pick_reactions_llm (CLI fallback handles the no-key case)
+google-api-python-client>=2.100  # Sheets + Drive API
+google-auth>=2.30                # service-account auth for Sheets/Drive
+google-auth-httplib2>=0.2
+faster-whisper>=1.0              # transcribe.py — CPU int8 word-level timestamps
+piper-tts>=1.2                   # local TTS (assemble_modular --tts-provider piper)
+playwright>=1.50                 # openart_driver.py / openart_image_driver.py (also requires `playwright install chromium`)
+fastapi>=0.110                   # web/server.py review UI
+uvicorn>=0.27

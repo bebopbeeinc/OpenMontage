@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>OpenMontage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #22e88a;
+    --warn: #f0b429;
+    --running: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 64px 32px; }
+  h1 { margin: 0 0 8px 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
+  .sub { color: var(--muted); margin: 0 0 40px 0; font-size: 14px; }
+
+  .pipeline-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+  @media (min-width: 720px) { .pipeline-grid { grid-template-columns: 1fr 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+          padding: 20px 22px; text-decoration: none; color: inherit;
+          display: flex; flex-direction: column; gap: 8px; min-height: 140px;
+          transition: border-color 0.12s ease, transform 0.12s ease; }
+  .card:hover { border-color: var(--running); transform: translateY(-1px); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .card h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.2px; }
+  .card .stab { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+                padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .card .stab.production { color: var(--accent); border-color: rgba(34, 232, 138, 0.3); }
+  .card .stab.beta { color: var(--warn); border-color: rgba(240, 180, 41, 0.3); }
+  .card .stab.test { color: var(--muted); }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .card .open { margin-top: auto; font-size: 12px; color: var(--running); }
+
+  .empty { text-align: center; color: var(--muted); padding: 60px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>OpenMontage</h1>
+  <p class="sub">Pick a pipeline.</p>
+  <div id="pipeline-grid" class="pipeline-grid">
+    <div class="empty">Loading…</div>
+  </div>
+</main>
+
+<script>
+async function loadPipelines() {
+  const r = await fetch("api/pipelines");
+  if (!r.ok) {
+    document.getElementById("pipeline-grid").innerHTML =
+      `<div class="empty">Failed to load pipelines: ${r.status}</div>`;
+    return;
+  }
+  const { pipelines } = await r.json();
+  const root = document.getElementById("pipeline-grid");
+  if (!pipelines.length) {
+    root.innerHTML = `<div class="empty">No pipelines registered.</div>`;
+    return;
+  }
+  root.innerHTML = pipelines.map(p => `
+    <a class="card" href="${p.path}">
+      <div class="card-head">
+        <h2>${escapeHtml(p.name)}</h2>
+        <span class="stab ${p.stability}">${escapeHtml(p.stability)}</span>
+      </div>
+      <p>${escapeHtml(p.description)}</p>
+      <div class="open">Open →</div>
+    </a>
+  `).join("");
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]
+  ));
+}
+
+loadPipelines();
+</script>
+</body>
+</html>

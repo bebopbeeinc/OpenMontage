@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- Mounted at /trivia by web/server.py. The base href lets us write relative
+     fetch URLs (api/foo) that resolve under the mount prefix automatically. -->
+<base href="/trivia/" />
+<title>Trivia Pipeline</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #22e88a;
+    --warn: #f0b429;
+    --err: #f85149;
+    --running: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header button { margin-left: auto; }
+  main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
+         height: calc(100vh - 53px); }
+  .rows { overflow: auto; }
+  .panel { background: var(--panel); border-left: 1px solid var(--border);
+           display: flex; flex-direction: column; overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--bg); text-align: left;
+             padding: 10px 8px; border-bottom: 1px solid var(--border);
+             color: var(--muted); font-weight: 500; }
+  tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border);
+             vertical-align: top; }
+  tbody tr:hover { background: #11161d; }
+  td.row-num { color: var(--muted); font-variant-numeric: tabular-nums; width: 40px; }
+  td.slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--accent); }
+  td.topic { color: var(--text); max-width: 260px; }
+  td.hook { color: var(--muted); max-width: 320px; }
+  td.actions { white-space: nowrap; width: 1%; }
+
+  .status-pill { display: inline-block; padding: 2px 8px; border-radius: 12px;
+                 font-size: 11px; font-weight: 500; }
+  .pill-draft { background: #21262d; color: var(--muted); }
+  .pill-queued { background: #1f3a5f; color: var(--running); }
+  .pill-review { background: #3a2e0c; color: var(--warn); }
+  .pill-readypub { background: #0c3a1f; color: var(--accent); }
+  .pill-approved { background: #0c3a1f; color: var(--accent); }
+  .pill-needsrev { background: #3a0c0c; color: var(--err); }
+  .pill-published { background: #4d2a82; color: #c79bff; }
+
+  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
+           padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit;
+           font-size: 12px; }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #1f6f43; border-color: #2ea04c; }
+  button.primary:hover:not(:disabled) { background: #2ea04c; }
+  button.warn { background: #6e4a0e; border-color: #b08a2b; }
+  button.warn:hover:not(:disabled) { background: #a07016; }
+
+  .clip-dots { display: inline-flex; gap: 3px; cursor: help; }
+  .clip-dot { width: 8px; height: 8px; border-radius: 50%; background: #30363d; }
+  .clip-dot.ok { background: var(--accent); }
+  .clip-dot.ok-drive { background: var(--running); }
+  .clip-dot.needs-pick { background: var(--warn); }
+  .clip-dot.missing { background: var(--err); }
+  .clip-dot.empty { background: #30363d; }
+
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .panel-header h2 { margin: 0; font-size: 14px; }
+  .panel-header .panel-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .panel-actions { padding: 10px 16px; border-bottom: 1px solid var(--border);
+                   display: flex; gap: 8px; flex-wrap: wrap; }
+  .log { flex: 1; overflow: auto; padding: 12px 16px;
+         font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         white-space: pre-wrap; word-break: break-word; }
+  .log .header { color: var(--accent); font-weight: 600; }
+  .log .err { color: var(--err); }
+  .log .cmd { color: var(--running); }
+  .empty-state { color: var(--muted); padding: 24px 16px; font-style: italic; }
+
+  .recent-jobs { border-bottom: 1px solid var(--border); padding: 8px 12px;
+                 display: flex; flex-wrap: wrap; gap: 6px; max-height: 88px; overflow: auto; }
+  .recent-jobs:empty { display: none; }
+  .recent-job { padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
+                background: #0d1117; font-size: 11px; cursor: pointer;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                display: inline-flex; align-items: center; gap: 6px; }
+  .recent-job:hover { background: #21262d; }
+  .recent-job.selected { border-color: var(--accent); }
+  .recent-job .rj-status { width: 6px; height: 6px; border-radius: 50%; }
+  .recent-job .rj-status.queued   { background: var(--muted); }
+  .recent-job .rj-status.running  { background: var(--running); animation: pulse 1.2s infinite; }
+  .recent-job .rj-status.success  { background: var(--accent); }
+  .recent-job .rj-status.error    { background: var(--err); }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+
+  /* Variants drawer */
+  tr.variant-row > td { padding: 0; background: #0a0e14; border-bottom: 1px solid var(--border); }
+  .variant-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+                  padding: 14px 18px; }
+  .variant-col { display: flex; flex-direction: column; gap: 8px;
+                 background: var(--panel); border: 1px solid var(--border);
+                 border-radius: 6px; padding: 12px; }
+  .variant-col h3 { margin: 0 0 4px 0; font-size: 12px; color: var(--muted);
+                    text-transform: uppercase; letter-spacing: 0.6px;
+                    display: flex; align-items: center; gap: 6px; }
+  .variant-col h3 .seg-name { color: var(--text); margin-right: 6px;
+                              text-transform: none; letter-spacing: 0; font-weight: 600; }
+  .variant-col .seg-detail { font-size: 11px; color: var(--muted); word-break: break-all; }
+  .variant-list { display: flex; flex-direction: column; gap: 8px; }
+  .variant-card { display: flex; flex-direction: column; gap: 6px;
+                  border: 1px solid var(--border); border-radius: 4px; padding: 6px;
+                  background: #0d1117; }
+  .variant-card.canonical { border-color: var(--accent); }
+  .variant-card video { width: 100%; height: auto; max-height: 220px;
+                        background: #000; border-radius: 3px; }
+  .variant-card .vc-meta { display: flex; align-items: center; gap: 6px;
+                           font-size: 11px; color: var(--muted); }
+  .variant-card .vc-meta .badge { padding: 1px 6px; border-radius: 3px;
+                                  background: #21262d; color: var(--text); font-size: 10px; }
+  .variant-card .vc-meta .badge.canonical { background: #0c3a1f; color: var(--accent); }
+  .variant-empty { color: var(--muted); font-style: italic; font-size: 12px; padding: 6px 0; }
+  .segment-actions { display: flex; gap: 6px; margin-top: 4px; }
+
+  .feedback-panel { padding: 14px 18px 4px 18px; display: flex; flex-direction: column; gap: 8px; }
+  .feedback-panel h3 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase;
+                       letter-spacing: 0.6px; display: flex; align-items: baseline; gap: 8px; }
+  .feedback-panel h3 .seg-detail { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .feedback-panel textarea { width: 100%; min-height: 60px; max-height: 200px;
+                             background: #0d1117; color: var(--text);
+                             border: 1px solid var(--border); border-radius: 5px;
+                             padding: 8px 10px; font: 13px/1.4 inherit; resize: vertical; }
+  .feedback-panel textarea:focus { outline: none; border-color: var(--running); }
+  .feedback-actions { display: flex; gap: 6px; align-items: center; }
+  .fb-status { font-size: 11px; color: var(--muted); }
+  .fb-status.ok { color: var(--accent); }
+  .fb-status.err { color: var(--err); }
+
+  .verify-panel { border-bottom: 1px solid var(--border); padding: 10px 16px;
+                  display: flex; flex-direction: column; gap: 8px; }
+  .verify-panel:empty { display: none; }
+  .verdict-header { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .verdict-pill { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600;
+                  text-transform: uppercase; letter-spacing: 0.4px; }
+  .verdict-pill.pass { background: #0c3a1f; color: var(--accent); }
+  .verdict-pill.warn { background: #3a2e0c; color: var(--warn); }
+  .verdict-pill.fail { background: #3a0c0c; color: var(--err); }
+  .verify-frames { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .verify-frames img { width: 100%; height: auto; aspect-ratio: 9/16;
+                       object-fit: cover; background: #000; border-radius: 3px;
+                       cursor: zoom-in; border: 1px solid var(--border); }
+  .verify-checks { display: flex; flex-direction: column; gap: 4px; font-size: 11px;
+                   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .verify-checks .vc { display: flex; gap: 6px; }
+  .verify-checks .vc-name { color: var(--muted); width: 70px; }
+  .verify-checks .vc-icon.pass { color: var(--accent); }
+  .verify-checks .vc-icon.warn { color: var(--warn); }
+  .verify-checks .vc-icon.fail { color: var(--err); }
+
+  .recent-job .rj-verdict { font-size: 10px; padding: 0 4px; border-radius: 2px; }
+  .recent-job .rj-verdict.pass { background: rgba(34,232,138,0.15); color: var(--accent); }
+  .recent-job .rj-verdict.warn { background: rgba(240,180,41,0.15); color: var(--warn); }
+  .recent-job .rj-verdict.fail { background: rgba(248,81,73,0.15); color: var(--err); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Trivia Pipeline</h1>
+    <span class="meta" id="header-meta">loading…</span>
+    <button id="refresh-btn">refresh</button>
+  </header>
+
+  <main>
+    <section class="rows">
+      <table>
+        <thead>
+          <tr>
+            <th>Row</th>
+            <th>Status</th>
+            <th>Slug</th>
+            <th>Topic</th>
+            <th>Hook</th>
+            <th>Clips</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows-tbody">
+          <tr><td colspan="7" class="empty-state">loading…</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <aside class="panel">
+      <div class="panel-header">
+        <h2 id="panel-title">No job selected</h2>
+        <div class="panel-meta" id="panel-meta"></div>
+      </div>
+      <div class="recent-jobs" id="recent-jobs"></div>
+      <div class="panel-actions" id="panel-actions"></div>
+      <div class="verify-panel" id="verify-panel"></div>
+      <pre class="log" id="log-box"><span class="empty-state">Pick a row and run a pipeline to see logs here.</span></pre>
+    </aside>
+  </main>
+
+<script>
+const $ = (q) => document.querySelector(q);
+let currentJobId = null;
+let currentEventSource = null;
+
+function pillClass(s) {
+  s = (s || "").toLowerCase().trim();
+  if (s === "approved") return "pill-approved";
+  if (s === "ready to publish") return "pill-readypub";
+  if (s === "ready for review") return "pill-review";
+  if (s === "needs revision") return "pill-needsrev";
+  if (s === "published") return "pill-published";
+  if (s === "queued") return "pill-queued";
+  return "pill-draft";
+}
+
+function clipDots(row) {
+  const segs = ["hook", "body", "closer"];
+  return `<span class="clip-dots">${
+    segs.map(s => {
+      const seg = (row.segments && row.segments[s]) || {status: "empty", detail: ""};
+      const cls = seg.status === "ok-local"     ? "ok"
+                : seg.status === "ok-drive"     ? "ok-drive"
+                : seg.status === "needs-pick"   ? "needs-pick"
+                : seg.status === "missing-file" ? "missing"
+                :                                  "empty";
+      const title = `${s}: ${seg.status}${seg.detail ? " — " + seg.detail : ""}`;
+      return `<span class="clip-dot ${cls}" title="${escapeHtml(title)}"></span>`;
+    }).join("")
+  }</span>`;
+}
+
+function segmentTooltip(row) {
+  const segs = row.segments || {};
+  const lines = [];
+  for (const s of ["hook", "body", "closer"]) {
+    const seg = segs[s] || {status: "?", detail: ""};
+    if (seg.status !== "ok-local" && seg.status !== "ok-drive") {
+      lines.push(`${s}: ${seg.detail}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+const STATUS_LABEL = {
+  "ok-local":     "ok",
+  "ok-drive":     "drive",
+  "needs-pick":   "pick one ↓",
+  "missing-file": "missing",
+  "empty":        "no source",
+};
+
+async function loadRows() {
+  const r = await fetch("api/rows");
+  const tbody = $("#rows-tbody");
+  if (!r.ok) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">error: ${await r.text()}</td></tr>`;
+    return;
+  }
+  const rows = await r.json();
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-state">no rows</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(row => {
+    const slug = (row.slug || "").trim();
+    const canRun = row.sources_ready && slug;
+    const status = row.final_status || "Draft";
+    const slugAttr = escapeHtml(slug);
+    const runTitle = canRun ? "" : (segmentTooltip(row) || "row not ready");
+    const expanded = expandedRows.has(row.row);
+    const expandLabel = expanded ? "▾" : "▸";
+    return `
+      <tr>
+        <td class="row-num">
+          <button data-action="expand" data-row="${row.row}"
+                  style="background:transparent;border:none;padding:0;color:var(--muted);font-size:14px;cursor:pointer"
+                  title="show variants">${expandLabel}</button>
+          ${row.row}
+        </td>
+        <td><span class="status-pill ${pillClass(status)}">${escapeHtml(status || "Draft")}</span></td>
+        <td class="slug">${slug ? escapeHtml(slug) : "<em style='color:var(--muted)'>(no slug)</em>"}</td>
+        <td class="topic">${escapeHtml(row.topic || "")}</td>
+        <td class="hook">${escapeHtml(row.hook || "")}</td>
+        <td>${clipDots(row)}</td>
+        <td class="actions">
+          <button class="primary" data-action="run"     data-kind="render"  data-row="${row.row}" data-slug="${slugAttr}" title="${escapeHtml(runTitle)}" ${canRun ? "" : "disabled"}>Run</button>
+          <button                 data-action="open"                       data-row="${row.row}" data-slug="${slugAttr}" title="${row.render_exists ? "" : "no render yet — click Run first"}" ${row.render_exists ? "" : "disabled"}>Open</button>
+          <button class="warn"    data-action="run"     data-kind="publish" data-row="${row.row}" data-slug="${slugAttr}" title="${row.render_exists ? "" : "no render to publish — click Run first"}" ${row.render_exists ? "" : "disabled"}>Publish</button>
+        </td>
+      </tr>
+      ${expanded ? variantDrawer(row) : ""}
+    `;
+  }).join("");
+}
+
+function variantDrawer(row) {
+  const slug = (row.slug || "").trim();
+  const slugAttr = escapeHtml(slug);
+  const canRun = row.sources_ready && slug;
+  const cols = ["hook", "body", "closer"].map(seg => {
+    const s = (row.segments && row.segments[seg]) || {status: "empty", detail: "", variants: []};
+    const canonical = row[CANON_KEY[seg]] || "";
+    const variants = s.variants || [];
+    const cards = variants.length
+      ? variants.map(v => variantCard(seg, canonical, v)).join("")
+      : `<div class="variant-empty">no local files</div>`;
+    const canGenerate = canonical && (s.status === "missing-file" || s.status === "empty");
+    const genBtn = canGenerate
+      ? `<button class="primary" data-action="generate" data-row="${row.row}" data-segment="${seg}">Generate v1/v2</button>`
+      : "";
+    const regenBtn = canonical
+      ? `<button data-action="generate" data-row="${row.row}" data-segment="${seg}" data-force="1" title="re-generate, ignoring existing files">Re-gen</button>`
+      : "";
+    return `
+      <div class="variant-col">
+        <h3>
+          <span class="seg-name">${seg}</span>${STATUS_LABEL[s.status] || s.status}
+          <button data-action="rescan" data-row="${row.row}" title="rescan library for new files"
+                  style="margin-left:auto;background:transparent;border:none;color:var(--muted);padding:0 4px;cursor:pointer">↻</button>
+        </h3>
+        <div class="seg-detail">${escapeHtml(canonical || "(no filename in sheet)")}</div>
+        <div class="variant-list">${cards}</div>
+        <div class="segment-actions">${genBtn}${regenBtn}</div>
+      </div>`;
+  }).join("");
+  const feedback = row.feedback || "";
+  const fbPanel = `
+    <div class="feedback-panel">
+      <h3>Feedback <span class="seg-detail">(what's wrong with the current render — feeds the re-render)</span></h3>
+      <textarea id="fb-${row.row}" placeholder="e.g. 'hook VO sped up too much' or 'music ducked under closer cuts the last word'">${escapeHtml(feedback)}</textarea>
+      <div class="feedback-actions">
+        <button data-action="save-feedback" data-row="${row.row}" data-slug="${slugAttr}" ${slugAttr ? "" : "disabled"} title="${slugAttr ? "" : "row needs a slug before feedback can be saved"}">Save</button>
+        <button class="primary" data-action="save-and-rerender" data-row="${row.row}" data-slug="${slugAttr}" ${canRun ? "" : "disabled"} title="${canRun ? "" : "fix missing clips first"}">Save &amp; Re-render</button>
+        <span class="fb-status" id="fb-status-${row.row}"></span>
+      </div>
+    </div>`;
+  return `<tr class="variant-row"><td colspan="7">${fbPanel}<div class="variant-grid">${cols}</div></td></tr>`;
+}
+
+function variantCard(segment, canonical, v) {
+  const isCanon = v.kind === "canonical";
+  // Cache-bust on mtime so re-generated variants don't show the old cached video.
+  const url = `api/library/${encodeURIComponent(segment)}/${encodeURIComponent(v.filename)}?v=${Math.floor(v.mtime || 0)}`;
+  const pickBtn = isCanon
+    ? ""
+    : `<button data-action="pick" data-segment="${segment}" data-canonical="${escapeHtml(canonical)}" data-variant="${escapeHtml(v.filename)}">Pick this</button>`;
+  return `
+    <div class="variant-card ${isCanon ? 'canonical' : ''}">
+      <video src="${url}" preload="metadata" controls muted></video>
+      <div class="vc-meta">
+        <span class="badge ${isCanon ? 'canonical' : ''}">${isCanon ? 'canonical' : 'variant'}</span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.filename)}</span>
+        ${pickBtn}
+      </div>
+    </div>`;
+}
+
+const CANON_KEY = {
+  hook: "reaction_filename",
+  body: "body_filename",
+  closer: "closer_filename",
+};
+
+const expandedRows = new Set();
+
+document.getElementById("rows-tbody").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-action]");
+  if (!btn || btn.disabled) return;
+  const action = btn.dataset.action;
+  const row = parseInt(btn.dataset.row, 10);
+  if (action === "run") {
+    runJob(btn.dataset.kind, row, btn.dataset.slug || "");
+  } else if (action === "open") {
+    openRender(btn.dataset.slug || "");
+  } else if (action === "approve") {
+    approveRow(row);
+  } else if (action === "expand") {
+    if (expandedRows.has(row)) expandedRows.delete(row);
+    else expandedRows.add(row);
+    loadRows();
+  } else if (action === "generate") {
+    generateSegment(row, btn.dataset.segment, btn.dataset.force === "1");
+  } else if (action === "pick") {
+    pickVariant(btn.dataset.segment, btn.dataset.canonical, btn.dataset.variant);
+  } else if (action === "save-feedback") {
+    saveFeedback(row, btn.dataset.slug || "");
+  } else if (action === "save-and-rerender") {
+    saveFeedbackAndRerender(row, btn.dataset.slug || "");
+  } else if (action === "rescan") {
+    loadRows();
+  }
+});
+
+async function saveFeedback(row, slug) {
+  const ta = document.getElementById(`fb-${row}`);
+  if (!ta) return;
+  const status = document.getElementById(`fb-status-${row}`);
+  status.className = "fb-status";
+  status.textContent = "saving…";
+  const r = await fetch("api/feedback", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({row, slug, feedback: ta.value}),
+  });
+  if (!r.ok) {
+    status.className = "fb-status err";
+    status.textContent = `error: ${await r.text()}`;
+    return false;
+  }
+  status.className = "fb-status ok";
+  status.textContent = "saved";
+  setTimeout(() => { status.textContent = ""; }, 2000);
+  return true;
+}
+
+async function saveFeedbackAndRerender(row, slug) {
+  const ok = await saveFeedback(row, slug);
+  if (!ok) return;
+  runJob("render", row, slug);
+}
+
+async function generateSegment(row, segment, force) {
+  const msg = force
+    ? `Re-generate v1/v2 for ${segment} on row ${row}? Existing files will be ignored and new ones written alongside.`
+    : `Generate v1/v2 for ${segment} on row ${row}? This drives openart.ai and can take a few minutes.`;
+  if (!confirm(msg)) return;
+  const r = await fetch("api/run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind: "generate", row, segments: [segment], variants: 2, force: !!force}),
+  });
+  if (!r.ok) {
+    alert(`generate failed: ${await r.text()}`);
+    return;
+  }
+  const job = await r.json();
+  expandedRows.add(row);
+  selectJob(job.id, job);
+}
+
+async function pickVariant(segment, canonical, variant) {
+  const r = await fetch("api/pick", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({segment, canonical_filename: canonical, variant_filename: variant}),
+  });
+  if (!r.ok) {
+    alert(`pick failed: ${await r.text()}`);
+    return;
+  }
+  loadRows();
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, c => (
+    {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]
+  ));
+}
+
+async function runJob(kind, row, slug) {
+  const r = await fetch("api/run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({kind, row, slug}),
+  });
+  if (!r.ok) {
+    alert(`run failed: ${await r.text()}`);
+    return;
+  }
+  const job = await r.json();
+  selectJob(job.id, job);
+}
+
+async function approveRow(row) {
+  if (!confirm(`Flip row ${row} to Approved?`)) return;
+  const r = await fetch("api/approve", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({row}),
+  });
+  if (!r.ok) {
+    alert(`approve failed: ${await r.text()}`);
+    return;
+  }
+  loadRows();
+}
+
+function openRender(slug) {
+  window.open(`api/render/${encodeURIComponent(slug)}`, "_blank");
+}
+
+function selectJob(jobId, jobMeta) {
+  if (currentEventSource) {
+    currentEventSource.close();
+    currentEventSource = null;
+  }
+  currentJobId = jobId;
+  $("#log-box").textContent = "";
+  renderJobHeader(jobMeta);
+  // Backfill via REST, then stream new lines via SSE
+  fetch(`api/jobs/${jobId}`).then(r => r.json()).then(j => {
+    renderJobHeader(j);
+    $("#log-box").textContent = j.log.join("\n");
+    $("#log-box").scrollTop = $("#log-box").scrollHeight;
+    if (j.status === "running" || j.status === "queued") {
+      streamJob(jobId);
+    }
+  });
+}
+
+function renderJobHeader(j) {
+  const kindLabel = {render: "Render", publish: "Publish", generate: "Generate"}[j.kind] || j.kind;
+  $("#panel-title").textContent = `${kindLabel} · row ${j.row} · ${j.slug}`;
+  const dur = j.started_at && j.finished_at
+    ? `${((new Date(j.finished_at) - new Date(j.started_at)) / 1000).toFixed(1)}s`
+    : (j.started_at ? "running…" : "queued");
+  $("#panel-meta").textContent = `${j.id} · ${j.status} · ${dur}`;
+  const actions = $("#panel-actions");
+  actions.innerHTML = "";
+  if (j.status === "success" && j.kind === "render") {
+    const openBtn = document.createElement("button");
+    openBtn.textContent = "▶ Play render";
+    openBtn.onclick = () => openRender(j.slug);
+    const pubBtn = document.createElement("button");
+    pubBtn.className = "warn";
+    pubBtn.textContent = "Publish to Drive";
+    pubBtn.onclick = () => runJob("publish", j.row, j.slug);
+    actions.appendChild(openBtn);
+    actions.appendChild(pubBtn);
+  } else if (j.status === "success" && j.kind === "publish") {
+    const apv = document.createElement("button");
+    apv.textContent = "Flip to Approved";
+    apv.onclick = () => approveRow(j.row);
+    actions.appendChild(apv);
+  }
+  // Verify panel: only for render jobs, only after success.
+  renderVerifyPanel(j);
+}
+
+async function renderVerifyPanel(j) {
+  const el = $("#verify-panel");
+  el.innerHTML = "";
+  if (j.kind !== "render" || j.status !== "success" || !j.slug) return;
+  const r = await fetch(`api/verify/${encodeURIComponent(j.slug)}`);
+  if (!r.ok) return;
+  const rep = await r.json();
+  const v = rep.verdict || "warn";
+  const frames = (rep.frames || []).map(name =>
+    `<img src="api/frame/${encodeURIComponent(j.slug)}/${encodeURIComponent(name)}"
+          onclick="window.open(this.src,'_blank')"
+          title="${escapeHtml(name)}">`
+  ).join("");
+  const checks = (rep.checks || []).map(c => `
+    <div class="vc">
+      <span class="vc-icon ${c.status}">${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✗'}</span>
+      <span class="vc-name">${escapeHtml(c.name)}</span>
+      <span>${escapeHtml(c.detail)}</span>
+    </div>`).join("");
+  el.innerHTML = `
+    <div class="verdict-header">
+      <span class="verdict-pill ${v}">${v}</span>
+      <span>verify · ${(rep.duration_s || 0).toFixed(2)}s</span>
+    </div>
+    ${frames ? `<div class="verify-frames">${frames}</div>` : ""}
+    <div class="verify-checks">${checks}</div>
+  `;
+}
+
+function streamJob(jobId) {
+  const es = new EventSource(`api/jobs/${jobId}/stream`);
+  currentEventSource = es;
+  es.onmessage = (e) => {
+    const line = JSON.parse(e.data);
+    const box = $("#log-box");
+    const wasAtBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 50;
+    box.textContent += (box.textContent ? "\n" : "") + line;
+    if (wasAtBottom) box.scrollTop = box.scrollHeight;
+  };
+  es.addEventListener("end", () => {
+    es.close();
+    // Refresh job meta + table
+    fetch(`api/jobs/${jobId}`).then(r => r.json()).then(renderJobHeader);
+    loadRows();
+  });
+  es.onerror = () => {
+    // Browser will auto-reconnect; if the job is done the server will replay
+    // the 'end' event.
+  };
+}
+
+async function loadHealth() {
+  const r = await fetch("api/health");
+  const h = await r.json();
+  $("#header-meta").textContent =
+    `${h.sa_present ? "" : "⚠ SA missing — "}repo: ${h.repo.replace(/^.*\//, "")}`;
+}
+
+$("#refresh-btn").addEventListener("click", () => { loadRows(); loadHealth(); loadJobs(); });
+
+async function loadJobs() {
+  const r = await fetch("api/jobs");
+  if (!r.ok) return;
+  const list = await r.json();
+  const el = $("#recent-jobs");
+  if (!list.length) { el.innerHTML = ""; return; }
+  el.innerHTML = list.map(j => {
+    const v = j.verify_verdict;
+    const vBadge = v ? `<span class="rj-verdict ${v}">${v}</span>` : "";
+    return `
+    <div class="recent-job ${j.id === currentJobId ? 'selected' : ''}" data-job-id="${j.id}" title="${escapeHtml(j.kind)} row ${j.row} · ${j.slug}${v ? ' · verify=' + v : ''}">
+      <span class="rj-status ${j.status}"></span>
+      <span>${j.id}</span>
+      <span style="color:var(--muted)">${j.kind[0]}·r${j.row}</span>
+      ${vBadge}
+    </div>`;
+  }).join("");
+}
+
+document.getElementById("recent-jobs").addEventListener("click", (e) => {
+  const card = e.target.closest(".recent-job");
+  if (!card) return;
+  selectJob(card.dataset.jobId, null);
+});
+
+// Wrap selectJob to remember the active job across refreshes.
+const _selectJob = selectJob;
+selectJob = function(jobId, meta) {
+  try { localStorage.setItem("trivia.lastJobId", jobId); } catch {}
+  _selectJob(jobId, meta);
+  loadJobs();
+};
+
+async function resumeLastJob() {
+  let last;
+  try { last = localStorage.getItem("trivia.lastJobId"); } catch {}
+  if (!last) return;
+  const r = await fetch(`api/jobs/${last}`);
+  if (!r.ok) {
+    try { localStorage.removeItem("trivia.lastJobId"); } catch {}
+    return;
+  }
+  selectJob(last, null);
+}
+
+loadHealth();
+loadRows();
+loadJobs();
+resumeLastJob();
+
+function maybeReloadRows() {
+  // Don't blow away a textarea the user is typing in.
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) return;
+  // Don't blow away a video the user is engaged with — loadRows rebuilds
+  // #rows-tbody via innerHTML and would detach any playing <video> mid-frame.
+  const engaged = Array.from(document.querySelectorAll("video")).some(v =>
+    !v.paused || (v.currentTime > 0.05 && !v.ended)
+  );
+  if (engaged) return;
+  loadRows();
+}
+// Note: no periodic `setInterval` for `maybeReloadRows`. We previously polled
+// every 10s but that detached active <video> elements (innerHTML rebuild) and
+// interrupted review playback. The page still stays fresh via:
+//   - the manual "Refresh" button (top right)
+//   - the window-focus handler below (returns from another tab/app)
+//   - the SSE 'end' callback in streamJob (job completes)
+// The jobs sidebar still polls — it doesn't contain videos.
+setInterval(loadJobs, 5000);
+
+// Returning to the tab after editing files in Finder = immediate refresh.
+window.addEventListener("focus", () => {
+  maybeReloadRows();
+  loadJobs();
+});
+</script>
+</body>
+</html>
