@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 
 # Pipeline sub-apps. Each must be a self-contained FastAPI app.
 from scripts.trivia.web import server as trivia
+from scripts.trivia_images.web import server as trivia_images
 
 REPO = Path(__file__).resolve().parents[1]
 WEB_DIR = Path(__file__).resolve().parent
@@ -47,14 +48,27 @@ PIPELINES = [
         ),
         "stability": "beta",
     },
+    {
+        "id": "trivia-images",
+        "path": "/trivia-images/",
+        "name": "Trivia Images",
+        "description": (
+            "Per-row question + answer images for trivia rows. Reads the "
+            "Brian tab of the trivia-questions sheet; generates the question "
+            "image from col Q with OpenArt, then the answer image from col R "
+            "using the question image as a same-scene reference."
+        ),
+        "stability": "beta",
+    },
 ]
 
 
 app = FastAPI(title="OpenMontage pipeline launcher")
 
-# Mount pipeline sub-apps. The trivia FastAPI app already has its own routes
-# rooted at "/", so mounting at "/trivia" prefixes everything correctly.
+# Mount pipeline sub-apps. Each sub-app has its own routes rooted at "/", so
+# mounting at "/<slug>" prefixes everything correctly.
 app.mount("/trivia", trivia.app)
+app.mount("/trivia-images", trivia_images.app)
 
 
 @app.get("/")

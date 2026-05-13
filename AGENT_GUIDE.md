@@ -235,6 +235,7 @@ If the folder has tracks, the proposal and asset stages should present them as o
 | `avatar-spokesperson` | Presenter-led avatar or lip-sync videos | production |
 | `localization-dub` | Subtitle, dub, and translated variants | beta |
 | `trivia-short` | Daily-trivia vertical short driven by the Post Calendar sheet | beta |
+| `trivia-images` | Per-row question + answer images for trivia rows (OpenArt-driven, answer image references question image) | beta |
 | `framework-smoke` | Test: minimal 2-stage smoke test | test |
 
 > **Beta pipelines** have not been fully audited. They work, but expect rough edges. Mention this when the user selects one.

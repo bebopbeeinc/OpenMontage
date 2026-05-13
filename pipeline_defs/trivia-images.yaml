@@ -1,0 +1,122 @@
+name: trivia-images
+version: "0.1"
+description: >
+  Per-row trivia image pipeline. For one row of the `Brian` tab of the
+  trivia-questions sheet, generates the **question image** from the column Q
+  prompt and the **answer image** from the column R prompt — where the answer
+  image is created in OpenArt's "same scene" remix mode, taking the freshly
+  generated question image as a reference so both share the same environment.
+
+  Each row is its own project (slug `trivia-q-{N}`). Generated PNGs land in
+  the shared image library at `scripts/trivia_images/library/` so the
+  downstream trivia-short pipeline keeps finding them at the well-known
+  filename. Canonical artifacts and checkpoints live under
+  `projects/trivia-q-{N}/artifacts/`.
+
+  See scripts/trivia_images/generate.py for the CLI batch wrapper used to
+  run this pipeline across many rows from one invocation.
+category: assets
+stability: beta
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+
+extensions:
+  custom_scripts: true        # scripts/trivia_images/*.py owns the sheet glue
+  custom_playbooks: false
+  custom_skills: true
+  custom_tools: true          # tools/graphics/openart_image.py
+
+required_skills:
+  - pipelines/trivia-images/question-image-director
+  - pipelines/trivia-images/answer-image-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+# External state — the Brian tab is the SOURCE OF TRUTH for prompts and
+# completion state. The on-disk library is the source of truth for whether
+# an image actually exists.
+external_state:
+  - kind: google_sheet
+    id: 1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk
+    tab: Brian
+    role: source_of_truth
+    auth: service_account
+    auth_path: ~/.google/claude-sheets-sa.json
+    notes: >
+      Row 1 = section-header labels, row 2 = column names, row 3+ = data.
+      Pipeline reads col C (Number, used as the image slug `q{N}`),
+      col Q (Question IMAGE prompt), col R (Answer IMAGE (CORRECT) prompt,
+      a "Same Scene" remix prompt that depends on the question image as a
+      reference). On successful question-image generation the pipeline
+      writes ✓ into col D. No sheet column tracks answer-image
+      completion today — presence of `q{N}_answer.png` on disk is the
+      source of truth for that. Code resolves column indices in
+      scripts/trivia_images/generate.py (COL_NUMBER, COL_COMPLETE,
+      COL_PROMPT).
+  - kind: local_directory
+    path: scripts/trivia_images/library/
+    role: deliverable_drop
+    notes: >
+      Gitignored library of generated images. Naming convention:
+      `q{N}.png` for the question image, `q{N}_answer.png` for the
+      answer image. The downstream trivia-short pipeline consumes these
+      by filename.
+
+# Future stages can be added before `question_image` — most likely a
+# `prompts` stage that generates the col Q + col R copy from the row's
+# question/answer context, then writes them back to the sheet. For now
+# prompts are authored manually in the sheet.
+stages:
+  - name: question_image
+    skill: pipelines/trivia-images/question-image-director
+    produces:
+      - asset_manifest
+    required_tools:
+      - openart_image
+    tools_available:
+      - openart_image
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Row number is present and the row has a non-empty col Q prompt
+      - Output landed at scripts/trivia_images/library/q{N}.<ext>
+      - asset_manifest records model, provider, prompt, and the slug `q{N}`
+      - Image opens without error and matches the requested aspect (4:3)
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - asset_manifest.assets contains exactly one image entry with
+        scene_id == `q{N}` and type == "image"
+      - The file referenced by the asset's `path` exists on disk
+      - Brian!D{row} == "✓" (the question-image completion mark)
+
+  - name: answer_image
+    skill: pipelines/trivia-images/answer-image-director
+    required_artifacts_in:
+      - asset_manifest
+    produces:
+      - asset_manifest
+    required_tools:
+      - openart_image
+    tools_available:
+      - openart_image
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Question image `q{N}.png` exists and is passed to OpenArt as the
+        reference / source image
+      - Col R prompt is the "Same Scene" variant — it should describe
+        the answer scene while sharing the environment of col Q
+      - Output landed at scripts/trivia_images/library/q{N}_answer.<ext>
+      - asset_manifest accumulates BOTH images (question + answer) so
+        the downstream trivia-short pipeline can read them as a pair
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - asset_manifest.assets contains two image entries — one with
+        scene_id == `q{N}` (the question) and one with scene_id ==
+        `q{N}_answer` (the answer)
+      - The answer image asset records the question image path under
+        `metadata.reference_image_path` (carried through as a free-form
+        metadata field on the asset's `generation_summary`)
+      - Both files referenced exist on disk

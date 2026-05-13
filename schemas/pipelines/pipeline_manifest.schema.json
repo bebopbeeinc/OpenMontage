@@ -11,12 +11,46 @@
     "description": { "type": "string" },
     "category": {
       "type": "string",
-      "enum": ["talking_head", "generated", "hybrid", "screen_recording", "animation", "cinematic", "custom"]
+      "enum": ["talking_head", "generated", "hybrid", "screen_recording", "animation", "cinematic", "custom", "short_form", "assets"]
     },
     "stability": {
       "type": "string",
-      "enum": ["production", "beta"],
-      "description": "Whether this pipeline has been audited and is considered stable"
+      "enum": ["production", "beta", "test"],
+      "description": "Whether this pipeline has been audited and is considered stable. 'test' is for framework smoke tests."
+    },
+    "external_state": {
+      "type": "array",
+      "description": "External data sources this pipeline reads from or writes to (e.g., Google Sheets, Drive folders, local directories). Each entry documents one external dependency.",
+      "items": {
+        "type": "object",
+        "required": ["kind", "role"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["google_sheet", "google_drive_folder", "local_directory", "http_endpoint"] },
+          "id": { "type": "string", "description": "Resource identifier (sheet id, drive folder id, etc.)" },
+          "path": { "type": "string", "description": "Local path for local_directory kind" },
+          "tab": { "type": "string", "description": "Sheet tab name for google_sheet kind" },
+          "role": { "type": "string", "enum": ["source_of_truth", "catalog", "deliverable_drop", "cache", "config"] },
+          "auth": { "type": "string", "enum": ["service_account", "user_oauth", "none"] },
+          "auth_path": { "type": "string", "description": "Path to credentials file when auth=service_account" },
+          "notes": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "production_modes": {
+      "type": "array",
+      "description": "Alternative execution modes for the pipeline (e.g., manual vs automated asset generation).",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "required_tools": { "type": "array", "items": { "type": "string" } },
+          "best_for": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      }
     },
     "compatible_playbooks": {
       "oneOf": [

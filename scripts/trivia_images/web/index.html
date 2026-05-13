@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- Mounted at /trivia-images by web/server.py. The base href lets fetch
+     calls use relative paths (api/foo) that resolve under the mount prefix. -->
+<base href="/trivia-images/" />
+<title>Trivia Images</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #22e88a;
+    --warn: #f0b429;
+    --err: #f85149;
+    --running: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  a { color: var(--running); }
+
+  header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+           display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header button { margin-left: 0; }
+
+  main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
+         height: calc(100vh - 53px); }
+  .rows { overflow: auto; }
+  .panel { background: var(--panel); border-left: 1px solid var(--border);
+           display: flex; flex-direction: column; overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--bg); text-align: left;
+             padding: 10px 8px; border-bottom: 1px solid var(--border);
+             color: var(--muted); font-weight: 500; z-index: 1; }
+  tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border);
+             vertical-align: top; }
+  tbody tr:hover { background: #11161d; }
+  td.check { width: 30px; text-align: center; padding-left: 10px; }
+  td.row-num { color: var(--muted); font-variant-numeric: tabular-nums; width: 50px; }
+  td.slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--accent); width: 60px; }
+  td.cat { color: var(--muted); width: 110px; }
+  td.question { color: var(--text); max-width: 280px; }
+  td.actions { white-space: nowrap; width: 1%; }
+  tr.selected { background: #161f2f; }
+  tr.selected:hover { background: #1a2538; }
+  tr.row-queued { background: #1a1f2a; }
+  tr.row-running { background: #14253a; }
+  input[type="checkbox"] { width: 14px; height: 14px; accent-color: var(--accent);
+                           cursor: pointer; vertical-align: middle; }
+
+  .question .qtext { font-weight: 500; margin-bottom: 4px; }
+  .question .mode { color: var(--muted); font-size: 11px; }
+
+  .thumb-cell { width: 96px; }
+  .thumb { width: 96px; height: 72px; border-radius: 4px;
+           background: #0a0e14; border: 1px solid var(--border);
+           display: flex; align-items: center; justify-content: center;
+           overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
+  .thumb-missing { color: var(--muted); font-size: 11px; font-style: italic; }
+
+  .has-prompt-pill { display: inline-block; padding: 2px 6px; border-radius: 10px;
+                     font-size: 10px; font-weight: 500; }
+  .pp-yes { background: #0c3a1f; color: var(--accent); }
+  .pp-no { background: #21262d; color: var(--muted); }
+
+  .drive-pill { display: inline-block; padding: 2px 7px; border-radius: 10px;
+                font-size: 10px; font-weight: 500; margin-left: 4px;
+                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                text-decoration: none; }
+  .drive-pill.approved { background: #0c3a1f; color: var(--accent); }
+  .drive-pill.staging  { background: #3a2e0c; color: var(--warn); }
+  .drive-pill.none     { background: #21262d; color: var(--muted); }
+  a.drive-pill:hover { filter: brightness(1.25); }
+  a.drive-pill::after { content: " ↗"; opacity: 0.6; }
+
+  .drive-links { display: inline-flex; gap: 12px; margin-left: 12px;
+                 font-size: 12px; }
+  .drive-links a { color: var(--running); text-decoration: none; }
+  .drive-links a:hover { text-decoration: underline; }
+
+  .row-state { display: inline-block; padding: 2px 7px; border-radius: 10px;
+               font-size: 10px; font-weight: 500; margin-left: 4px; }
+  .row-state.queued { background: #1f3a5f; color: var(--running); }
+  .row-state.running { background: #14253a; color: var(--running);
+                       animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  .filters { padding: 10px 18px; border-bottom: 1px solid var(--border);
+             display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+             background: #0a0e14; }
+  .filters input[type="search"],
+  .filters select { background: var(--panel); color: var(--text);
+                    border: 1px solid var(--border); border-radius: 5px;
+                    padding: 5px 8px; font: inherit; font-size: 12px; }
+  .filters input[type="search"] { width: 220px; }
+  .filters label { color: var(--muted); font-size: 11px; }
+  .filters .stats { color: var(--muted); font-size: 11px; margin-left: auto; }
+  .filters .stats b { color: var(--text); font-weight: 600; }
+
+  .batch-bar { padding: 8px 18px; border-bottom: 1px solid var(--border);
+               display: flex; gap: 10px; align-items: center;
+               background: #0c1422; }
+  .batch-bar .count { color: var(--muted); font-size: 12px; }
+  .batch-bar .count.have { color: var(--accent); }
+
+  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
+           padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit;
+           font-size: 12px; }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #1f6f43; border-color: #2ea04c; }
+  button.primary:hover:not(:disabled) { background: #2ea04c; }
+  button.warn { background: #6e4a0e; border-color: #b08a2b; }
+  button.warn:hover:not(:disabled) { background: #a07016; }
+  button.danger { background: #5d1717; border-color: #a83232; color: #ffd7d7; }
+  button.danger:hover:not(:disabled) { background: #862020; }
+  button.small { padding: 3px 8px; font-size: 11px; }
+
+  .actions .btn-row { display: flex; gap: 6px; flex-direction: column; align-items: stretch; }
+  .actions button { white-space: nowrap; }
+
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .panel-header h2 { margin: 0; font-size: 14px; }
+  .panel-header .panel-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+  .panel-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
+  .panel-tabs button { flex: 1; border-radius: 0; border: none; border-right: 1px solid var(--border);
+                       background: transparent; color: var(--muted); padding: 8px 12px; }
+  .panel-tabs button:last-child { border-right: none; }
+  .panel-tabs button.active { background: var(--bg); color: var(--text); }
+
+  .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 12px; padding: 12px 16px; overflow: auto; flex: 1;
+         white-space: pre-wrap; word-break: break-word; }
+  .log .log-empty { color: var(--muted); font-style: italic; }
+
+  .job-list { padding: 12px 16px; overflow: auto; flex: 1; }
+  .job-list .job { display: grid; grid-template-columns: 80px 1fr 60px;
+                   gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
+                   font-size: 12px; cursor: pointer; }
+  .job-list .job:hover { background: #1a2030; }
+  .job-list .job .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                       color: var(--muted); }
+  .job-list .job .kind { color: var(--text); }
+  .job-list .job .status { text-align: right; }
+  .status-queued { color: var(--muted); }
+  .status-running { color: var(--running); }
+  .status-success { color: var(--accent); }
+  .status-error { color: var(--err); }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+                    display: flex; align-items: center; justify-content: center;
+                    z-index: 10; cursor: zoom-out; }
+  .modal-backdrop img { max-width: 90vw; max-height: 90vh; cursor: zoom-out;
+                        border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px;
+           border-radius: 6px; background: var(--panel); border: 1px solid var(--border);
+           color: var(--text); font-size: 13px; z-index: 20; max-width: 380px; }
+  .toast.err { border-color: var(--err); color: var(--err); }
+  .toast.ok { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Trivia Images</h1>
+  <div class="meta" id="meta">loading…</div>
+  <div class="drive-links">
+    <a href="https://drive.google.com/drive/folders/1wENmER7aQ6wk23jP6wOggc7mviLAB_pw" target="_blank" rel="noopener">Approved ↗</a>
+    <a href="https://drive.google.com/drive/folders/1NMb2WeJp7HVsO-gzvOA-B0wK83uFta9k" target="_blank" rel="noopener">Staging ↗</a>
+  </div>
+  <div class="spacer"></div>
+  <button onclick="loadRows()">Refresh</button>
+  <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
+</header>
+
+<main>
+  <div class="rows" id="rows-pane">
+    <div class="filters">
+      <input type="search" id="f-search" placeholder="search question, category, mode…" oninput="applyFilters()" />
+      <label>Category</label>
+      <select id="f-category" onchange="applyFilters()"><option value="">all</option></select>
+      <label>Mode</label>
+      <select id="f-mode" onchange="applyFilters()"><option value="">all</option></select>
+      <label>Status</label>
+      <select id="f-status" onchange="applyFilters()">
+        <option value="">all rows</option>
+        <option value="needs-q">needs question image</option>
+        <option value="needs-a-ready">needs answer (Q exists — ready to run)</option>
+        <option value="needs-a-any">needs answer (any state — cascade Q if missing)</option>
+        <option value="has-both">has both images</option>
+        <option value="missing-prompts">missing one or both prompts</option>
+      </select>
+      <div class="stats" id="stats">—</div>
+    </div>
+
+    <div class="batch-bar">
+      <span id="selected-count" class="count">nothing selected</span>
+      <button class="primary small" id="batch-gen" disabled onclick="runBatch('generate')">
+        Generate (0 missing)
+      </button>
+      <button class="warn small" id="batch-regen" disabled onclick="runBatch('regen')">
+        Re-gen (0 existing)
+      </button>
+      <button class="small" onclick="clearSelection()">Clear</button>
+      <span id="queue-status" class="count" style="margin-left:auto;"></span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Row</th>
+          <th>Slug</th>
+          <th>Category</th>
+          <th>Question</th>
+          <th>
+            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" id="check-all-q" onchange="toggleAll('question_image', this.checked)" />
+              Q Image
+            </label>
+          </th>
+          <th>
+            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
+              <input type="checkbox" id="check-all-a" onchange="toggleAll('answer_image', this.checked)" />
+              A Image
+            </label>
+          </th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="8" style="padding: 40px; text-align: center; color: var(--muted);">
+          loading rows from Brian tab…
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2 id="panel-title">Log</h2>
+      <div class="panel-meta" id="panel-meta">no job yet</div>
+    </div>
+    <div class="panel-tabs">
+      <button class="active" data-tab="log" onclick="switchTab('log')">Log</button>
+      <button data-tab="jobs" onclick="switchTab('jobs')">Recent Jobs</button>
+    </div>
+    <div class="log" id="log">
+      <span class="log-empty">No job running. Pick a row and click Generate Question or Generate Answer.</span>
+    </div>
+    <div class="job-list" id="job-list" style="display:none;"></div>
+  </div>
+</main>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let allRows = [];           // every row from the sheet
+let visibleRows = [];       // after filters
+// Selections are per-kind: a row can be selected for Q only, A only, or both.
+const selected = { question_image: new Set(), answer_image: new Set() };
+let active = {};            // {slug: {kind: status}} from /api/active
+let activeJobId = null;
+let activeEvt = null;
+let activeTab = 'log';
+let activePollTimer = null;
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}: ${await r.text().catch(()=>'')}`);
+  return r.json();
+}
+
+function toast(msg, kind='ok') {
+  const root = $('toast-root');
+  const div = document.createElement('div');
+  div.className = `toast ${kind}`;
+  div.textContent = msg;
+  root.appendChild(div);
+  setTimeout(() => div.remove(), 4500);
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Drive is the source of truth — "has image" means Drive has it.
+function hasImg(r, kind) {
+  const d = kind === 'question_image' ? r.question_drive : r.answer_drive;
+  return !!(d && d.state !== 'none');
+}
+
+function thumbCell(r, kind) {
+  // Image bytes always come from Drive via /api/image; the modified_time is
+  // included as ?v= to bust the browser cache after a re-gen.
+  const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
+  if (!drive || drive.state === 'none') {
+    return '<div class="thumb"><span class="thumb-missing">none</span></div>';
+  }
+  const v = encodeURIComponent(drive.modified_time || drive.file_id || '');
+  const short = kind === 'question_image' ? 'Q' : 'A';
+  const src = `api/image/${encodeURIComponent(r.slug)}/${short}?v=${v}`;
+  return `<div class="thumb"><img src="${src}" alt="${escapeHtml(r.slug)}/${short}" onclick="showModal(this.src)" /></div>`;
+}
+
+function drivePill(drive) {
+  const state = (drive && drive.state) || 'none';
+  const label = state === 'approved' ? 'approved'
+              : state === 'staging'  ? 'staging'
+              : 'no drive';
+  const title = drive && drive.drive_name ? escapeHtml(drive.drive_name) : '';
+  // When we have a file_id, the pill is a click-through to the Drive page
+  // for that specific file. Otherwise it's a plain non-clickable span.
+  if (drive && drive.file_id) {
+    const href = `https://drive.google.com/file/d/${encodeURIComponent(drive.file_id)}/view`;
+    return `<a class="drive-pill ${state}" href="${href}" target="_blank" rel="noopener" title="${title}">${label}</a>`;
+  }
+  return `<span class="drive-pill ${state}" title="${title}">${label}</span>`;
+}
+
+function approveBtn(r, kind) {
+  const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
+  const state = drive && drive.state;
+  if (state !== 'staging') return '';   // only stageable images get a button
+  const label = `Approve ${kind === 'question_image' ? 'Q' : 'A'}`;
+  return `<button class="primary small" onclick="approveImage(${r.row}, '${r.slug}', '${kind}')">${label}</button>`;
+}
+
+function discardBtn(r, kind) {
+  const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
+  const state = drive && drive.state;
+  if (state !== 'staging') return '';   // approved files must be discarded via Drive directly
+  return `<button class="danger small" onclick="discardImage(${r.row}, '${r.slug}', '${kind}')">Discard</button>`;
+}
+
+function promptPill(has) {
+  return has
+    ? '<span class="has-prompt-pill pp-yes">prompt ✓</span>'
+    : '<span class="has-prompt-pill pp-no">no prompt</span>';
+}
+
+function stateBadge(slug, kind) {
+  const st = active[slug] && active[slug][kind];
+  if (!st) return '';
+  return `<span class="row-state ${st}">${st}</span>`;
+}
+
+function rowMatchesFilter(r) {
+  const q = $('f-search').value.trim().toLowerCase();
+  if (q) {
+    const hay = `${r.slug} ${r.category} ${r.mode} ${r.question}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
+  const cat = $('f-category').value;
+  if (cat && r.category !== cat) return false;
+  const mode = $('f-mode').value;
+  if (mode && r.mode !== mode) return false;
+  const status = $('f-status').value;
+  const hasQImg = hasImg(r, 'question_image');
+  const hasAImg = hasImg(r, 'answer_image');
+  if (status === 'needs-q') return !hasQImg && !!r.prompt_q;
+  if (status === 'needs-a-ready') return hasQImg && !hasAImg && !!r.prompt_r;
+  if (status === 'needs-a-any') return !hasAImg && !!r.prompt_r;
+  if (status === 'has-both') return hasQImg && hasAImg;
+  if (status === 'missing-prompts') return !r.prompt_q || !r.prompt_r;
+  return true;
+}
+
+function rowEligible(r, kind) {
+  // What prerequisites must hold for this row to be selectable for `kind`?
+  if (kind === 'question_image') return !!r.prompt_q;
+  // answer_image needs col R; the question image is required at run-time but
+  // we don't gate selection on it — if Q is missing, we'll auto-add Q to the
+  // batch (see toggleKind / toggleAll), so the worker queues Q first and the
+  // file is on disk by the time the A job runs.
+  return !!r.prompt_r;
+}
+
+// True when selecting A for this row should also pull Q into the batch.
+function answerNeedsQ(r) {
+  return !hasImg(r, 'question_image') && !!r.prompt_q;
+}
+
+function kindCheckboxCell(r, kind) {
+  const eligible = rowEligible(r, kind);
+  const isSelected = selected[kind].has(r.row);
+  const inFlight = active[r.slug] && active[r.slug][kind];
+  const disabled = !eligible || !!inFlight;
+  // Hint when picking A on this row will also pull Q into the batch.
+  const cascades = kind === 'answer_image' && answerNeedsQ(r);
+  const title = cascades
+    ? "selecting this will also queue Q (the answer image needs Q as a reference)"
+    : '';
+  return `<input type="checkbox" ${isSelected?'checked':''} ${disabled?'disabled':''} ${title?`title="${escapeHtml(title)}"`:''} onchange="toggleKind(${r.row}, '${kind}', this.checked)" />`;
+}
+
+function renderRows() {
+  const tbody = $('tbody');
+  if (!visibleRows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--muted);">no rows match filters</td></tr>`;
+    $('check-all-q').checked = false;
+    $('check-all-a').checked = false;
+    return;
+  }
+  tbody.innerHTML = visibleRows.map(r => {
+    const hasQ = !!r.prompt_q;
+    const hasR = !!r.prompt_r;
+    const hasQImg = hasImg(r, 'question_image');
+    const hasAImg = hasImg(r, 'answer_image');
+    // A can run when we have a Q reference (either already on Drive, or
+    // pending in this same batch via the auto-cascade) and the col R prompt.
+    const canAnswer = hasR;
+    const selQ = selected.question_image.has(r.row);
+    const selA = selected.answer_image.has(r.row);
+    const qState = active[r.slug] && active[r.slug].question_image;
+    const aState = active[r.slug] && active[r.slug].answer_image;
+    const rowClass = (qState === 'running' || aState === 'running') ? 'row-running'
+                   : (qState === 'queued'  || aState === 'queued')  ? 'row-queued'
+                   : (selQ || selA) ? 'selected' : '';
+    const qBtn = `<button class="primary small" ${!hasQ?'disabled':''} onclick="runJob(${r.row}, '${r.slug}', 'question_image')">${hasQImg ? 'Re-gen Q' : 'Generate Q'}</button>`;
+    const aBtn = `<button class="primary small" ${!canAnswer?'disabled':''} onclick="runJob(${r.row}, '${r.slug}', 'answer_image')">${hasAImg ? 'Re-gen A' : 'Generate A'}</button>`;
+    return `
+      <tr class="${rowClass}">
+        <td class="row-num">${r.row}</td>
+        <td class="slug">${escapeHtml(r.slug)}</td>
+        <td class="cat">${escapeHtml(r.category)}</td>
+        <td class="question">
+          <div class="qtext">${escapeHtml(r.question || '—')}</div>
+          <div class="mode">${escapeHtml(r.mode || '')}</div>
+        </td>
+        <td class="thumb-cell">
+          <div style="display:flex; gap:6px; align-items:flex-start;">
+            ${kindCheckboxCell(r, 'question_image')}
+            ${thumbCell(r, 'question_image')}
+          </div>
+          <div style="margin-top:4px;">${promptPill(hasQ)}${drivePill(r.question_drive)}${stateBadge(r.slug, 'question_image')}</div>
+          <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${approveBtn(r, 'question_image')}${discardBtn(r, 'question_image')}</div>
+        </td>
+        <td class="thumb-cell">
+          <div style="display:flex; gap:6px; align-items:flex-start;">
+            ${kindCheckboxCell(r, 'answer_image')}
+            ${thumbCell(r, 'answer_image')}
+          </div>
+          <div style="margin-top:4px;">${promptPill(hasR)}${drivePill(r.answer_drive)}${stateBadge(r.slug, 'answer_image')}</div>
+          <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${approveBtn(r, 'answer_image')}${discardBtn(r, 'answer_image')}</div>
+        </td>
+        <td class="actions"><div class="btn-row">${qBtn}${aBtn}</div></td>
+      </tr>
+    `;
+  }).join('');
+  updateBatchBar();
+}
+
+function populateFilterDropdowns() {
+  const cats = [...new Set(allRows.map(r => r.category).filter(Boolean))].sort();
+  const modes = [...new Set(allRows.map(r => r.mode).filter(Boolean))].sort();
+  $('f-category').innerHTML = '<option value="">all</option>' +
+    cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+  $('f-mode').innerHTML = '<option value="">all</option>' +
+    modes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+}
+
+function applyFilters() {
+  visibleRows = allRows.filter(rowMatchesFilter);
+  // Drop selections that fell out of view, in BOTH kinds.
+  const visibleSet = new Set(visibleRows.map(r => r.row));
+  for (const kind of ['question_image', 'answer_image']) {
+    for (const row of [...selected[kind]]) {
+      if (!visibleSet.has(row)) selected[kind].delete(row);
+    }
+  }
+  $('stats').innerHTML = `<b>${visibleRows.length}</b> of ${allRows.length} rows`;
+  renderRows();
+}
+
+function toggleKind(row, kind, on) {
+  const r = allRows.find(x => x.row === row);
+  if (!r) return;
+  if (on && !rowEligible(r, kind)) return;   // defensive — checkbox should be disabled
+  if (on) selected[kind].add(row); else selected[kind].delete(row);
+  // Cascade: selecting A on a row without a question image pulls Q in too,
+  // so the worker queues Q first and lands its file before A reads it.
+  if (on && kind === 'answer_image' && answerNeedsQ(r)) {
+    selected.question_image.add(row);
+  }
+  renderRows();
+}
+
+function toggleAll(kind, on) {
+  if (on) {
+    for (const r of visibleRows) {
+      if (!rowEligible(r, kind)) continue;
+      selected[kind].add(r.row);
+      if (kind === 'answer_image' && answerNeedsQ(r)) {
+        selected.question_image.add(r.row);
+      }
+    }
+  } else {
+    for (const r of visibleRows) selected[kind].delete(r.row);
+  }
+  renderRows();
+}
+
+function clearSelection() {
+  selected.question_image.clear();
+  selected.answer_image.clear();
+  renderRows();
+}
+
+// Returns a list of {row, slug, kind, prompt, exists} pairs for everything
+// currently selected across both kinds. `exists` = the target image is
+// already on disk (so this would be a re-gen).
+function selectedTargets() {
+  const out = [];
+  for (const kind of ['question_image', 'answer_image']) {
+    for (const row of selected[kind]) {
+      const r = allRows.find(x => x.row === row);
+      if (!r) continue;
+      if (!rowEligible(r, kind)) continue;
+      const prompt = kind === 'question_image' ? r.prompt_q : r.prompt_r;
+      const exists = hasImg(r, kind);
+      out.push({row: r.row, slug: r.slug, kind, prompt, exists});
+    }
+  }
+  return out;
+}
+
+function updateBatchBar() {
+  const targets = selectedTargets();
+  const nQ = selected.question_image.size;
+  const nA = selected.answer_image.size;
+  const cnt = $('selected-count');
+  if (!targets.length) {
+    cnt.textContent = 'nothing selected';
+    cnt.className = 'count';
+  } else {
+    cnt.textContent = `selected: ${nQ} Q · ${nA} A`;
+    cnt.className = 'count have';
+  }
+  const missing = targets.filter(t => !t.exists).length;
+  const existing = targets.filter(t => t.exists).length;
+  $('batch-gen').textContent = `Generate (${missing} missing)`;
+  $('batch-regen').textContent = `Re-gen (${existing} existing)`;
+  $('batch-gen').disabled = missing === 0;
+  $('batch-regen').disabled = existing === 0;
+
+  // Master header checkboxes reflect "all eligible in view selected".
+  const eligibleQInView = visibleRows.filter(r => rowEligible(r, 'question_image'));
+  const eligibleAInView = visibleRows.filter(r => rowEligible(r, 'answer_image'));
+  const allQ = eligibleQInView.length && eligibleQInView.every(r => selected.question_image.has(r.row));
+  const allA = eligibleAInView.length && eligibleAInView.every(r => selected.answer_image.has(r.row));
+  $('check-all-q').checked = allQ;
+  $('check-all-q').indeterminate = !allQ && eligibleQInView.some(r => selected.question_image.has(r.row));
+  $('check-all-a').checked = allA;
+  $('check-all-a').indeterminate = !allA && eligibleAInView.some(r => selected.answer_image.has(r.row));
+}
+
+async function loadRows() {
+  $('meta').textContent = 'loading…';
+  try {
+    const [health, data] = await Promise.all([api('api/health'), api('api/rows')]);
+    allRows = data;
+    $('meta').textContent = `${allRows.length} row(s) · sheet=${health.sheet_tab} · sa=${health.sa_present ? 'ok' : 'MISSING'}`;
+    populateFilterDropdowns();
+    applyFilters();
+  } catch (e) {
+    $('meta').textContent = 'load failed';
+    $('tbody').innerHTML = `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--err);">load failed: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function runJob(row, slug, kind) {
+  const r = allRows.find(x => x.row === row);
+  if (!r) return;
+  const prompt = kind === 'question_image' ? r.prompt_q : r.prompt_r;
+  if (!prompt) { toast('row has no prompt for this stage', 'err'); return; }
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind, row, slug, prompt}),
+    });
+    toast(`job ${job.id} queued (${kind})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`run failed: ${e.message}`, 'err');
+  }
+}
+
+// mode: 'generate' (only missing) or 'regen' (only existing).
+async function runBatch(mode) {
+  const all = selectedTargets();
+  const targets = mode === 'generate'
+    ? all.filter(t => !t.exists)
+    : all.filter(t => t.exists);
+  if (!targets.length) {
+    toast(`no ${mode === 'generate' ? 'missing' : 'existing'} items in selection`, 'err');
+    return;
+  }
+  if (mode === 'regen') {
+    const msg = `Re-generate ${targets.length} existing image(s)? Existing files will be overwritten.`;
+    if (!confirm(msg)) return;
+  }
+  toast(`queueing ${targets.length} job(s) — they run serially behind the OpenArt browser session`);
+  let firstJobId = null;
+  let errs = 0;
+  for (const t of targets) {
+    try {
+      const job = await api('api/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kind: t.kind, row: t.row, slug: t.slug, prompt: t.prompt}),
+      });
+      if (!firstJobId) firstJobId = job.id;
+    } catch (e) {
+      errs++;
+      console.error('queue failed', t.slug, t.kind, e);
+    }
+  }
+  if (firstJobId) { attachToJob(firstJobId); switchTab('log'); }
+  if (errs) toast(`${errs} queue call(s) failed — see console`, 'err');
+  refreshActive();
+}
+
+function attachToJob(id) {
+  if (activeEvt) { activeEvt.close(); activeEvt = null; }
+  activeJobId = id;
+  $('panel-title').textContent = `Log — ${id}`;
+  $('panel-meta').textContent = 'starting…';
+  const log = $('log');
+  log.innerHTML = '';
+  activeEvt = new EventSource(`api/jobs/${id}/stream`);
+  activeEvt.onmessage = (e) => {
+    const line = JSON.parse(e.data);
+    const span = document.createElement('div');
+    span.textContent = line;
+    log.appendChild(span);
+    log.scrollTop = log.scrollHeight;
+  };
+  activeEvt.addEventListener('end', async () => {
+    activeEvt.close();
+    activeEvt = null;
+    try {
+      const j = await api(`api/jobs/${id}`);
+      $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
+      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
+    } catch (e) { /* job might be gone */ }
+    await loadRows();   // pick up new thumb
+    await refreshActive();
+    // If something else is still running/queued, auto-attach to it so the
+    // user sees live progress across the whole batch without clicking.
+    const next = await pickNextRunningJob();
+    if (next) attachToJob(next);
+  });
+}
+
+async function pickNextRunningJob() {
+  try {
+    const jobs = await api('api/jobs');
+    // Prefer running > queued; ignore terminal states.
+    const running = jobs.find(j => j.status === 'running');
+    if (running) return running.id;
+    const queued = jobs.find(j => j.status === 'queued');
+    if (queued) return queued.id;
+  } catch (e) {}
+  return null;
+}
+
+async function refreshActive() {
+  try {
+    const data = await api('api/active');
+    active = data.active || {};
+    const qs = $('queue-status');
+    const r = data.running_count, q = data.queued_count;
+    if (r || q) qs.textContent = `${r} running · ${q} queued`;
+    else qs.textContent = '';
+    renderRows();
+  } catch (e) { /* ignore poll failures */ }
+}
+
+async function loadJobs() {
+  try {
+    const jobs = await api('api/jobs');
+    const root = $('job-list');
+    if (!jobs.length) {
+      root.innerHTML = '<div style="color:var(--muted); font-style:italic;">no jobs yet</div>';
+      return;
+    }
+    root.innerHTML = jobs.map(j => `
+      <div class="job" onclick="attachToJob('${j.id}'); switchTab('log');">
+        <div class="id">${j.id}</div>
+        <div class="kind">${j.kind} · ${j.slug} · row ${j.row}</div>
+        <div class="status status-${j.status}">${j.status}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    $('job-list').innerHTML = `<div style="color:var(--err);">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.panel-tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  $('log').style.display = tab === 'log' ? '' : 'none';
+  $('job-list').style.display = tab === 'jobs' ? '' : 'none';
+  if (tab === 'jobs') loadJobs();
+}
+
+function showModal(src) {
+  const root = $('modal-root');
+  root.innerHTML = `<div class="modal-backdrop" onclick="this.remove()"><img src="${src}" /></div>`;
+}
+
+async function approveImage(row, slug, kind) {
+  const shortKind = kind === 'question_image' ? 'Q' : 'A';
+  if (!confirm(`Approve ${slug}/${shortKind}? Moves it from staging to the approved folder.`)) return;
+  try {
+    const data = await api('api/approve', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({row, slug, kind}),
+    });
+    toast(`${data.drive_name} approved`, 'ok');
+    await loadRows();
+  } catch (e) {
+    toast(`approve failed: ${e.message}`, 'err');
+  }
+}
+
+async function discardImage(row, slug, kind) {
+  const shortKind = kind === 'question_image' ? 'Q' : 'A';
+  if (!confirm(
+    `Discard ${slug}/${shortKind}? The file is moved to the Shared Drive trash ` +
+    `(recoverable for ~30 days from Drive's UI).`
+  )) return;
+  try {
+    const data = await api('api/discard', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({row, slug, kind}),
+    });
+    toast(`${data.drive_name} discarded`, 'ok');
+    await loadRows();
+  } catch (e) {
+    toast(`discard failed: ${e.message}`, 'err');
+  }
+}
+
+// Poll /api/active every 3s so per-row badges and queue stats stay fresh
+// while a batch is draining. Cheap (just hits an in-memory dict server-side).
+activePollTimer = setInterval(refreshActive, 3000);
+
+// Initial load
+loadRows().then(refreshActive);
+</script>
+</body>
+</html>
