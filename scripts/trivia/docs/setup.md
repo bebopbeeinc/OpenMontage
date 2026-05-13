@@ -32,10 +32,7 @@ mkdir -p ~/.google
 # Drop claude-sheets-sa.json into ~/.google/  (or override via $OPENMONTAGE_SA_PATH)
 
 # 6. Piper TTS voice (default provider)
-mkdir -p .piper_voices && cd .piper_voices
-curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-cd ..
+python scripts/piper_voices/fetch.py en_US-ryan-high
 
 # 7. First-time OpenArt login (headed Chromium for manual sign-in)
 python scripts/trivia/openart_generate.py <row> --segments reaction --variants 1
@@ -224,24 +221,35 @@ If you see `HttpError 403`, the sheet isn't shared with the service account.
 
 ## 6. Piper TTS voice (optional but default)
 
-The assemble step uses Piper for local TTS by default. The voice model is
-~60 MB of `.onnx` weights — gitignored, fetched per machine.
+The assemble step uses Piper for local TTS by default. The trivia default is
+`en_US-ryan-high` — ~115 MB of `.onnx` weights, male broadcaster-style
+narration. Gitignored, fetched per machine; piper_tts also auto-fetches on
+first use, so this step is only needed if you want to pre-warm before going
+offline.
 
 ```bash
-mkdir -p .piper_voices && cd .piper_voices
-curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
-cd ..
+python scripts/piper_voices/fetch.py en_US-ryan-high
 ```
 
 Verify:
 
 ```bash
 echo "hello world" | .venv/bin/python -m piper \
-  --model .piper_voices/en_US-lessac-medium.onnx \
+  --model .piper_voices/en_US-ryan-high.onnx \
   --output-file /tmp/piper-test.wav
 afplay /tmp/piper-test.wav   # macOS; aplay on linux
 ```
+
+Pick a different voice with `--piper-model` on the assemble step:
+
+```bash
+python scripts/trivia/assemble_modular.py ... \
+  --piper-model .piper_voices/en_GB-alan-medium.onnx
+```
+
+Audition options first: `python scripts/piper_voices/fetch.py --list` shows
+what's cached, and `scripts/piper_voices/sample_libritts.py` lets you audition
+the 904 LibriTTS multi-speaker model by gender.
 
 ### Alternate — ElevenLabs
 

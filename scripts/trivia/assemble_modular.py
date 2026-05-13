@@ -852,7 +852,7 @@ def main() -> int:
                     help="TTS provider (default: piper — fully local)")
     ap.add_argument("--voice-id", default="21m00Tcm4TlvDq8ikWAM",
                     help="ElevenLabs voice_id (only used if provider=elevenlabs)")
-    ap.add_argument("--piper-model", default=str(REPO / ".piper_voices" / "en_US-lessac-medium.onnx"),
+    ap.add_argument("--piper-model", default=str(REPO / ".piper_voices" / "en_US-ryan-high.onnx"),
                     help="Piper voice .onnx path (only used if provider=piper)")
     ap.add_argument("--with-sfx", action="store_true",
                     help="Mix SFX cues from sfx_library/ into the audio")

@@ -11,6 +11,9 @@ venv/
 # Piper TTS voice models (large binary .onnx files — fetch separately)
 .piper_voices/
 
+# Local preview / scratch outputs (voice auditions, sample renders)
+.previews/
+
 # Test/IDE
 .pytest_cache/
 .mypy_cache/
