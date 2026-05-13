@@ -164,6 +164,28 @@
   .modal-backdrop img { max-width: 90vw; max-height: 90vh; cursor: zoom-out;
                         border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
 
+  .prompt-modal { background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 20px; width: min(820px, 92vw);
+                  max-height: 90vh; display: flex; flex-direction: column;
+                  gap: 14px; cursor: default;
+                  box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  .prompt-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .prompt-modal .modal-meta { color: var(--muted); font-size: 12px; }
+  .prompt-modal .modal-meta b { color: var(--warn); }
+  .prompt-modal label { display: block; font-size: 12px; color: var(--muted);
+                        margin-bottom: 4px; }
+  .prompt-modal textarea { width: 100%; min-height: 130px;
+                           background: var(--bg); color: var(--text);
+                           border: 1px solid var(--border); border-radius: 5px;
+                           padding: 8px 10px;
+                           font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+                           resize: vertical; }
+  .prompt-modal textarea:focus { outline: 2px solid var(--running); outline-offset: -1px; }
+  .prompt-modal .field { display: flex; flex-direction: column; }
+  .prompt-modal .actions-row { display: flex; gap: 8px; justify-content: flex-end;
+                               border-top: 1px solid var(--border); padding-top: 12px; }
+  .prompt-modal .actions-row .grow { flex: 1; }
+
   .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px;
            border-radius: 6px; background: var(--panel); border: 1px solid var(--border);
            color: var(--text); font-size: 13px; z-index: 20; max-width: 380px; }
@@ -432,6 +454,7 @@ function renderRows() {
                    : (selQ || selA) ? 'selected' : '';
     const qBtn = `<button class="primary small" ${!hasQ?'disabled':''} onclick="runJob(${r.row}, '${r.slug}', 'question_image')">${hasQImg ? 'Re-gen Q' : 'Generate Q'}</button>`;
     const aBtn = `<button class="primary small" ${!canAnswer?'disabled':''} onclick="runJob(${r.row}, '${r.slug}', 'answer_image')">${hasAImg ? 'Re-gen A' : 'Generate A'}</button>`;
+    const editBtn = `<button class="small" onclick="openPromptEditor(${r.row}, '${r.slug}')">✎ Edit prompts</button>`;
     return `
       <tr class="${rowClass}">
         <td class="row-num">${r.row}</td>
@@ -457,7 +480,7 @@ function renderRows() {
           <div style="margin-top:4px;">${promptPill(hasR)}${drivePill(r.answer_drive)}${stateBadge(r.slug, 'answer_image')}</div>
           <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${approveBtn(r, 'answer_image')}${discardBtn(r, 'answer_image')}</div>
         </td>
-        <td class="actions"><div class="btn-row">${qBtn}${aBtn}</div></td>
+        <td class="actions"><div class="btn-row">${qBtn}${aBtn}${editBtn}</div></td>
       </tr>
     `;
   }).join('');
@@ -727,6 +750,76 @@ function switchTab(tab) {
 function showModal(src) {
   const root = $('modal-root');
   root.innerHTML = `<div class="modal-backdrop" onclick="this.remove()"><img src="${src}" /></div>`;
+}
+
+function closePromptEditor() {
+  const root = $('modal-root');
+  root.innerHTML = '';
+}
+
+function openPromptEditor(row, slug) {
+  const r = allRows.find(x => x.row === row);
+  if (!r) return;
+  const root = $('modal-root');
+  // Clicks on the backdrop (outside the card) close the modal; clicks inside
+  // the card are intercepted via event.stopPropagation on the card itself.
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="closePromptEditor()">
+      <div class="prompt-modal" onclick="event.stopPropagation()">
+        <h2>Edit prompts — ${escapeHtml(slug)} (row ${row})</h2>
+        <div class="modal-meta">
+          Writes directly to <b>Brian!Q${row}</b> / <b>Brian!R${row}</b> in the sheet.
+          Saving does <b>not</b> regenerate the images — re-run Generate Q/A
+          after saving to refresh the renders.
+        </div>
+        <div class="field">
+          <label>Question prompt (col Q)</label>
+          <textarea id="edit-q">${escapeHtml(r.prompt_q || '')}</textarea>
+        </div>
+        <div class="field">
+          <label>Answer prompt (col R)</label>
+          <textarea id="edit-r">${escapeHtml(r.prompt_r || '')}</textarea>
+        </div>
+        <div class="actions-row">
+          <span class="grow"></span>
+          <button onclick="closePromptEditor()">Cancel</button>
+          <button class="primary" onclick="savePrompts(${row}, '${slug}')">Save to sheet</button>
+        </div>
+      </div>
+    </div>
+  `;
+  // Focus the first textarea so the user can start typing immediately.
+  setTimeout(() => $('edit-q').focus(), 0);
+}
+
+async function savePrompts(row, slug) {
+  const r = allRows.find(x => x.row === row);
+  if (!r) return;
+  const newQ = $('edit-q').value;
+  const newR = $('edit-r').value;
+  // Only send fields that actually changed — avoids spurious writes and
+  // keeps the response's `written` list useful as feedback.
+  const payload = {row};
+  if (newQ !== (r.prompt_q || '')) payload.prompt_q = newQ;
+  if (newR !== (r.prompt_r || '')) payload.prompt_r = newR;
+  if (Object.keys(payload).length === 1) {
+    toast('no changes — nothing to save');
+    closePromptEditor();
+    return;
+  }
+  try {
+    const result = await api('api/prompts', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const cols = Object.keys(result.written || {}).join(', ');
+    toast(`${slug}: updated col ${cols} in the sheet`, 'ok');
+    closePromptEditor();
+    await loadRows();
+  } catch (e) {
+    toast(`save failed: ${e.message}`, 'err');
+  }
 }
 
 async function approveImage(row, slug, kind) {

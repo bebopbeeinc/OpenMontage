@@ -255,6 +255,42 @@ def _mark_question_complete(row: int) -> None:
     ).execute()
 
 
+def _write_prompts(row: int, prompt_q: str | None, prompt_r: str | None) -> dict[str, str]:
+    """Write col Q (question prompt) and/or col R (answer prompt) for `row`.
+
+    Returns {col_letter: value} for whatever was actually written. The sheet
+    is the source of truth — this function is the only place that mutates
+    the prompts. After this returns successfully the row's prompts on disk
+    differ from what the UI cached, so callers reload /api/rows.
+
+    Pass `None` for any field you don't want to touch. Passing both as None
+    is a programming error (caller should validate before calling).
+    """
+    if prompt_q is None and prompt_r is None:
+        raise ValueError("nothing to write (both prompts are None)")
+
+    sheets = _build_sheets()
+    data: list[dict] = []
+    written: dict[str, str] = {}
+    if prompt_q is not None:
+        data.append({
+            "range": f"{SHEET_TAB}!Q{row}",
+            "values": [[prompt_q]],
+        })
+        written["Q"] = prompt_q
+    if prompt_r is not None:
+        data.append({
+            "range": f"{SHEET_TAB}!R{row}",
+            "values": [[prompt_r]],
+        })
+        written["R"] = prompt_r
+    sheets.spreadsheets().values().batchUpdate(
+        spreadsheetId=SHEET_ID,
+        body={"valueInputOption": "USER_ENTERED", "data": data},
+    ).execute()
+    return written
+
+
 # ---------------------------------------------------------------------------
 # Worker
 # ---------------------------------------------------------------------------
@@ -456,6 +492,43 @@ async def api_rows():
         return read_rows()
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+
+
+@app.post("/api/prompts")
+async def api_prompts(payload: dict):
+    """Persist prompt edits back to the Brian sheet.
+
+    Payload: {row, prompt_q?, prompt_r?}. At least one of prompt_q / prompt_r
+    must be present. The Brian sheet is the source of truth — this endpoint
+    writes col Q and/or col R for the given row, and the next /api/rows
+    fetch will reflect the new values. Editing here does NOT regenerate the
+    images; the user re-runs generate to refresh the renders.
+
+    A whitespace-only prompt clears the cell (sheet stores '' — same effect
+    as deleting the cell content in the Sheets UI). Empty string is OK; we
+    don't auto-trim because the sheet's existing prompts often have leading
+    "STYLE: ..." prefixes the user may legitimately delete.
+    """
+    try:
+        row = int(payload["row"])
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(400, "row must be an integer")
+    if row < DATA_START_ROW:
+        raise HTTPException(400, f"row must be >= {DATA_START_ROW} (data rows)")
+
+    prompt_q = payload.get("prompt_q", None)
+    prompt_r = payload.get("prompt_r", None)
+    if prompt_q is None and prompt_r is None:
+        raise HTTPException(400, "at least one of prompt_q or prompt_r is required")
+    # Cast non-None to str so callers can't sneak in non-strings.
+    prompt_q = None if prompt_q is None else str(prompt_q)
+    prompt_r = None if prompt_r is None else str(prompt_r)
+
+    try:
+        written = await asyncio.to_thread(_write_prompts, row, prompt_q, prompt_r)
+    except Exception as e:
+        raise HTTPException(500, f"sheet write failed: {e}")
+    return {"ok": True, "row": row, "written": written}
 
 
 @app.post("/api/run")
