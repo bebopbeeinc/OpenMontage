@@ -936,10 +936,27 @@ def main() -> int:
             print("ERROR: tts-provider=elevenlabs but ELEVENLABS_API_KEY not set",
                   file=sys.stderr)
             return 2
-        if args.tts_provider == "piper" and not Path(args.piper_model).exists():
-            print(f"ERROR: piper model not found at {args.piper_model}",
-                  file=sys.stderr)
-            return 2
+        if args.tts_provider == "piper":
+            # generate_vo_piper shells out to `python -m piper --model <path>`
+            # and does not fetch on miss. Trigger the auto-fetch path in
+            # tools.audio.piper_tts so a fresh clone Just Works on first use.
+            piper_path = Path(args.piper_model)
+            if not piper_path.exists():
+                sys.path.insert(0, str(REPO))
+                from tools.audio.piper_tts import fetch_voice, voice_files_present  # noqa: E402
+                voice_name = piper_path.stem
+                if not voice_files_present(voice_name):
+                    print(f"  fetching piper voice {voice_name!r} (one-time, ~115 MB)…")
+                    try:
+                        fetch_voice(voice_name)
+                    except Exception as e:
+                        print(
+                            f"ERROR: piper voice {voice_name!r} fetch failed: {e}\n"
+                            f"Pre-fetch manually: "
+                            f"python scripts/piper_voices/fetch.py {voice_name}",
+                            file=sys.stderr,
+                        )
+                        return 2
         piper_model = Path(args.piper_model)
         is_choices = (row["mode"] or "").strip().lower() == "choices"
         choices_options: list[str] = []
