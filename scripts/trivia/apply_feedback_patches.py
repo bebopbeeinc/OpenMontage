@@ -168,6 +168,37 @@ def _find_index(words: list[dict], target_word: str, near_time_ms: int) -> int |
     return best_idx
 
 
+def _find_range(
+    words: list[dict], target_words: list[str], near_time_ms: int,
+) -> tuple[int, int] | None:
+    """Find a contiguous index range matching target_words in order.
+    Returns (start_idx, end_idx) inclusive. Picks the run whose first word's
+    startMs is closest to near_time_ms; None if no run within the drift cap."""
+    if not target_words:
+        return None
+    norm_targets = [_normalize(w) for w in target_words]
+    if not all(norm_targets):
+        return None
+    n = len(norm_targets)
+    if n > len(words):
+        return None
+    candidates: list[tuple[int, int]] = []  # (abs_dt, start_idx)
+    for i in range(len(words) - n + 1):
+        if all(
+            _normalize(words[i + j].get("word", "")) == norm_targets[j]
+            for j in range(n)
+        ):
+            dt = abs(int(words[i].get("startMs", 0)) - int(near_time_ms))
+            candidates.append((dt, i))
+    if not candidates:
+        return None
+    candidates.sort()
+    best_dt, best_start = candidates[0]
+    if best_dt > _MAX_TIME_DRIFT_MS:
+        return None
+    return best_start, best_start + n - 1
+
+
 def apply_post(slug: str, plan: dict) -> int:
     """Post-reconcile patches: words.json word + timing edits, matched by
     (target_word, near_time_ms) so the patch survives transcribe re-runs that
@@ -183,9 +214,10 @@ def apply_post(slug: str, plan: dict) -> int:
         print(f"ERROR: words.json is not a list", file=sys.stderr)
         return 3
 
-    word_patches = [p for p in plan.get("patches", []) if p.get("op") in {"set_word", "set_timing"}]
-    if not word_patches:
-        print(f"phase=post: no word/timing patches in plan")
+    edit_patches = [p for p in plan.get("patches", []) if p.get("op") in {"set_word", "set_timing"}]
+    merge_patches = [p for p in plan.get("patches", []) if p.get("op") == "merge_words"]
+    if not edit_patches and not merge_patches:
+        print(f"phase=post: no word/timing/merge patches in plan")
         return 0
 
     refused: list[str] = []
@@ -196,12 +228,14 @@ def apply_post(slug: str, plan: dict) -> int:
     if not backup.exists():
         shutil.copy(words_path, backup)
 
-    # Two-pass: resolve all target indices against the ORIGINAL words.json
-    # before any mutations. Otherwise a set_word patch on the same target
-    # as a later set_timing patch would shadow the second lookup ("true" ->
-    # "MAYBE" means a subsequent target_word="true" search returns nothing).
-    resolved: list[tuple[dict, int]] = []
-    for p in word_patches:
+    # Resolve all target indices/ranges against the ORIGINAL words.json before
+    # mutating anything — otherwise a set_word patch on the same target as a
+    # later set_timing patch would shadow the second lookup ("true" -> "MAYBE"
+    # means a subsequent target_word="true" search returns nothing). Same
+    # reason for merge_words: the contiguous run must be found against the
+    # untouched text.
+    resolved_edits: list[tuple[dict, int]] = []
+    for p in edit_patches:
         target = (p.get("target_word") or "").strip()
         near = int(p.get("near_time_ms", 0))
         idx = _find_index(words, target, near)
@@ -211,9 +245,42 @@ def apply_post(slug: str, plan: dict) -> int:
                 f"within {_MAX_TIME_DRIFT_MS}ms of {near}ms"
             )
             continue
-        resolved.append((p, idx))
+        resolved_edits.append((p, idx))
 
-    for p, idx in resolved:
+    resolved_merges: list[tuple[dict, int, int]] = []
+    for p in merge_patches:
+        targets = [str(t).strip() for t in (p.get("target_words") or [])]
+        near = int(p.get("near_time_ms", 0))
+        if len(targets) < 2:
+            refused.append(f"merge_words: target_words must have at least 2 entries, got {targets!r}")
+            continue
+        rng = _find_range(words, targets, near)
+        if rng is None:
+            refused.append(
+                f"merge_words: no contiguous run matching {targets!r} "
+                f"within {_MAX_TIME_DRIFT_MS}ms of {near}ms"
+            )
+            continue
+        resolved_merges.append((p, rng[0], rng[1]))
+
+    # Reject overlapping merge ranges — applying them in any order would
+    # corrupt the second merge's resolution. Easier to refuse upfront.
+    resolved_merges.sort(key=lambda r: r[1])
+    for i in range(1, len(resolved_merges)):
+        prev_end = resolved_merges[i - 1][2]
+        cur_start = resolved_merges[i][1]
+        if cur_start <= prev_end:
+            p = resolved_merges[i][0]
+            refused.append(
+                f"merge_words: range overlaps an earlier merge_words in this plan "
+                f"(target_words={p.get('target_words')!r})"
+            )
+            resolved_merges[i] = (resolved_merges[i][0], -1, -1)
+    resolved_merges = [r for r in resolved_merges if r[1] >= 0]
+
+    # Phase A: individual edits — no list-structure change, so indices stay
+    # valid for the subsequent merge phase.
+    for p, idx in resolved_edits:
         op = p["op"]
         near = int(p.get("near_time_ms", 0))
         if op == "set_word":
@@ -232,6 +299,26 @@ def apply_post(slug: str, plan: dict) -> int:
                 words[idx]["endMs"] = int(p["new_end_ms"])
             applied += 1
             print(f"  set_timing @ {idx} (near {near}ms): start={words[idx].get('startMs')}, end={words[idx].get('endMs')}  ({p.get('reason', '')})")
+
+    # Phase B: merges, applied highest-start-first so each collapse leaves
+    # earlier indices untouched for the next iteration.
+    for p, start, end in sorted(resolved_merges, key=lambda r: r[1], reverse=True):
+        new_word = (p.get("new_word") or "").strip()
+        if not new_word:
+            refused.append(f"merge_words @ {start}..{end}: empty new_word")
+            continue
+        merged = {
+            "word": new_word,
+            "startMs": int(words[start].get("startMs", 0)),
+            "endMs": int(words[end].get("endMs", 0)),
+        }
+        old_seq = [w.get("word", "") for w in words[start:end + 1]]
+        words[start:end + 1] = [merged]
+        applied += 1
+        print(
+            f"  merge_words @ {start}..{end}: {old_seq!r} -> {new_word!r} "
+            f"({merged['startMs']}..{merged['endMs']}ms)  ({p.get('reason', '')})"
+        )
 
     _write_json(words_path, words)
 

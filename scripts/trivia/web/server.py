@@ -310,17 +310,11 @@ async def _run_render_attempt(
     assemble_overrides_path = artifacts / "assemble_overrides.json"
 
     # Phase 0a: classify reviewer feedback into a structured plan, if present.
-    # Empty feedback => router exits 2 and clears the stale plan file.
-    # Capture the saved_at so we can race-safely clear feedback.json at the end
-    # only if the reviewer hasn't added newer feedback during this render.
-    initial_feedback_saved_at: str | None = None
+    # Empty feedback => router exits 2 and clears the stale plan file. Re-runs
+    # on each retry attempt by design: transcribe regenerates words.json on
+    # every attempt, and the plan's target indices are resolved against that
+    # fresh transcript, so re-routing keeps the plan aligned.
     if feedback_path.exists():
-        try:
-            initial_feedback_saved_at = str(
-                json.loads(feedback_path.read_text()).get("saved_at", "")
-            ) or None
-        except json.JSONDecodeError:
-            pass
         _emit(job, "=== Phase 0/5: classify reviewer feedback (Claude) ===")
         rc = await _run_subprocess(
             job, [py, "scripts/trivia/feedback_router.py", str(job.row), job.slug],
@@ -443,27 +437,25 @@ async def _run_render_attempt(
         except json.JSONDecodeError:
             pass
 
-    # Clear feedback artifacts now that the pipeline has processed them.
-    # Race-safe: only clear if saved_at hasn't changed since we started — if
-    # the reviewer added newer feedback during the render, leave it for the
-    # next pass. Brand tokens / assemble overrides / blockers are project
-    # state and stay.
-    if initial_feedback_saved_at and feedback_path.exists():
-        try:
-            current_saved_at = str(
-                json.loads(feedback_path.read_text()).get("saved_at", "")
-            )
-        except json.JSONDecodeError:
-            current_saved_at = ""
-        if current_saved_at == initial_feedback_saved_at:
-            feedback_path.unlink(missing_ok=True)
-            feedback_plan_path.unlink(missing_ok=True)
-            _emit(job, "cleared feedback.json + feedback_plan.json (processed)")
-        else:
-            _emit(job, "feedback.json was updated during the render — leaving it for the next pass")
-
 
 async def _run_render_pipeline(job: Job) -> None:
+    artifacts = REPO / "projects" / job.slug / "artifacts"
+    feedback_path = artifacts / "feedback.json"
+    feedback_plan_path = artifacts / "feedback_plan.json"
+
+    # Snapshot feedback's saved_at BEFORE any retries so we can race-safely
+    # clear it once at the end of the pipeline. Clearing inside each attempt
+    # used to drop feedback before the verify-retry path could re-apply the
+    # plan against the retry's fresh transcript.
+    initial_feedback_saved_at: str | None = None
+    if feedback_path.exists():
+        try:
+            initial_feedback_saved_at = str(
+                json.loads(feedback_path.read_text()).get("saved_at", "")
+            ) or None
+        except json.JSONDecodeError:
+            pass
+
     overrides: dict[str, str] = {}
     for attempt in range(1, RENDER_MAX_ATTEMPTS + 1):
         if attempt > 1:
@@ -493,6 +485,25 @@ async def _run_render_pipeline(job: Job) -> None:
         _emit(job, "")
         _emit(job, f"verify failed: {recovery['reason']}")
         _emit(job, f"applying recovery strategy '{strategy}' -> overrides: {overrides or '(blind retry; non-deterministic step may produce different output)'}")
+
+    # Clear feedback artifacts now that the pipeline has processed them across
+    # all retry attempts. Race-safe: only clear if saved_at hasn't changed
+    # since we started — if the reviewer added newer feedback during the
+    # render, leave it for the next pipeline run. Brand tokens / assemble
+    # overrides / blockers are project state and stay.
+    if initial_feedback_saved_at and feedback_path.exists():
+        try:
+            current_saved_at = str(
+                json.loads(feedback_path.read_text()).get("saved_at", "")
+            )
+        except json.JSONDecodeError:
+            current_saved_at = ""
+        if current_saved_at == initial_feedback_saved_at:
+            feedback_path.unlink(missing_ok=True)
+            feedback_plan_path.unlink(missing_ok=True)
+            _emit(job, "cleared feedback.json + feedback_plan.json (processed)")
+        else:
+            _emit(job, "feedback.json was updated during the render — leaving it for the next pass")
 
     out_path = REPO / "projects" / job.slug / "renders" / "final_with_bg.mp4"
     _emit(job, "")

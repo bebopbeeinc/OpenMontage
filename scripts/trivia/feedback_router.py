@@ -74,6 +74,20 @@ class PatchSetTiming(BaseModel):
     reason: str
 
 
+class PatchMergeWords(BaseModel):
+    op: Literal["merge_words"]
+    target_words: list[str] = Field(
+        description='Ordered list of consecutive words to merge as they appear in words.json (preserve trailing punctuation). E.g. ["true", "or", "false?"]. The applier finds a contiguous run matching this sequence.'
+    )
+    near_time_ms: int = Field(
+        description="Approximate startMs of the FIRST word in target_words. Used to disambiguate when the sequence appears more than once."
+    )
+    new_word: str = Field(
+        description='The merged caption text (e.g. "true or false?"). The merged entry inherits startMs from the first matched word and endMs from the last, so the highlight covers the same audio span.'
+    )
+    reason: str
+
+
 class PatchAddBrand(BaseModel):
     op: Literal["add_brand"]
     token: str = Field(description='Canonical capitalization, e.g. "Fennec" or "Travel Crush"')
@@ -106,6 +120,7 @@ class PatchShortenVoLine(BaseModel):
 Patch = Union[
     PatchSetWord,
     PatchSetTiming,
+    PatchMergeWords,
     PatchAddBrand,
     PatchMusicVolume,
     PatchRegenerateSegment,
@@ -143,7 +158,7 @@ SYSTEM_PROMPT = """You are the feedback router for a daily-trivia short-form vid
 Classification rules:
 
 - **vo_length** — feedback like "VO is rushed", "sounds sped up", "audio cut off", "talking too fast". This means the VO script was too long for its time window. Action: emit `allow_shorten_vo` listing which fields, AND the assembler will run shorten_vo.py with this feedback as context.
-- **caption_word** — feedback like "caption says X but should say Y", "wrong word in caption at time T". Action: emit `set_word` with the target word and its approximate startMs (look at words.json to find the matching entry). The applier will use word+time to find the right index, so include the trailing punctuation if any (e.g. `"true,"` not just `"true"`).
+- **caption_word** — feedback like "caption says X but should say Y", "wrong word in caption at time T". Action: emit `set_word` with the target word and its approximate startMs (look at words.json to find the matching entry). The applier will use word+time to find the right index, so include the trailing punctuation if any (e.g. `"true,"` not just `"true"`). If the reviewer wants several consecutive caption entries collapsed into a single one (e.g. "merge 'true' / 'or' / 'false?' into one caption reading 'true or false?'"), use `merge_words` instead — emit the full ordered sequence of target_words plus the new combined `new_word`. The merged entry keeps the span from the first to the last word.
 - **caption_timing** — feedback like "caption shows TRUE too late", "highlight is one word behind audio". Action: emit `set_timing` with the target word and approximate startMs, plus the new ms values.
 - **brand_token** — feedback like "Captain is shown lowercase", "Fennec is missing capitalization". Action: emit `add_brand` with the canonical capitalization.
 - **music_volume** — feedback like "music too loud", "music is drowning out the VO", "music too quiet". Action: emit `set_music_volume_db`. Default music is at -18 dB. A "too loud" complaint usually means -22 to -26 dB; "too quiet" means -12 to -14 dB.
@@ -153,6 +168,14 @@ Classification rules:
 Multi-classification is fine — one feedback note can mention several issues. Emit patches for all that you can confidently handle and put the rest in `unresolved`.
 
 Be conservative: if the target word for a caption_word patch is ambiguous (multiple matches and you can't tell which one the reviewer means), prefer `unresolved` over a wrong guess. The applier searches by word+nearest-time and will refuse if it can't find a unique match within ~2 seconds of `near_time_ms`.
+
+CRITICAL — emit patches based on the reviewer's desired FINAL output, not on the current words.json state:
+
+The render pipeline runs in this order per attempt: feedback_router → assemble → transcribe (regenerates words.json from audio) → reconcile → apply_post (your patches land here) → render → verify. If verify fails, the whole sequence retries from the top.
+
+This means words.json at router time is *not* what your patches will be applied to. Phase 2 (transcribe) regenerates words.json from scratch on every attempt, wiping any caption edits from the previous render or the previous attempt of this render. So even if you see "true or false?" already merged into one entry in the words.json snapshot below, you MUST still emit the merge_words patch — by the time apply_post runs, transcribe will have re-split it into three separate entries, and your patch is what re-merges them. Symmetrically for set_word and set_timing: emit them based on what should appear in the final caption, not based on whether words.json currently shows the change.
+
+When the feedback describes a caption change in terms of the original transcript (e.g. "merge 'true' / 'or' / 'false?' into one caption"), use those original tokens in target_words even if the current words.json already shows them merged. You can infer the original tokens by reading the merged text and the reviewer's wording together.
 
 Return ONLY the structured FeedbackPlan."""
 

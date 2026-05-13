@@ -399,6 +399,11 @@ function buildPages(
   // Avoid 1-word orphan: pull a word forward from the previous page.
   // Skip the rebalance when pulling would re-merge across the forced
   // boundary — better to keep a 1-word page than to undo the section split.
+  // Also skip when the inter-word gap is wider than SECTION_GAP_MS: a multi-
+  // second silence is a section break (e.g. body→closer xfade), and combining
+  // those pages would make the closer's caption visible for seconds before
+  // its audio actually starts. Better to leave the orphan alone.
+  const SECTION_GAP_MS = 1500;
   for (let i = pages.length - 1; i > 0; i--) {
     if (pages[i].length === 1 && pages[i - 1].length > 1) {
       const candidate = pages[i - 1][pages[i - 1].length - 1];
@@ -407,6 +412,8 @@ function buildPages(
         candidate.startMs < forceBreakBeforeMs &&
         pages[i][0].startMs >= forceBreakBeforeMs;
       if (wouldUnmergeForcedBreak) continue;
+      const gapAcrossPull = pages[i][0].startMs - candidate.endMs;
+      if (gapAcrossPull >= SECTION_GAP_MS) continue;
       const moved = pages[i - 1].pop()!;
       pages[i].unshift(moved);
     }
