@@ -1,7 +1,7 @@
 # Trivia Pipeline — Setup
 
 What you need to install before the first `python scripts/trivia/openart_generate.py 17`
-or `uvicorn scripts.trivia.web.server:app` succeeds. Aimed at fresh-clone /
+or `uvicorn web.server:app` succeeds. Aimed at fresh-clone /
 fresh-machine setup. Read this once; subsequent runs reuse everything.
 
 ## TL;DR
@@ -48,8 +48,8 @@ python -c "import sys; sys.path.insert(0, 'scripts/trivia'); \
 If those eight steps succeeded, you can run a full render via the web UI:
 
 ```bash
-uvicorn scripts.trivia.web.server:app --port 8765 --reload
-# open http://127.0.0.1:8765/
+uvicorn web.server:app --port 8765 --reload
+# open http://127.0.0.1:8765/trivia/
 ```
 
 Sections below explain each step.
@@ -328,8 +328,8 @@ python scripts/common/transcribe.py <slug>
     ../projects/<slug>/renders/final_with_bg.mp4)
 
 # 2) Or use the web UI for the full flow:
-uvicorn scripts.trivia.web.server:app --port 8765 --reload
-# open http://127.0.0.1:8765/
+uvicorn web.server:app --port 8765 --reload
+# open http://127.0.0.1:8765/trivia/
 ```
 
 If the render lands at `projects/<slug>/renders/final_with_bg.mp4`, setup is good.
