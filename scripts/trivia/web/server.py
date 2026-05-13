@@ -1,14 +1,18 @@
 #!/usr/bin/env python
 """Trivia pipeline web UI (FastAPI sub-app, mounted by web/server.py at /trivia).
 
-Run the launcher (recommended — opens at /trivia/):
+Canonical entry point — the launcher in web/server.py:
     uvicorn web.server:app --port 8765 --reload
-    # then open http://127.0.0.1:8765
+    # then open http://127.0.0.1:8765/trivia/
 
-Run this app standalone (legacy; index.html's <base href="/trivia/"> means
-links will be wrong, but the API endpoints still work):
-    python scripts/trivia/web/server.py
-    uvicorn scripts.trivia.web.server:app --port 8765 --reload
+The trivia app's index.html sets <base href="/trivia/"> and uses relative
+fetch URLs (e.g. fetch("api/rows")), so it MUST be served under a /trivia
+mount or every API call will 404. Do NOT run `uvicorn scripts.trivia.web.server:app`
+directly — that exposes the routes at the root and breaks the base-href contract.
+
+The `python scripts/trivia/web/server.py` form below is supported: the __main__
+block wraps this sub-app in a launcher that mounts it at /trivia, so the URL
+shape matches the canonical launcher.
 
 The server only binds 127.0.0.1, so it is unreachable from other machines
 unless you tunnel it (Tailscale / cloudflared / ssh -L).
@@ -776,8 +780,12 @@ async def api_frame(slug: str, filename: str):
 
 
 if __name__ == "__main__":
+    # Wrap in a /trivia mount so the standalone form matches the launcher's
+    # URL shape (index.html's <base href="/trivia/"> requires the prefix).
     import uvicorn
+    _wrapper = FastAPI(title="Trivia pipeline runner (standalone)")
+    _wrapper.mount("/trivia", app)
     print(f"  repo:    {REPO}")
     print(f"  sa file: {SA_PATH} ({'ok' if SA_PATH.exists() else 'MISSING'})")
-    print("  open:    http://127.0.0.1:8765")
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="info")
+    print("  open:    http://127.0.0.1:8765/trivia/")
+    uvicorn.run(_wrapper, host="127.0.0.1", port=8765, log_level="info")

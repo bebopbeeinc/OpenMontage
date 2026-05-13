@@ -259,7 +259,14 @@ def _select_model_in_picker(page: Page, label: str) -> None:
     so we always re-assert the model after mode changes.
     """
     card = page.locator(SEL.model_card).first
-    card.wait_for(timeout=10_000)
+    try:
+        card.wait_for(timeout=10_000)
+    except PWTimeout:
+        # Most common reasons this fires: page is showing a sign-out/verify
+        # interstitial we don't detect, or OpenArt's DOM moved. Dump the page
+        # so the operator can see what was actually on screen.
+        _diagnose(page, "model_card_timeout")
+        raise
     current = (card.text_content() or "").strip()
     if label in current:
         return

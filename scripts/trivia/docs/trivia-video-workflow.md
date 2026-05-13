@@ -378,8 +378,8 @@ The trivia web app is the review surface:
 
 ```bash
 source .venv/bin/activate
-uvicorn scripts.trivia.web.server:app --port 8765 --reload
-# then open http://127.0.0.1:8765/
+uvicorn web.server:app --port 8765 --reload
+# then open http://127.0.0.1:8765/trivia/
 ```
 
 For each row the UI shows:
