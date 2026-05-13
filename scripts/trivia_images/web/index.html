@@ -32,6 +32,8 @@
 
   main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
          height: calc(100vh - 53px); }
+  main.panel-hidden { grid-template-columns: 1fr; }
+  main.panel-hidden .panel { display: none; }
   .rows { overflow: auto; }
   .panel { background: var(--panel); border-left: 1px solid var(--border);
            display: flex; flex-direction: column; overflow: hidden; }
@@ -59,6 +61,22 @@
 
   .question .qtext { font-weight: 500; margin-bottom: 4px; }
   .question .mode { color: var(--muted); font-size: 11px; }
+  .question .answer { color: var(--accent); font-size: 11px; margin-top: 4px;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .question .answer b { font-weight: 600; }
+
+  .answers-ref { background: var(--bg); border: 1px solid var(--border);
+                 border-radius: 5px; padding: 10px 12px; font-size: 12px;
+                 display: flex; flex-direction: column; gap: 6px; }
+  .answers-ref .answers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
+  .answers-ref .answer-row { display: flex; gap: 6px; align-items: baseline; }
+  .answers-ref .answer-row .marker { width: 12px; color: var(--muted); }
+  .answers-ref .answer-row.correct .marker { color: var(--accent); }
+  .answers-ref .answer-row.correct .text { color: var(--accent); font-weight: 600; }
+  .answers-ref .meta-row { color: var(--muted); font-size: 11px;
+                           display: flex; gap: 14px; flex-wrap: wrap;
+                           border-top: 1px dashed var(--border); padding-top: 6px; }
+  .answers-ref .meta-row b { color: var(--text); font-weight: 500; }
 
   .thumb-cell { width: 96px; }
   .thumb { width: 96px; height: 72px; border-radius: 4px;
@@ -203,11 +221,12 @@
     <a href="https://drive.google.com/drive/folders/1NMb2WeJp7HVsO-gzvOA-B0wK83uFta9k" target="_blank" rel="noopener">Staging ↗</a>
   </div>
   <div class="spacer"></div>
+  <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
   <button onclick="loadRows()">Refresh</button>
   <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
 </header>
 
-<main>
+<main id="main">
   <div class="rows" id="rows-pane">
     <div class="filters">
       <input type="search" id="f-search" placeholder="search question, category, mode…" oninput="applyFilters()" />
@@ -463,6 +482,7 @@ function renderRows() {
         <td class="question">
           <div class="qtext">${escapeHtml(r.question || '—')}</div>
           <div class="mode">${escapeHtml(r.mode || '')}</div>
+          ${r.answer_correct ? `<div class="answer">→ <b>${escapeHtml(r.answer_correct)}</b></div>` : ''}
         </td>
         <td class="thumb-cell">
           <div style="display:flex; gap:6px; align-items:flex-start;">
@@ -660,13 +680,48 @@ async function runBatch(mode) {
   refreshActive();
 }
 
-function attachToJob(id) {
+async function attachToJob(id) {
   if (activeEvt) { activeEvt.close(); activeEvt = null; }
   activeJobId = id;
   $('panel-title').textContent = `Log — ${id}`;
-  $('panel-meta').textContent = 'starting…';
+  $('panel-meta').textContent = 'loading…';
   const log = $('log');
   log.innerHTML = '';
+
+  // Replay historical lines first so finished jobs (or jobs we attach
+  // to mid-flight after a refresh) show their full log instead of an
+  // empty pane — the SSE endpoint only streams future lines, not the
+  // existing buffer. This was the "log isn't working" symptom in
+  // recent-jobs view.
+  let seeded = 0;
+  let preStatus = null;
+  try {
+    const j = await api(`api/jobs/${id}`);
+    preStatus = j.status;
+    $('panel-meta').textContent =
+      j.status + (j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString()
+                                : (j.started_at ? ' · started ' + new Date(j.started_at).toLocaleTimeString()
+                                                : ''));
+    for (const line of (j.log || [])) {
+      const span = document.createElement('div');
+      span.textContent = line;
+      log.appendChild(span);
+      seeded++;
+    }
+    log.scrollTop = log.scrollHeight;
+  } catch (e) {
+    $('panel-meta').textContent = `couldn't load: ${e.message}`;
+  }
+
+  // If the job is already terminal, no point opening an SSE — just
+  // stop here. Auto-attach kicks in below for live jobs.
+  if (preStatus === 'success' || preStatus === 'error') {
+    if (!seeded) {
+      log.innerHTML = '<span class="log-empty">(job finished with no log lines)</span>';
+    }
+    return;
+  }
+
   activeEvt = new EventSource(`api/jobs/${id}/stream`);
   activeEvt.onmessage = (e) => {
     const line = JSON.parse(e.data);
@@ -674,6 +729,15 @@ function attachToJob(id) {
     span.textContent = line;
     log.appendChild(span);
     log.scrollTop = log.scrollHeight;
+  };
+  activeEvt.onerror = () => {
+    // SSE proxies (e.g. nginx without `proxy_buffering off;`) can drop
+    // the stream silently. Surface that visibly instead of looking
+    // broken — the user told us "the log doesn't seem to be working"
+    // and an invisible drop was almost certainly the cause.
+    $('panel-meta').textContent = 'stream interrupted — falling back to polling';
+    if (activeEvt) { activeEvt.close(); activeEvt = null; }
+    pollUntilDone(id, log);
   };
   activeEvt.addEventListener('end', async () => {
     activeEvt.close();
@@ -691,6 +755,56 @@ function attachToJob(id) {
     const next = await pickNextRunningJob();
     if (next) attachToJob(next);
   });
+}
+
+// Fallback poll loop when SSE is unavailable (proxy buffering, etc.).
+// Polls the job snapshot every 2s, replaces the rendered log with the
+// latest lines, and stops when the job is terminal.
+async function pollUntilDone(id, logEl) {
+  let lastLen = logEl.childElementCount;
+  while (true) {
+    let j;
+    try { j = await api(`api/jobs/${id}`); }
+    catch (e) { return; }
+    const lines = j.log || [];
+    for (let i = lastLen; i < lines.length; i++) {
+      const span = document.createElement('div');
+      span.textContent = lines[i];
+      logEl.appendChild(span);
+    }
+    lastLen = lines.length;
+    logEl.scrollTop = logEl.scrollHeight;
+    if (j.status === 'success' || j.status === 'error') {
+      $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
+      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
+      await loadRows();
+      await refreshActive();
+      const next = await pickNextRunningJob();
+      if (next) attachToJob(next);
+      return;
+    }
+    await new Promise(res => setTimeout(res, 2000));
+  }
+}
+
+function togglePanel() {
+  const main = $('main');
+  const hidden = !main.classList.contains('panel-hidden');
+  main.classList.toggle('panel-hidden', hidden);
+  $('toggle-panel-btn').textContent = hidden ? 'Show log' : 'Hide log';
+  try { localStorage.setItem('trivia_images_panel_hidden', hidden ? '1' : '0'); }
+  catch (e) { /* private mode etc */ }
+}
+
+function restorePanelState() {
+  let hidden = false;
+  try { hidden = localStorage.getItem('trivia_images_panel_hidden') === '1'; }
+  catch (e) {}
+  if (hidden) {
+    $('main').classList.add('panel-hidden');
+    $('toggle-panel-btn').textContent = 'Show log';
+  }
 }
 
 async function pickNextRunningJob() {
@@ -757,6 +871,41 @@ function closePromptEditor() {
   root.innerHTML = '';
 }
 
+function answersRefBlock(r) {
+  // Read-only context block: shows the question text, the four answer
+  // choices (correct one highlighted), the correct/incorrect response
+  // text, and the hint. Helps the prompt author see what the image is
+  // actually supposed to depict without bouncing back to the sheet.
+  const choices = [
+    {label: 'A', text: r.answer_correct, correct: true},
+    {label: 'B', text: r.answer_2,       correct: false},
+    {label: 'C', text: r.answer_3,       correct: false},
+    {label: 'D', text: r.answer_4,       correct: false},
+  ].filter(c => (c.text || '').trim());
+  if (!choices.length && !r.response_correct && !r.response_incorrect && !r.hint && !r.question) {
+    return '';   // nothing to show
+  }
+  const rows = choices.map(c => `
+    <div class="answer-row ${c.correct ? 'correct' : ''}">
+      <span class="marker">${c.correct ? '✓' : c.label}</span>
+      <span class="text">${escapeHtml(c.text)}</span>
+    </div>
+  `).join('');
+  const metaParts = [];
+  if (r.response_correct)   metaParts.push(`<span><b>Correct response:</b> ${escapeHtml(r.response_correct)}</span>`);
+  if (r.response_incorrect) metaParts.push(`<span><b>Incorrect response:</b> ${escapeHtml(r.response_incorrect)}</span>`);
+  if (r.hint)               metaParts.push(`<span><b>Hint:</b> ${escapeHtml(r.hint)}</span>`);
+  const meta = metaParts.length ? `<div class="meta-row">${metaParts.join('')}</div>` : '';
+  const question = r.question ? `<div style="color:var(--text); font-weight:500;">${escapeHtml(r.question)}</div>` : '';
+  return `
+    <div class="answers-ref">
+      ${question}
+      ${choices.length ? `<div class="answers-grid">${rows}</div>` : ''}
+      ${meta}
+    </div>
+  `;
+}
+
 function openPromptEditor(row, slug) {
   const r = allRows.find(x => x.row === row);
   if (!r) return;
@@ -768,16 +917,17 @@ function openPromptEditor(row, slug) {
       <div class="prompt-modal" onclick="event.stopPropagation()">
         <h2>Edit prompts — ${escapeHtml(slug)} (row ${row})</h2>
         <div class="modal-meta">
-          Writes directly to <b>Brian!Q${row}</b> / <b>Brian!R${row}</b> in the sheet.
+          Writes directly to the prompt columns in the Brian sheet.
           Saving does <b>not</b> regenerate the images — re-run Generate Q/A
           after saving to refresh the renders.
         </div>
+        ${answersRefBlock(r)}
         <div class="field">
-          <label>Question prompt (col Q)</label>
+          <label>Question prompt (Question IMAGE column)</label>
           <textarea id="edit-q">${escapeHtml(r.prompt_q || '')}</textarea>
         </div>
         <div class="field">
-          <label>Answer prompt (col R)</label>
+          <label>Answer prompt (Answer IMAGE column)</label>
           <textarea id="edit-r">${escapeHtml(r.prompt_r || '')}</textarea>
         </div>
         <div class="actions-row">
@@ -862,6 +1012,7 @@ async function discardImage(row, slug, kind) {
 activePollTimer = setInterval(refreshActive, 3000);
 
 // Initial load
+restorePanelState();
 loadRows().then(refreshActive);
 </script>
 </body>

@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 
 REPO = Path(__file__).resolve().parents[3]
 WEB_DIR = Path(__file__).resolve().parent
+PKG_DIR = Path(__file__).resolve().parent.parent   # scripts/trivia_images/
 SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 
 # Shared Drive client. Lives under tools/publishers/ alongside other
@@ -39,7 +40,14 @@ SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 # when those land — see tools/audio/piper_tts.py for the helper+BaseTool
 # coexistence pattern).
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(PKG_DIR))
 from tools.publishers.google_drive import FileMeta, get_client  # noqa: E402
+from sheet_schema import (  # noqa: E402
+    DATA_START_ROW,
+    SHEET_ID,
+    SHEET_TAB,
+    SheetSchema,
+)
 
 # Trivia-images Drive layout. Approved is the visible root ("Question
 # Images"); staging is the "WIP" subfolder underneath where freshly-
@@ -85,19 +93,16 @@ def state_for(name: str) -> tuple[str, Optional[FileMeta]]:
         return "staging", staging
     return "none", None
 
-SHEET_ID = "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk"
-SHEET_TAB = "Brian"
-
-# Column indices (0-based) in the Brian tab. Mirrors scripts/trivia_images/generate.py
-# so the web UI and the CLI agree on what each column means.
-COL_NUMBER = 2          # C  — used as the image slug `q{N}`
-COL_COMPLETE = 3        # D  — '✓' on successful question-image generation
-COL_CATEGORY = 4        # E
-COL_MODE = 5            # F  — Speed Round / People Think That... etc.
-COL_QUESTION_TEXT = 6   # G  — visible question on the trivia card
-COL_PROMPT_Q = 16       # Q  — Question IMAGE prompt
-COL_PROMPT_R = 17       # R  — Answer IMAGE (CORRECT) prompt
-DATA_START_ROW = 3      # rows 1-2 are headers
+# Sheet location is owned by sheet_schema.py — the schema resolves
+# column letters by reading the header rows at runtime so adding a
+# column in Brian doesn't break this app. The fields we read/write are
+# listed below; see FIELD_TO_HEADER in sheet_schema for the labels.
+ROW_FIELDS = [
+    "number", "complete", "category", "mode", "question",
+    "answer_correct", "answer_2", "answer_3", "answer_4",
+    "response_correct", "response_incorrect", "hint",
+    "prompt_q", "prompt_r",
+]
 
 # Defaults for OpenArt — match scripts/trivia_images/generate.py.
 MODEL = "Nano Banana Pro"
@@ -179,20 +184,6 @@ def _build_sheets():
     return build("sheets", "v4", credentials=creds)
 
 
-def _row_fields(row: list[str]) -> dict[str, str]:
-    """Pad short rows and extract the cells we care about."""
-    padded = row + [""] * (max(0, COL_PROMPT_R + 1 - len(row)))
-    return {
-        "number": (padded[COL_NUMBER] or "").strip(),
-        "complete": (padded[COL_COMPLETE] or "").strip(),
-        "category": (padded[COL_CATEGORY] or "").strip(),
-        "mode": (padded[COL_MODE] or "").strip(),
-        "question": (padded[COL_QUESTION_TEXT] or "").strip(),
-        "prompt_q": (padded[COL_PROMPT_Q] or "").strip(),
-        "prompt_r": (padded[COL_PROMPT_R] or "").strip(),
-    }
-
-
 def _drive_state_for(number: str, kind: str) -> dict:
     """Resolve Drive state for one (number, kind) pair.
 
@@ -215,7 +206,12 @@ def _drive_state_for(number: str, kind: str) -> dict:
 
 def read_rows(min_row: int = DATA_START_ROW, max_row: int = 1000) -> list[dict]:
     sheets = _build_sheets()
-    rng = f"{SHEET_TAB}!A{min_row}:R{max_row}"
+    schema = SheetSchema(sheets)
+    # Read up to the rightmost column the schema cares about, with a
+    # small cushion so an inserted column to the right of the tracked
+    # range doesn't truncate the read on the next sheet edit.
+    last_letter = _last_letter(schema.max_index() + 4)
+    rng = f"{SHEET_TAB}!A{min_row}:{last_letter}{max_row}"
     resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng).execute()
     raw = resp.get("values", [])
     # Warm the Drive listing once per /api/rows call — state_for goes through
@@ -223,7 +219,7 @@ def read_rows(min_row: int = DATA_START_ROW, max_row: int = 1000) -> list[dict]:
     rows: list[dict] = []
     for i, v in enumerate(raw):
         sheet_row = min_row + i
-        f = _row_fields(v)
+        f = schema.extract(v, ROW_FIELDS)
         if not f["number"]:
             continue
         slug = f"q{f['number']}"
@@ -236,6 +232,16 @@ def read_rows(min_row: int = DATA_START_ROW, max_row: int = 1000) -> list[dict]:
             "category": f["category"],
             "mode": f["mode"],
             "question": f["question"],
+            # Answer columns (H-N) — surfaced for context so the UI can
+            # show the user what their image is supposed to depict
+            # without leaving the tool.
+            "answer_correct": f["answer_correct"],
+            "answer_2": f["answer_2"],
+            "answer_3": f["answer_3"],
+            "answer_4": f["answer_4"],
+            "response_correct": f["response_correct"],
+            "response_incorrect": f["response_incorrect"],
+            "hint": f["hint"],
             "prompt_q": f["prompt_q"],
             "prompt_r": f["prompt_r"],
             "question_complete": f["complete"] == "✓",
@@ -245,45 +251,58 @@ def read_rows(min_row: int = DATA_START_ROW, max_row: int = 1000) -> list[dict]:
     return rows
 
 
+def _last_letter(idx: int) -> str:
+    """Spreadsheet A1 column letter for the rightmost column we want to read."""
+    from sheet_schema import index_to_letter
+    return index_to_letter(idx)
+
+
 def _mark_question_complete(row: int) -> None:
     sheets = _build_sheets()
+    col = SheetSchema(sheets).letter("complete")
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_TAB}!D{row}",
+        range=f"{SHEET_TAB}!{col}{row}",
         valueInputOption="USER_ENTERED",
         body={"values": [["✓"]]},
     ).execute()
 
 
 def _write_prompts(row: int, prompt_q: str | None, prompt_r: str | None) -> dict[str, str]:
-    """Write col Q (question prompt) and/or col R (answer prompt) for `row`.
+    """Write the question and/or answer prompt columns for `row`.
 
-    Returns {col_letter: value} for whatever was actually written. The sheet
-    is the source of truth — this function is the only place that mutates
-    the prompts. After this returns successfully the row's prompts on disk
-    differ from what the UI cached, so callers reload /api/rows.
+    Returns {col_letter: value} for whatever was actually written. The
+    sheet is the source of truth — this function is the only place that
+    mutates the prompts. After this returns successfully the row's
+    prompts on disk differ from what the UI cached, so callers reload
+    /api/rows.
 
-    Pass `None` for any field you don't want to touch. Passing both as None
-    is a programming error (caller should validate before calling).
+    Pass `None` for any field you don't want to touch. Passing both as
+    None is a programming error (caller should validate before calling).
+    Column letters are resolved at runtime from the Brian header rows
+    so inserting/reordering columns in the sheet stays safe.
     """
     if prompt_q is None and prompt_r is None:
         raise ValueError("nothing to write (both prompts are None)")
 
     sheets = _build_sheets()
+    schema = SheetSchema(sheets)
+    q_letter = schema.letter("prompt_q")
+    r_letter = schema.letter("prompt_r")
     data: list[dict] = []
     written: dict[str, str] = {}
     if prompt_q is not None:
         data.append({
-            "range": f"{SHEET_TAB}!Q{row}",
+            "range": f"{SHEET_TAB}!{q_letter}{row}",
             "values": [[prompt_q]],
         })
-        written["Q"] = prompt_q
+        written[q_letter] = prompt_q
     if prompt_r is not None:
         data.append({
-            "range": f"{SHEET_TAB}!R{row}",
+            "range": f"{SHEET_TAB}!{r_letter}{row}",
             "values": [[prompt_r]],
         })
-        written["R"] = prompt_r
+        written[r_letter] = prompt_r
     sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=SHEET_ID,
         body={"valueInputOption": "USER_ENTERED", "data": data},
@@ -625,7 +644,16 @@ async def api_job_stream(job_id: str):
             except ValueError:
                 pass
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    # SSE-friendly headers: tell any intermediary proxy NOT to buffer.
+    # Without these, nginx-style proxies often hold the response body
+    # until the worker finishes — which looks like "the log isn't
+    # working" because lines only appear at the end.
+    headers = {
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",   # disables nginx response buffering
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
 def _kind_alias(kind: str) -> str:

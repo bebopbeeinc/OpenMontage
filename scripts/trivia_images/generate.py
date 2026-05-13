@@ -42,19 +42,25 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 REPO = Path(__file__).resolve().parents[2]
+PKG_DIR = Path(__file__).resolve().parent
 
 # Route generation through the registered tool so this CLI benefits from any
 # future tool-level cost tracking / retry / telemetry. The tool itself wraps
 # scripts/trivia_images/openart_image_driver.generate_image.
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(PKG_DIR))
 from tools.tool_registry import registry  # noqa: E402
+from sheet_schema import (  # noqa: E402
+    DATA_START_ROW,
+    SA_PATH,
+    SCOPES_RW,
+    SHEET_ID,
+    SHEET_TAB,
+    SheetSchema,
+)
 
 registry.discover()
 _openart_image = registry._tools["openart_image"]
-SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
-SHEET_ID = "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk"
-SHEET_TAB = "Brian"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # Pipeline-local image library. Gitignored under scripts/trivia_images/library/
 # alongside the code that produces it.
@@ -64,15 +70,13 @@ MODEL = "Nano Banana Pro"
 ASPECT = "4:3"          # matches the "4:3 aspect ratio" trailer in every prompt
 RESOLUTION = "2K"       # 1K / 2K / 4K available; 2K is the quality/cost sweet spot
 
-# Column indices (0-based) in the Brian tab
-COL_NUMBER = 2          # C
-COL_COMPLETE = 3        # D
-COL_PROMPT = 16         # Q
-DATA_START_ROW = 3      # rows 1-2 are headers
+# Columns are resolved by header label at runtime via SheetSchema —
+# inserting/reordering columns in the Brian tab is safe so long as the
+# header labels stay the same.
 
 
 def _build_sheets():
-    creds = service_account.Credentials.from_service_account_file(str(SA_PATH), scopes=SCOPES)
+    creds = service_account.Credentials.from_service_account_file(str(SA_PATH), scopes=SCOPES_RW)
     return build("sheets", "v4", credentials=creds)
 
 
@@ -81,17 +85,22 @@ def _read_range(sheets, a1: str) -> list[list[str]]:
     return r.get("values", [])
 
 
-def _row_fields(row: list[str]) -> dict[str, str]:
-    """Pad short rows and extract the cells we care about."""
-    padded = row + [""] * (max(0, COL_PROMPT + 1 - len(row)))
+_GEN_FIELDS = ["number", "complete", "prompt_q"]
+
+
+def _row_fields(schema: SheetSchema, row: list[str]) -> dict[str, str]:
+    """Extract the cells the CLI cares about. Maps the schema's
+    `prompt_q` to the CLI's historical `prompt` key so the rest of the
+    file keeps working unchanged."""
+    f = schema.extract(row, _GEN_FIELDS)
     return {
-        "number": (padded[COL_NUMBER] or "").strip(),
-        "complete": (padded[COL_COMPLETE] or "").strip(),
-        "prompt": (padded[COL_PROMPT] or "").strip(),
+        "number": f["number"],
+        "complete": f["complete"],
+        "prompt": f["prompt_q"],
     }
 
 
-def _resolve_rows(sheets, args) -> list[int]:
+def _resolve_rows(sheets, schema: SheetSchema, args) -> list[int]:
     """Decide which 1-based sheet rows to process based on CLI args."""
     if args.row:
         return [args.row]
@@ -99,23 +108,26 @@ def _resolve_rows(sheets, args) -> list[int]:
         lo, hi = args.rows.split("-", 1)
         return list(range(int(lo), int(hi) + 1))
     if args.all:
-        # Pull every data row so we can filter by "Q filled, D empty"
-        values = _read_range(sheets, f"{SHEET_TAB}!A{DATA_START_ROW}:Q1000")
+        # Pull every data row so we can filter by "Q filled, complete empty".
+        from sheet_schema import index_to_letter
+        last = index_to_letter(schema.max_index() + 4)
+        values = _read_range(sheets, f"{SHEET_TAB}!A{DATA_START_ROW}:{last}1000")
         rows = []
         for i, v in enumerate(values):
             row_num = DATA_START_ROW + i
-            f = _row_fields(v)
+            f = _row_fields(schema, v)
             if f["number"] and f["prompt"] and not f["complete"]:
                 rows.append(row_num)
         return rows
     sys.exit("specify one of --row N | --rows N-M | --all")
 
 
-def _mark_complete(sheets, row: int) -> None:
-    """Write '✓' into column D of the given row."""
+def _mark_complete(sheets, schema: SheetSchema, row: int) -> None:
+    """Write '✓' into the `image complete` column of the given row."""
+    col = schema.letter("complete")
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_TAB}!D{row}",
+        range=f"{SHEET_TAB}!{col}{row}",
         valueInputOption="USER_ENTERED",
         body={"values": [["✓"]]},
     ).execute()
@@ -165,17 +177,22 @@ def main() -> int:
         sys.exit("--variants must be ≥ 1")
 
     sheets = _build_sheets()
-    rows = _resolve_rows(sheets, args)
+    schema = SheetSchema(sheets)
+    rows = _resolve_rows(sheets, schema, args)
     if not rows:
         print("no rows to process.")
         return 0
 
-    # Single fetch to get the fields for every target row
-    range_a1 = f"{SHEET_TAB}!A{min(rows)}:Q{max(rows)}"
+    # Single fetch to get the fields for every target row. The right
+    # edge of the range is computed from the schema so we don't truncate
+    # if the prompt column has moved.
+    from sheet_schema import index_to_letter
+    last_letter = index_to_letter(schema.max_index() + 4)
+    range_a1 = f"{SHEET_TAB}!A{min(rows)}:{last_letter}{max(rows)}"
     block = _read_range(sheets, range_a1)
     row_to_fields: dict[int, dict[str, str]] = {}
     for offset, v in enumerate(block):
-        row_to_fields[min(rows) + offset] = _row_fields(v)
+        row_to_fields[min(rows) + offset] = _row_fields(schema, v)
 
     print(f"Brian tab — {len(rows)} target row(s):")
     plan: list[tuple[int, dict[str, str], list[Path]]] = []
@@ -233,8 +250,8 @@ def main() -> int:
             for s in result.data.get("saved_paths", []):
                 print(f"  ✓ {s}")
             if not args.no_mark:
-                _mark_complete(sheets, r)
-                print(f"  ✓ marked D{r} = ✓")
+                _mark_complete(sheets, schema, r)
+                print(f"  ✓ marked {schema.letter('complete')}{r} = ✓")
         if args.sleep_between and r != plan[-1][0]:
             time.sleep(args.sleep_between)
 
