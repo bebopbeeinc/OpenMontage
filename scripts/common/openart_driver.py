@@ -755,7 +755,7 @@ def generate_clip(
             )
             saved.append(dest)
         if len(saved) < n:
-            print(f"  ⚠ {n - len(saved)} variant(s) did not save successfully", file=sys.stderr)
+            raise RuntimeError(f"only {len(saved)}/{n} variants saved")
         return saved
 
 
