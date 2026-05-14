@@ -25,9 +25,14 @@
            display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 16px; font-weight: 600; margin: 0; }
   header .meta { color: var(--muted); font-size: 12px; }
-  header button { margin-left: auto; }
+  header .spacer { flex: 1; }
+  header .sheet-links { display: inline-flex; gap: 12px; font-size: 12px; }
+  header .sheet-links a { color: var(--running); text-decoration: none; }
+  header .sheet-links a:hover { text-decoration: underline; }
   main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
          height: calc(100vh - 53px); }
+  main.panel-hidden { grid-template-columns: 1fr; }
+  main.panel-hidden .panel { display: none; }
   .rows { overflow: auto; }
   .panel { background: var(--panel); border-left: 1px solid var(--border);
            display: flex; flex-direction: column; overflow: hidden; }
@@ -176,10 +181,14 @@
   <header>
     <h1>Trivia Pipeline</h1>
     <span class="meta" id="header-meta">loading…</span>
+    <span class="sheet-links" id="sheet-links"></span>
+    <span class="spacer"></span>
+    <button id="toggle-panel-btn">Hide log</button>
     <button id="refresh-btn">refresh</button>
+    <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
   </header>
 
-  <main>
+  <main id="main">
     <section class="rows">
       <table>
         <thead>
@@ -283,6 +292,10 @@ async function loadRows() {
     const runTitle = canRun ? "" : (segmentTooltip(row) || "row not ready");
     const expanded = expandedRows.has(row.row);
     const expandLabel = expanded ? "▾" : "▸";
+    const isReadyToPub = (status || "").trim().toLowerCase() === "ready to publish";
+    const markBtn = isReadyToPub
+      ? `<button class="primary" data-action="mark-published" data-row="${row.row}" title="flip Posts!L${row.row} to Published">Mark as published</button>`
+      : "";
     return `
       <tr>
         <td class="row-num">
@@ -300,6 +313,7 @@ async function loadRows() {
           <button class="primary" data-action="run"     data-kind="render"  data-row="${row.row}" data-slug="${slugAttr}" title="${escapeHtml(runTitle)}" ${canRun ? "" : "disabled"}>Run</button>
           <button                 data-action="open"                       data-row="${row.row}" data-slug="${slugAttr}" title="${row.render_exists ? "" : "no render yet — click Run first"}" ${row.render_exists ? "" : "disabled"}>Open</button>
           <button class="warn"    data-action="run"     data-kind="publish" data-row="${row.row}" data-slug="${slugAttr}" title="${row.render_exists ? "" : "no render to publish — click Run first"}" ${row.render_exists ? "" : "disabled"}>Publish</button>
+          ${markBtn}
         </td>
       </tr>
       ${expanded ? variantDrawer(row) : ""}
@@ -388,6 +402,8 @@ document.getElementById("rows-tbody").addEventListener("click", (e) => {
     openRender(btn.dataset.slug || "");
   } else if (action === "approve") {
     approveRow(row);
+  } else if (action === "mark-published") {
+    markPublished(row);
   } else if (action === "expand") {
     if (expandedRows.has(row)) expandedRows.delete(row);
     else expandedRows.add(row);
@@ -494,6 +510,20 @@ async function approveRow(row) {
   });
   if (!r.ok) {
     alert(`approve failed: ${await r.text()}`);
+    return;
+  }
+  loadRows();
+}
+
+async function markPublished(row) {
+  if (!confirm(`Mark row ${row} as Published? Flips Posts!L${row} from 'Ready to publish' to 'Published'.`)) return;
+  const r = await fetch("api/mark_published", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({row}),
+  });
+  if (!r.ok) {
+    alert(`mark published failed: ${await r.text()}`);
     return;
   }
   loadRows();
@@ -607,9 +637,35 @@ async function loadHealth() {
   const h = await r.json();
   $("#header-meta").textContent =
     `${h.sa_present ? "" : "⚠ SA missing — "}repo: ${h.repo.replace(/^.*\//, "")}`;
+  const links = $("#sheet-links");
+  if (h.sheet_url) {
+    links.innerHTML = `<a href="${h.sheet_url}" target="_blank" rel="noopener">Post Calendar ↗</a>`;
+  }
 }
 
 $("#refresh-btn").addEventListener("click", () => { loadRows(); loadHealth(); loadJobs(); });
+
+function togglePanel() {
+  const main = $("#main");
+  const hidden = !main.classList.contains("panel-hidden");
+  main.classList.toggle("panel-hidden", hidden);
+  $("#toggle-panel-btn").textContent = hidden ? "Show log" : "Hide log";
+  try { localStorage.setItem("trivia_panel_hidden", hidden ? "1" : "0"); }
+  catch (e) {}
+}
+
+function restorePanelState() {
+  let hidden = false;
+  try { hidden = localStorage.getItem("trivia_panel_hidden") === "1"; }
+  catch (e) {}
+  if (hidden) {
+    $("#main").classList.add("panel-hidden");
+    $("#toggle-panel-btn").textContent = "Show log";
+  }
+}
+
+$("#toggle-panel-btn").addEventListener("click", togglePanel);
+restorePanelState();
 
 async function loadJobs() {
   const r = await fetch("api/jobs");

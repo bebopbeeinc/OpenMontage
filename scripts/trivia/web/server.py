@@ -255,6 +255,16 @@ def mark_approved(row: int) -> None:
     ).execute()
 
 
+def mark_published(row: int) -> None:
+    s = _sheets()
+    s.spreadsheets().values().update(
+        spreadsheetId=POST_SHEET,
+        range=f"Posts!L{row}",
+        valueInputOption="USER_ENTERED",
+        body={"values": [["Published"]]},
+    ).execute()
+
+
 def _emit(job: Job, line: str) -> None:
     line = line.rstrip("\n")
     job.log.append(line)
@@ -582,6 +592,9 @@ async def api_health():
     return {
         "ok": True,
         "repo": str(REPO),
+        "sheet_id": POST_SHEET,
+        "sheet_tab": "Posts",
+        "sheet_url": f"https://docs.google.com/spreadsheets/d/{POST_SHEET}/edit",
         "sa_path": str(SA_PATH),
         "sa_present": SA_PATH.exists(),
         "python": sys.executable,
@@ -677,6 +690,25 @@ async def api_approve(payload: dict):
     except Exception as e:
         raise HTTPException(500, str(e))
     return {"ok": True, "row": row}
+
+
+@app.post("/api/mark_published")
+async def api_mark_published(payload: dict):
+    """Flip Posts!L to 'Published' for a row that's currently Ready to publish.
+
+    publish.py uploads to Drive and flips L to 'Ready to publish'. After the
+    post actually goes live, the human marks it Published from the UI so the
+    sheet's final_status reflects reality.
+    """
+    try:
+        row = int(payload["row"])
+    except (KeyError, ValueError, TypeError):
+        raise HTTPException(400, "row must be an integer")
+    try:
+        mark_published(row)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True, "row": row, "final_status": "Published"}
 
 
 @app.post("/api/feedback")
