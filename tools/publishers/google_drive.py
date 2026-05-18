@@ -74,12 +74,19 @@ class FileMeta:
     Whatever caller needs to interpret state (e.g. "is this in the approved
     folder?") should do it with `parent_ids` — this dataclass is intentionally
     pipeline-agnostic.
+
+    `thumbnail_link` is Drive's auto-generated thumbnail URL (lh3.googleusercontent.com).
+    Empty for non-image files or when the field wasn't requested. The URL is
+    signed and publicly fetchable without auth, so it can be handed straight to
+    a browser `<img>` tag — avoids round-tripping multi-MB originals through
+    proxies that serialize Drive downloads.
     """
     id: str
     name: str
     mime_type: str
     modified_time: str
     parent_ids: tuple[str, ...]
+    thumbnail_link: str = ""
 
 
 def _sa_path() -> Path:
@@ -128,6 +135,7 @@ class DriveClient:
             mime_type=f.get("mimeType", ""),
             modified_time=f.get("modifiedTime", ""),
             parent_ids=tuple(f.get("parents") or ()),
+            thumbnail_link=f.get("thumbnailLink", ""),
         )
 
     # ----- list -----
@@ -159,7 +167,7 @@ class DriveClient:
             while True:
                 resp = self._drive.files().list(
                     q=f"'{folder_id}' in parents and trashed=false",
-                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents)",
+                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents,thumbnailLink)",
                     pageSize=200,
                     supportsAllDrives=True,
                     includeItemsFromAllDrives=True,

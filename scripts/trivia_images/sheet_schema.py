@@ -22,9 +22,14 @@ from __future__ import annotations
 from pathlib import Path
 
 SHEET_ID = "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk"
-SHEET_TAB = "Brian"
+SHEET_TAB = "Brian"      # default tab if discovery hasn't named a preferred one
 HEADER_ROWS = (1, 2)    # row 1 = section banners, row 2 = per-column names
 DATA_START_ROW = 3
+
+
+def a1_tab(tab: str) -> str:
+    """Quote a tab name for A1 notation. Required for hyphen/space tabs."""
+    return "'" + tab.replace("'", "''") + "'"
 SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 SCOPES_RW = ["https://www.googleapis.com/auth/spreadsheets"]
 SCOPES_RO = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
@@ -54,7 +59,14 @@ FIELD_TO_HEADER: dict[str, str] = {
 # Optional fields — resolver returns None for these if the header label
 # isn't present, instead of raising. Useful for forward compatibility
 # (e.g. adding a new column that older code doesn't require).
+#
+# `complete` is optional because the rebuilt tabs (1-250, 251-500, etc.)
+# dropped the "image complete" tracking column. Code that writes ✓ here
+# tolerates a missing column by catching the schema lookup error; code
+# that reads it (`question_complete`) just shows False for tabs without
+# the column.
 OPTIONAL_FIELDS: frozenset[str] = frozenset({
+    "complete",
     "response_correct", "response_incorrect", "hint",
     "answer_2", "answer_3", "answer_4",
 })
@@ -82,17 +94,38 @@ class SheetSchema:
     header row if the sheet may have changed within the same process.
     """
 
-    def __init__(self, sheets) -> None:
+    def __init__(self, sheets, tab: str = SHEET_TAB) -> None:
         self._sheets = sheets
+        self._tab = tab
         self._field_to_index: dict[str, int] | None = None
+
+    @property
+    def tab(self) -> str:
+        return self._tab
 
     def _resolve(self) -> dict[str, int]:
         lo, hi = min(HEADER_ROWS), max(HEADER_ROWS)
         r = self._sheets.spreadsheets().values().get(
             spreadsheetId=SHEET_ID,
-            range=f"{SHEET_TAB}!{lo}:{hi}",
+            range=f"{a1_tab(self._tab)}!{lo}:{hi}",
         ).execute()
         rows = r.get("values") or []
+        out = self._resolve_from_rows(rows)
+        self._field_to_index = out
+        return out
+
+    def populate_from_rows(self, rows: list[list[str]]) -> dict[str, int]:
+        """Resolve and cache the schema from pre-fetched header rows.
+
+        Used by callers that did a values.batchGet across multiple tabs
+        to avoid one API call per tab. Same validation rules as
+        `_resolve`; raises on missing required labels.
+        """
+        out = self._resolve_from_rows(rows)
+        self._field_to_index = out
+        return out
+
+    def _resolve_from_rows(self, rows: list[list[str]]) -> dict[str, int]:
         # Per-row label maps. Row 2 wins over row 1 when both have the
         # same label (rare but possible — row 2 is the authoritative
         # per-column row).
@@ -115,11 +148,10 @@ class SheetSchema:
                 unresolved_required.append(f"{field} (label={header!r})")
         if unresolved_required:
             raise RuntimeError(
-                f"Brian header rows missing required labels: "
+                f"{self._tab} header rows missing required labels: "
                 f"{', '.join(unresolved_required)}. "
                 f"Resolved labels: {sorted(label_to_index)}"
             )
-        self._field_to_index = out
         return out
 
     def refresh(self) -> dict[str, int]:

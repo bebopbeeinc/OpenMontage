@@ -30,6 +30,17 @@
   header .spacer { flex: 1; }
   header button { margin-left: 0; }
 
+  .tab-strip { display: inline-flex; border: 1px solid var(--border); border-radius: 5px;
+               overflow: hidden; }
+  .tab-strip button { background: transparent; color: var(--muted); border: none;
+                      border-right: 1px solid var(--border); border-radius: 0;
+                      padding: 6px 12px; font: inherit; font-size: 12px;
+                      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                      cursor: pointer; }
+  .tab-strip button:last-child { border-right: none; }
+  .tab-strip button:hover:not(.active) { background: #1a2030; color: var(--text); }
+  .tab-strip button.active { background: var(--bg); color: var(--accent); font-weight: 600; }
+
   main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
          height: calc(100vh - 53px); }
   main.panel-hidden { grid-template-columns: 1fr; }
@@ -219,9 +230,10 @@
 
 <header>
   <h1>Trivia Images</h1>
+  <div class="tab-strip" id="tab-strip"></div>
   <div class="meta" id="meta">loading…</div>
   <div class="drive-links">
-    <a href="https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=516450971#gid=516450971" target="_blank" rel="noopener">Sheet ↗</a>
+    <a id="sheet-link" href="https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=516450971#gid=516450971" target="_blank" rel="noopener">Sheet ↗</a>
     <a href="https://drive.google.com/drive/folders/1wENmER7aQ6wk23jP6wOggc7mviLAB_pw" target="_blank" rel="noopener">Approved ↗</a>
     <a href="https://drive.google.com/drive/folders/1NMb2WeJp7HVsO-gzvOA-B0wK83uFta9k" target="_blank" rel="noopener">Staging ↗</a>
   </div>
@@ -287,7 +299,7 @@
       </thead>
       <tbody id="tbody">
         <tr><td colspan="8" style="padding: 40px; text-align: center; color: var(--muted);">
-          loading rows from Brian tab…
+          loading rows…
         </td></tr>
       </tbody>
     </table>
@@ -324,6 +336,24 @@ let activeEvt = null;
 let activeTab = 'log';
 let activePollTimer = null;
 
+// Sheet-tab state. Tabs are discovered live from the workbook
+// (/api/tabs) — adding, renaming, or removing a tab in Sheets flows
+// through after a server restart (or a /api/tabs?refresh=1 round-trip).
+// All discovered tabs share the trivia-images column layout and the
+// same approved/staging Drive folders; row numbers don't overlap
+// across tabs so Drive filenames stay unique.
+let availableTabs = [];                  // [{name, gid, index}, ...]
+let currentTab = 'Brian';
+// True while /api/rows is in flight — suppresses renderRows() so the
+// background active-poll doesn't repaint the loading placeholder.
+let loadingRows = false;
+try {
+  const stored = localStorage.getItem('trivia_images_tab');
+  if (stored) currentTab = stored;
+} catch (e) {}
+
+function tabQuery() { return `tab=${encodeURIComponent(currentTab)}`; }
+
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
   if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}: ${await r.text().catch(()=>'')}`);
@@ -350,16 +380,29 @@ function hasImg(r, kind) {
 }
 
 function thumbCell(r, kind) {
-  // Image bytes always come from Drive via /api/image; the modified_time is
-  // included as ?v= to bust the browser cache after a re-gen.
+  // Thumbnails come straight from Drive's CDN (lh3.googleusercontent.com)
+  // via the file's thumbnailLink. Sized to ~512px so they look sharp on
+  // 2x/3x displays at the 96x72 css render size. The full-resolution image
+  // (used for the click-to-zoom modal) still goes through /api/image —
+  // the proxy serializes Drive downloads behind a single _api_lock, so we
+  // only pay that cost when the user actually opens the modal.
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   if (!drive || drive.state === 'none') {
     return '<div class="thumb"><span class="thumb-missing">none</span></div>';
   }
   const v = encodeURIComponent(drive.modified_time || drive.file_id || '');
   const short = kind === 'question_image' ? 'Q' : 'A';
-  const src = `api/image/${encodeURIComponent(r.slug)}/${short}?v=${v}`;
-  return `<div class="thumb"><img src="${src}" alt="${escapeHtml(r.slug)}/${short}" onclick="showModal(this.src)" /></div>`;
+  const fullSrc = `api/image/${encodeURIComponent(r.slug)}/${short}?v=${v}`;
+  // Prefer Drive's thumbnailLink; fall back to the proxy for files that
+  // somehow lack one (non-image mime types, very old uploads, or files
+  // whose thumbnail Drive hasn't generated yet — those return 404 until
+  // the CDN catches up). onerror swaps to the proxy URL exactly once
+  // (data-fellback guards against a fallback loop).
+  const thumbSrc = drive.thumbnail_link || fullSrc;
+  const onerr = drive.thumbnail_link
+    ? `if(!this.dataset.fellback){this.dataset.fellback='1';this.src=this.dataset.full;}`
+    : '';
+  return `<div class="thumb"><img src="${thumbSrc}" alt="${escapeHtml(r.slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onerror="${onerr}" onclick="showModal(this.dataset.full)" /></div>`;
 }
 
 function drivePill(drive) {
@@ -454,6 +497,7 @@ function kindCheckboxCell(r, kind) {
 }
 
 function renderRows() {
+  if (loadingRows) return;   // don't repaint over the loading placeholder
   const tbody = $('tbody');
   if (!visibleRows.length) {
     tbody.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--muted);">no rows match filters</td></tr>`;
@@ -618,16 +662,99 @@ function updateBatchBar() {
 
 async function loadRows() {
   $('meta').textContent = 'loading…';
+  loadingRows = true;
   try {
-    const [health, data] = await Promise.all([api('api/health'), api('api/rows')]);
+    const [health, data] = await Promise.all([
+      api('api/health'),
+      api(`api/rows?${tabQuery()}`),
+    ]);
     allRows = data;
-    $('meta').textContent = `${allRows.length} row(s) · sheet=${health.sheet_tab} · sa=${health.sa_present ? 'ok' : 'MISSING'}`;
+    $('meta').textContent = `${allRows.length} row(s) · tab=${currentTab} · sa=${health.sa_present ? 'ok' : 'MISSING'}`;
+    loadingRows = false;
     populateFilterDropdowns();
     applyFilters();
   } catch (e) {
+    loadingRows = false;
     $('meta').textContent = 'load failed';
     $('tbody').innerHTML = `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--err);">load failed: ${escapeHtml(e.message)}</td></tr>`;
   }
+}
+
+function tabNames() { return availableTabs.map(t => t.name); }
+function tabGid(name) {
+  const t = availableTabs.find(x => x.name === name);
+  return t ? t.gid : null;
+}
+
+function renderTabStrip() {
+  const strip = $('tab-strip');
+  strip.innerHTML = availableTabs.map(t => `
+    <button class="${t.name === currentTab ? 'active' : ''}" onclick="switchSheetTab('${t.name.replace(/'/g, "\\'")}')">${escapeHtml(t.name)}</button>
+  `).join('');
+  const gid = tabGid(currentTab);
+  if (gid) {
+    $('sheet-link').href = `https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=${gid}#gid=${gid}`;
+  }
+}
+
+async function loadTabs() {
+  try {
+    const data = await api('api/tabs');
+    availableTabs = data.tabs || [];
+    if (!tabNames().includes(currentTab)) {
+      currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || 'Brian';
+    }
+  } catch (e) {
+    // Server down or unreachable — leave availableTabs empty so the
+    // strip is empty; /api/rows will surface a clean error below.
+  }
+  renderTabStrip();
+}
+
+// Reset the table to the "loading…" placeholder. Called on tab-switch
+// so the user gets immediate visual feedback instead of staring at the
+// previous tab's data for the seconds it takes the sheets API to come
+// back (we read 250 rows + warm the Drive listing per call).
+function showRowsLoading() {
+  allRows = [];
+  visibleRows = [];
+  $('tbody').innerHTML = `
+    <tr><td colspan="8" style="padding: 40px; text-align: center; color: var(--muted);">
+      loading rows from ${escapeHtml(currentTab)} tab…
+    </td></tr>`;
+  $('stats').textContent = '—';
+  $('check-all-q').checked = false;
+  $('check-all-q').indeterminate = false;
+  $('check-all-a').checked = false;
+  $('check-all-a').indeterminate = false;
+  $('selected-count').textContent = 'nothing selected';
+  $('selected-count').className = 'count';
+  $('batch-gen').textContent = 'Generate (0 missing)';
+  $('batch-gen').disabled = true;
+  $('batch-regen').textContent = 'Re-gen (0 existing)';
+  $('batch-regen').disabled = true;
+}
+
+async function switchSheetTab(tab) {
+  if (tab === currentTab) return;
+  if (!tabNames().includes(tab)) return;
+  currentTab = tab;
+  try { localStorage.setItem('trivia_images_tab', tab); } catch (e) {}
+  // Selections and the attached job log are tab-scoped concepts visually
+  // even though job IDs are global — clear them so the user sees a fresh
+  // workspace for the new tab.
+  selected.question_image.clear();
+  selected.answer_image.clear();
+  if (activeEvt) { activeEvt.close(); activeEvt = null; }
+  activeJobId = null;
+  $('panel-title').textContent = 'Log';
+  $('panel-meta').textContent = 'no job yet';
+  $('log').innerHTML = '<span class="log-empty">No job running. Pick a row and click Generate Question or Generate Answer.</span>';
+  $('meta').textContent = 'loading…';
+  renderTabStrip();
+  showRowsLoading();
+  await loadRows();
+  await refreshActive();
 }
 
 async function runJob(row, slug, kind) {
@@ -639,7 +766,7 @@ async function runJob(row, slug, kind) {
     const job = await api('api/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({kind, row, slug, prompt}),
+      body: JSON.stringify({kind, row, slug, prompt, tab: currentTab}),
     });
     toast(`job ${job.id} queued (${kind})`);
     attachToJob(job.id);
@@ -672,7 +799,7 @@ async function runBatch(mode) {
       const job = await api('api/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({kind: t.kind, row: t.row, slug: t.slug, prompt: t.prompt}),
+        body: JSON.stringify({kind: t.kind, row: t.row, slug: t.slug, prompt: t.prompt, tab: currentTab}),
       });
       if (!firstJobId) firstJobId = job.id;
     } catch (e) {
@@ -827,12 +954,22 @@ async function pickNextRunningJob() {
 async function refreshActive() {
   try {
     const data = await api('api/active');
-    active = data.active || {};
+    const next = data.active || {};
+    // Only re-render the table if the active-job map actually changed.
+    // Otherwise the 3-second poll rewrites tbody on every tick, which
+    // cancels in-flight thumbnail downloads (each row contains <img>
+    // elements pointing at Drive CDN; setting innerHTML drops the old
+    // element and the browser restarts the load on the new one). For
+    // anything taking longer than the 3s poll interval, that means it
+    // never finishes — thumbnails appear permanently broken or load
+    // glacially as the cycle keeps interrupting itself.
+    const changed = JSON.stringify(active) !== JSON.stringify(next);
+    active = next;
     const qs = $('queue-status');
     const r = data.running_count, q = data.queued_count;
     if (r || q) qs.textContent = `${r} running · ${q} queued`;
     else qs.textContent = '';
-    renderRows();
+    if (changed) renderRows();
   } catch (e) { /* ignore poll failures */ }
 }
 
@@ -973,10 +1110,10 @@ async function savePrompts(row, slug) {
   const newR = $('edit-r').value;
   // Only send fields that actually changed — avoids spurious writes and
   // keeps the response's `written` list useful as feedback.
-  const payload = {row};
+  const payload = {row, tab: currentTab};
   if (newQ !== (r.prompt_q || '')) payload.prompt_q = newQ;
   if (newR !== (r.prompt_r || '')) payload.prompt_r = newR;
-  if (Object.keys(payload).length === 1) {
+  if (Object.keys(payload).length === 2) {
     toast('no changes — nothing to save');
     closePromptEditor();
     return;
@@ -1035,9 +1172,17 @@ async function discardImage(row, slug, kind) {
 // while a batch is draining. Cheap (just hits an in-memory dict server-side).
 activePollTimer = setInterval(refreshActive, 3000);
 
-// Initial load
+// Initial load. Catch any uncaught exception so a thrown init step
+// surfaces in the meta line instead of leaving the page frozen at
+// "loading…" with no indication of what broke.
 restorePanelState();
-loadRows().then(refreshActive);
+loadTabs()
+  .then(loadRows)
+  .then(refreshActive)
+  .catch(e => {
+    console.error('init failed', e);
+    $('meta').textContent = `init failed: ${e.message || e}`;
+  });
 </script>
 </body>
 </html>

@@ -47,7 +47,23 @@ from sheet_schema import (  # noqa: E402
     SHEET_ID,
     SHEET_TAB,
     SheetSchema,
+    a1_tab,
 )
+
+
+def _validate_tab(tab: str | None) -> str:
+    """Coerce a request-supplied tab name into the discovered allowlist.
+
+    Pulls the live list of trivia-images tabs from the spreadsheet (see
+    _discover_tabs) so a tab rename in Sheets flows through without code
+    edits — just a server restart, or pass refresh=1 to /api/rows.
+    """
+    names = [t["name"] for t in _discover_tabs()]
+    if not tab:
+        return SHEET_TAB if SHEET_TAB in names else (names[0] if names else SHEET_TAB)
+    if tab not in names:
+        raise HTTPException(400, f"unknown tab {tab!r}; allowed: {names}")
+    return tab
 
 # Trivia-images Drive layout. Approved is the visible root ("Question
 # Images"); staging is the "WIP" subfolder underneath where freshly-
@@ -124,6 +140,7 @@ class Job:
     kind: JobKind
     row: int
     slug: str                                      # 'q{N}'
+    tab: str = SHEET_TAB
     status: JobStatus = "queued"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     started_at: str | None = None
@@ -139,6 +156,7 @@ class Job:
             "kind": self.kind,
             "row": self.row,
             "slug": self.slug,
+            "tab": self.tab,
             "status": self.status,
             "created_at": self.created_at,
             "started_at": self.started_at,
@@ -174,14 +192,152 @@ def _emit(job: Job, line: str) -> None:
 # ---------------------------------------------------------------------------
 # Sheets read
 # ---------------------------------------------------------------------------
+import threading                                # noqa: E402
+
+# Process-wide singletons. Per the schema module's docstring, header
+# layout is meant to be resolved "once per process" — but the prior
+# wiring re-instantiated SheetSchema on every request and burned ~1s on
+# a fresh values.get() of the header rows each time. Caching here is
+# what makes that intent actually true.
+_sheets_client = None
+_sheets_lock = threading.Lock()
+_schema_cache: dict[str, SheetSchema] = {}
+_schema_lock = threading.Lock()
+# Discovered tabs: [{"name": str, "gid": str, "index": int}, ...]
+_tabs_cache: list[dict] | None = None
+_tabs_lock = threading.Lock()
+
+
 def _build_sheets():
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    creds = service_account.Credentials.from_service_account_file(
-        str(SA_PATH),
-        scopes=["https://www.googleapis.com/auth/spreadsheets"],
-    )
-    return build("sheets", "v4", credentials=creds)
+    global _sheets_client
+    if _sheets_client is not None:
+        return _sheets_client
+    with _sheets_lock:
+        if _sheets_client is not None:
+            return _sheets_client
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        creds = service_account.Credentials.from_service_account_file(
+            str(SA_PATH),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        _sheets_client = build("sheets", "v4", credentials=creds)
+    return _sheets_client
+
+
+def _discover_tabs(refresh: bool = False) -> list[dict]:
+    """List sheet tabs whose column layout matches the trivia-images schema.
+
+    Two HTTP calls total regardless of tab count:
+      1. spreadsheets.get for the workbook's tab metadata
+      2. values.batchGet for every tab's header rows (rows 1-2) in a
+         single request
+    We then resolve each candidate's schema in pure Python — tabs
+    without the required header labels (e.g. "Topics", "RN" pivot
+    tables) are skipped silently. Resolved schemas are warmed into
+    _schema_cache as a side effect so /api/rows doesn't pay another
+    header fetch when the user clicks a tab.
+
+    Returned shape: [{"name": str, "gid": str, "index": int}, ...]
+    sorted by the workbook's tab order so the UI strip matches Sheets.
+    Cached at module scope; pass refresh=True to re-discover after the
+    workbook gets a new/renamed/removed tab.
+    """
+    from sheet_schema import HEADER_ROWS
+
+    global _tabs_cache
+    if not refresh and _tabs_cache is not None:
+        return _tabs_cache
+    with _tabs_lock:
+        if not refresh and _tabs_cache is not None:
+            return _tabs_cache
+        sheets = _build_sheets()
+        meta = sheets.spreadsheets().get(
+            spreadsheetId=SHEET_ID,
+            fields="sheets.properties(title,sheetId,index)",
+        ).execute()
+        tab_props: list[dict] = []
+        for s in meta.get("sheets", []):
+            p = s.get("properties") or {}
+            if p.get("title"):
+                tab_props.append(p)
+        if not tab_props:
+            _tabs_cache = []
+            return _tabs_cache
+
+        lo, hi = min(HEADER_ROWS), max(HEADER_ROWS)
+        ranges = [f"{a1_tab(p['title'])}!{lo}:{hi}" for p in tab_props]
+        batch = sheets.spreadsheets().values().batchGet(
+            spreadsheetId=SHEET_ID,
+            ranges=ranges,
+        ).execute()
+        value_ranges = batch.get("valueRanges") or []
+        # Defensive: pair by index, fall back to empty rows if the
+        # response is shorter than the request (shouldn't happen but
+        # cheaper than a hard crash on a malformed payload).
+        result: list[dict] = []
+        for i, p in enumerate(tab_props):
+            name = p["title"]
+            rows = (value_ranges[i].get("values") if i < len(value_ranges) else None) or []
+            schema = SheetSchema(sheets, tab=name)
+            try:
+                schema.populate_from_rows(rows)
+            except Exception:
+                continue   # not a trivia-images tab
+            # Warm the schema cache so the first /api/rows call for
+            # this tab skips its own header round-trip.
+            with _schema_lock:
+                _schema_cache[name] = schema
+            result.append({
+                "name": name,
+                "gid": str(p["sheetId"]),
+                "index": int(p.get("index", 0)),
+            })
+        result.sort(key=lambda t: t["index"])
+        _tabs_cache = result
+    return result
+
+
+def _prewarm_schemas() -> None:
+    """Discover tabs + resolve every matching schema in the background at startup.
+
+    The first user request would otherwise pay ~400ms for the
+    header-row fetch on each tab. Done in a daemon thread so startup
+    isn't blocked; silent on failure (Drive/Sheets unauthed in dev is
+    OK — the next real request surfaces the error properly).
+    """
+    def go():
+        try:
+            _build_sheets()
+            _discover_tabs()
+        except Exception:
+            pass
+    t = threading.Thread(target=go, name="trivia-images-prewarm", daemon=True)
+    t.start()
+
+
+def _get_schema(tab: str, refresh: bool = False) -> SheetSchema:
+    """Cached SheetSchema for `tab`. Resolves headers exactly once per
+    process unless `refresh=True` (or until the in-instance retry
+    triggers a re-resolve because a tracked header label moved). If you
+    reorder columns without renaming any tracked label, restart the
+    server or hit /api/rows?refresh=1 — there is no automatic detection
+    for "same label, different column position".
+    """
+    if refresh:
+        with _schema_lock:
+            _schema_cache.pop(tab, None)
+    cached = _schema_cache.get(tab)
+    if cached is not None:
+        return cached
+    with _schema_lock:
+        cached = _schema_cache.get(tab)
+        if cached is None:
+            schema = SheetSchema(_build_sheets(), tab=tab)
+            schema.max_index()        # force resolution so the network cost is paid here, once
+            _schema_cache[tab] = schema
+            cached = schema
+    return cached
 
 
 def _drive_state_for(number: str, kind: str) -> dict:
@@ -197,21 +353,29 @@ def _drive_state_for(number: str, kind: str) -> dict:
     except Exception:
         # Drive transient — surface 'none' rather than crash the row list.
         state, meta = "none", None
-    out = {"state": state, "drive_name": name, "file_id": None, "modified_time": None}
+    out = {
+        "state": state, "drive_name": name,
+        "file_id": None, "modified_time": None, "thumbnail_link": None,
+    }
     if meta is not None:
         out["file_id"] = meta.id
         out["modified_time"] = meta.modified_time
+        # Bump =s220 (Drive's default) to =s512 so the thumbnail looks sharp on
+        # 2x/3x displays at the 96x72 css size. The browser fetches this URL
+        # directly from Google's CDN, bypassing our serialized /api/image proxy.
+        if meta.thumbnail_link:
+            out["thumbnail_link"] = meta.thumbnail_link.replace("=s220", "=s512")
     return out
 
 
-def read_rows(min_row: int = DATA_START_ROW, max_row: int = 1000) -> list[dict]:
+def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int = 1000, refresh_schema: bool = False) -> list[dict]:
     sheets = _build_sheets()
-    schema = SheetSchema(sheets)
+    schema = _get_schema(tab, refresh=refresh_schema)
     # Read up to the rightmost column the schema cares about, with a
     # small cushion so an inserted column to the right of the tracked
     # range doesn't truncate the read on the next sheet edit.
     last_letter = _last_letter(schema.max_index() + 4)
-    rng = f"{SHEET_TAB}!A{min_row}:{last_letter}{max_row}"
+    rng = f"{a1_tab(tab)}!A{min_row}:{last_letter}{max_row}"
     resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng).execute()
     raw = resp.get("values", [])
     # Warm the Drive listing once per /api/rows call — state_for goes through
@@ -257,18 +421,26 @@ def _last_letter(idx: int) -> str:
     return index_to_letter(idx)
 
 
-def _mark_question_complete(row: int) -> None:
+def _mark_question_complete(tab: str, row: int) -> bool:
+    """Write ✓ to the row's `image complete` column. Returns False (without
+    raising) when the tab doesn't carry that column — the rebuilt tabs
+    (1-250 etc.) dropped it and the worker tolerates the gap."""
     sheets = _build_sheets()
-    col = SheetSchema(sheets).letter("complete")
+    schema = _get_schema(tab)
+    try:
+        col = schema.letter("complete")
+    except KeyError:
+        return False
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_TAB}!{col}{row}",
+        range=f"{a1_tab(tab)}!{col}{row}",
         valueInputOption="USER_ENTERED",
         body={"values": [["✓"]]},
     ).execute()
+    return True
 
 
-def _write_prompts(row: int, prompt_q: str | None, prompt_r: str | None) -> dict[str, str]:
+def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | None) -> dict[str, str]:
     """Write the question and/or answer prompt columns for `row`.
 
     Returns {col_letter: value} for whatever was actually written. The
@@ -286,20 +458,20 @@ def _write_prompts(row: int, prompt_q: str | None, prompt_r: str | None) -> dict
         raise ValueError("nothing to write (both prompts are None)")
 
     sheets = _build_sheets()
-    schema = SheetSchema(sheets)
+    schema = _get_schema(tab)
     q_letter = schema.letter("prompt_q")
     r_letter = schema.letter("prompt_r")
     data: list[dict] = []
     written: dict[str, str] = {}
     if prompt_q is not None:
         data.append({
-            "range": f"{SHEET_TAB}!{q_letter}{row}",
+            "range": f"{a1_tab(tab)}!{q_letter}{row}",
             "values": [[prompt_q]],
         })
         written[q_letter] = prompt_q
     if prompt_r is not None:
         data.append({
-            "range": f"{SHEET_TAB}!{r_letter}{row}",
+            "range": f"{a1_tab(tab)}!{r_letter}{row}",
             "values": [[prompt_r]],
         })
         written[r_letter] = prompt_r
@@ -444,8 +616,11 @@ async def _run_job(job: Job) -> None:
             # Mark col D = ✓ after the file lands (matches generate.py default).
             if not job.extra.get("no_mark"):
                 try:
-                    await asyncio.to_thread(_mark_question_complete, job.row)
-                    _emit(job, f"  ✓ marked Brian!D{job.row} = ✓")
+                    marked = await asyncio.to_thread(_mark_question_complete, job.tab, job.row)
+                    if marked:
+                        _emit(job, f"  ✓ marked {job.tab}!complete row {job.row}")
+                    else:
+                        _emit(job, f"  · skipped complete-mark (no 'image complete' col on {job.tab})")
                 except Exception as e:
                     _emit(job, f"  ⚠ sheet update failed: {e}")
         elif job.kind == "answer_image":
@@ -484,19 +659,47 @@ async def _run_job(job: Job) -> None:
 # ---------------------------------------------------------------------------
 app = FastAPI(title="Trivia images runner")
 
+# Kick off a background schema pre-warm for every known tab. Daemon
+# thread so startup isn't blocked; by the time the user clicks a tab,
+# the header fetch is already done.
+_prewarm_schemas()
+
 
 @app.get("/")
 async def index():
     return FileResponse(WEB_DIR / "index.html")
 
 
+def _rows_sync(tab: str | None, refresh: bool):
+    """Off-loop work for /api/rows: discovery + validate + read.
+
+    All three steps touch Google APIs (refresh=True path) or hit caches
+    that get populated by Google API calls. Running them on the event
+    loop blocks every other request — most painfully /api/active, which
+    the frontend polls every 3s. Wrap this in asyncio.to_thread so
+    in-memory endpoints can slip through while Sheets is responding.
+    """
+    if refresh:
+        try:
+            _discover_tabs(refresh=True)
+        except Exception:
+            pass
+    validated = _validate_tab(tab)
+    return validated, read_rows(tab=validated, refresh_schema=refresh)
+
+
 @app.get("/api/health")
 async def api_health():
+    try:
+        tabs = [t["name"] for t in await asyncio.to_thread(_discover_tabs)]
+    except Exception:
+        tabs = []
     return {
         "ok": True,
         "repo": str(REPO),
         "sheet_id": SHEET_ID,
         "sheet_tab": SHEET_TAB,
+        "available_tabs": tabs,
         "approved_folder_id": APPROVED_FOLDER_ID,
         "staging_folder_id": STAGING_FOLDER_ID,
         "sa_path": str(SA_PATH),
@@ -505,12 +708,31 @@ async def api_health():
     }
 
 
-@app.get("/api/rows")
-async def api_rows():
+@app.get("/api/tabs")
+async def api_tabs(refresh: int = 0):
+    """List the sheet tabs the UI can switch between, plus the default.
+
+    Discovered live from the workbook (see _discover_tabs). Pass
+    refresh=1 to re-probe — useful after adding/renaming a tab in Sheets.
+    """
     try:
-        return read_rows()
+        tabs = await asyncio.to_thread(_discover_tabs, bool(refresh))
     except Exception as e:
-        raise HTTPException(500, f"sheet read failed: {e}")
+        raise HTTPException(500, f"tab discovery failed: {e}")
+    names = [t["name"] for t in tabs]
+    default = SHEET_TAB if SHEET_TAB in names else (names[0] if names else SHEET_TAB)
+    return {"tabs": tabs, "default": default}
+
+
+@app.get("/api/rows")
+async def api_rows(tab: str | None = None, refresh: int = 0):
+    try:
+        validated, rows = await asyncio.to_thread(_rows_sync, tab, bool(refresh))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"sheet read failed on tab {tab!r}: {e}")
+    return rows
 
 
 @app.post("/api/prompts")
@@ -528,6 +750,7 @@ async def api_prompts(payload: dict):
     don't auto-trim because the sheet's existing prompts often have leading
     "STYLE: ..." prefixes the user may legitimately delete.
     """
+    tab = _validate_tab(payload.get("tab"))
     try:
         row = int(payload["row"])
     except (KeyError, ValueError, TypeError):
@@ -544,10 +767,10 @@ async def api_prompts(payload: dict):
     prompt_r = None if prompt_r is None else str(prompt_r)
 
     try:
-        written = await asyncio.to_thread(_write_prompts, row, prompt_q, prompt_r)
+        written = await asyncio.to_thread(_write_prompts, tab, row, prompt_q, prompt_r)
     except Exception as e:
-        raise HTTPException(500, f"sheet write failed: {e}")
-    return {"ok": True, "row": row, "written": written}
+        raise HTTPException(500, f"sheet write failed on tab {tab!r}: {e}")
+    return {"ok": True, "tab": tab, "row": row, "written": written}
 
 
 @app.post("/api/run")
@@ -555,6 +778,7 @@ async def api_run(payload: dict):
     kind = payload.get("kind", "")
     if kind not in ("question_image", "answer_image"):
         raise HTTPException(400, "kind must be 'question_image' or 'answer_image'")
+    tab = _validate_tab(payload.get("tab"))
     try:
         row = int(payload["row"])
     except (KeyError, ValueError, TypeError):
@@ -570,7 +794,7 @@ async def api_run(payload: dict):
     if kind == "question_image":
         extra["no_mark"] = bool(payload.get("no_mark", False))
 
-    job = Job(id=uuid.uuid4().hex[:8], kind=kind, row=row, slug=slug, extra=extra)
+    job = Job(id=uuid.uuid4().hex[:8], kind=kind, row=row, slug=slug, tab=tab, extra=extra)
     jobs[job.id] = job
     recent_job_ids.append(job.id)
     log_subscribers.setdefault(job.id, [])
