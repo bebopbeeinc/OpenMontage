@@ -34,6 +34,14 @@ interface TriviaMetaFile {
   // `cta_nominal_start_ms` is the lower bound for that search.
   cta_text?: string | null;
   cta_nominal_start_ms?: number | null;
+  // Optional render overrides used by other pipelines that reuse TriviaWithBg
+  // (e.g. trivia-reaction). Trivia-short omits these and gets the defaults.
+  duration_s?: number;
+  highlight_color?: string;
+  show_facts_overlay?: boolean;
+  base_color?: string;
+  font_size?: number;
+  dark_overlay?: number;
 }
 
 type WordEntry = { word: string; startMs: number; endMs: number };
@@ -60,9 +68,10 @@ const calculateTriviaWithBgMetadata: CalculateMetadataFunction<
   let suppressCaptionsWindowMs: [number, number] | null = null;
   let ctaText: string | null = null;
   let ctaNominalStartMs: number | null = null;
+  let meta: TriviaMetaFile | null = null;
 
   try {
-    const meta = await fetchJson<TriviaMetaFile>("meta.json");
+    meta = await fetchJson<TriviaMetaFile>("meta.json");
     mode = meta.mode;
     suppressCaptionsWindowMs = meta.suppress_captions_window_ms;
     ctaText = meta.cta_text ?? null;
@@ -77,7 +86,17 @@ const calculateTriviaWithBgMetadata: CalculateMetadataFunction<
     // Facts mode never writes meta.json — silently fall back to defaults.
   }
 
+  // Optional per-pipeline overrides from meta.json. Trivia-short omits all
+  // of these and the composition's defaultProps / hardcoded duration win.
+  // Trivia-reaction sets duration_s + show_facts_overlay=false + highlight_color
+  // so its 15s+ clips don't get truncated to 13.4s.
+  const fps = 30;
+  const durationInFrames = meta?.duration_s
+    ? Math.ceil(meta.duration_s * fps)
+    : undefined;
+
   return {
+    ...(durationInFrames ? { durationInFrames } : {}),
     props: {
       ...props,
       videoSrc: staticFile("bg.mp4"),
@@ -87,6 +106,14 @@ const calculateTriviaWithBgMetadata: CalculateMetadataFunction<
       suppressCaptionsWindowMs,
       ctaText,
       ctaNominalStartMs,
+      // Override defaultProps from meta.json when present.
+      ...(meta?.highlight_color    ? { highlightColor: meta.highlight_color } : {}),
+      ...(meta?.base_color         ? { baseColor: meta.base_color } : {}),
+      ...(meta?.font_size != null  ? { fontSize: meta.font_size } : {}),
+      ...(meta?.dark_overlay != null ? { darkOverlay: meta.dark_overlay } : {}),
+      ...(meta?.show_facts_overlay != null
+        ? { showFactsOverlay: meta.show_facts_overlay }
+        : {}),
     },
   };
 };
@@ -111,6 +138,7 @@ export const RootTrivia: React.FC = () => (
         highlightColor: "#22E88A",
         baseColor: "#FFFFFF",
         fontSize: 78,
+        showFactsOverlay: true,
         mode: "Facts" as TriviaMode,
         options: [] as ChoicesOption[],
         suppressCaptionsWindowMs: null,

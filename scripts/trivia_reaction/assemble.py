@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+"""Assemble the trivia-reaction bg video + meta for one row.
+
+Seedance 2.0 generates the avatar clip with native synced voice — there is
+no separate TTS step. The OpenArt clip already carries the dialogue
+lip-synced; this stage just normalizes the clip and writes the metadata
+the compose stage needs.
+
+Inputs:
+    projects/trivia-reaction/<slug>/artifacts/brief.json
+    projects/trivia-reaction/<slug>/artifacts/script.json
+    scripts/trivia_reaction/library/clips/<slug>.mp4   (avatar clip from Seedance, audio inline)
+
+Outputs:
+    projects/trivia-reaction/<slug>/assets/video/bg.mp4        (normalized 1080x1920 / h264 / AAC, audio preserved)
+    projects/trivia-reaction/<slug>/assets/meta.json           (consumed by Remotion TriviaWithBg)
+    projects/trivia-reaction/<slug>/artifacts/edit_decisions.json
+
+The compose stage transcribes bg.mp4's audio track to produce word-level
+timestamps (words.json), then renders Remotion's TriviaWithBg with
+showFactsOverlay=false + highlightColor=#FF6A2C.
+
+Usage:
+    python scripts/trivia_reaction/assemble.py <slug>
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+
+from scripts.trivia_reaction.paths import project_dir  # noqa: E402
+
+LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
+
+
+def ffmpeg(args: list[str]) -> None:
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args], check=True)
+
+
+def ffprobe_duration(path: Path) -> float:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(r.stdout.strip())
+
+
+def ffprobe_has_audio(path: Path) -> bool:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_type",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return r.stdout.strip() == "audio"
+
+
+def normalize_bg(src: Path, dst: Path) -> None:
+    """Normalize the Seedance clip to 1080x1920 h264 / AAC, audio preserved."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg([
+        "-i", str(src),
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
+               "crop=1080:1920,setsar=1",
+        "-r", "30",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-preset", "medium", "-crf", "18",
+        # Audio is the native Seedance voice — re-encode to AAC at 44.1k.
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+        str(dst),
+    ])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("slug", type=str, help="project slug (matches projects/trivia-reaction/<slug>/)")
+    args = ap.parse_args()
+
+    slug = args.slug
+    project = project_dir(slug)
+    artifacts = project / "artifacts"
+    if not (artifacts / "brief.json").exists():
+        sys.exit(f"missing {artifacts}/brief.json — run select_row.py first")
+    if not (artifacts / "script.json").exists():
+        sys.exit(f"missing {artifacts}/script.json — run script-director first")
+
+    brief = json.loads((artifacts / "brief.json").read_text())
+    script = json.loads((artifacts / "script.json").read_text())
+
+    # Locate the Seedance clip. Prefer canonical <slug>.mp4; fall back to v1.
+    clip = LIBRARY_DIR / f"{slug}.mp4"
+    if not clip.exists():
+        v1 = LIBRARY_DIR / f"{slug}_v1.mp4"
+        if v1.exists():
+            print(f"  · using {v1.name} (canonical {clip.name} not present)")
+            clip = v1
+        else:
+            sys.exit(f"no Seedance clip at {clip}; run openart_generate.py first")
+
+    if not ffprobe_has_audio(clip):
+        sys.exit(
+            f"⚠ {clip.name} has no audio stream. Trivia-reaction relies on Seedance "
+            f"2.0's native synced voice — verify audio_on was true on the OpenArt run."
+        )
+
+    # 1. Normalize bg.mp4 (audio preserved)
+    bg = project / "assets" / "video" / "bg.mp4"
+    print(f"→ normalize bg: {clip.relative_to(REPO)} → {bg.relative_to(REPO)}")
+    normalize_bg(clip, bg)
+    bg_dur = ffprobe_duration(bg)
+    has_audio = ffprobe_has_audio(bg)
+    print(f"  bg duration: {bg_dur:.2f}s  audio: {'present' if has_audio else 'MISSING'}")
+    if not has_audio:
+        sys.exit("audio dropped during normalize — re-encode args broken")
+
+    beats = script.get("metadata", {}).get("beats", {})
+
+    # 2. meta.json — Remotion TriviaWithBg consumes this at render time.
+    # Schema must match remotion-composer/src/RootTrivia.tsx TriviaMetaFile.
+    # Required fields come from trivia-short's renderer; the snake_case
+    # override fields (duration_s, highlight_color, show_facts_overlay, ...)
+    # are trivia-reaction extensions that trivia-short ignores.
+    meta = {
+        # --- required by the existing renderer ---
+        "mode": "Facts",
+        "options": [],
+        "option_reveal_times_s": [],
+        "suppress_captions_window_ms": None,
+        "cta_text": None,
+        "cta_nominal_start_ms": None,
+        # --- trivia-reaction render overrides ---
+        "duration_s": bg_dur,
+        "highlight_color": "#FF6A2C",
+        "show_facts_overlay": False,
+        "base_color": "#FFFFFF",
+        "font_size": 78,
+        "dark_overlay": 0,
+        # --- pipeline metadata (renderer ignores these) ---
+        "schema_version": "0.1",
+        "pipeline": "trivia-reaction",
+        "slug": slug,
+        "audio_source": "seedance_native",
+        "vo_text": beats,
+    }
+    meta_path = project / "assets" / "meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+    print(f"  meta: {meta_path.relative_to(REPO)}")
+
+    # 3. edit_decisions.json — the canonical artifact this stage produces
+    edit_decisions = {
+        "schema_version": "0.1",
+        "pipeline": "trivia-reaction",
+        "render_runtime": "remotion",
+        "metadata": {
+            "sheet_revision": brief.get("metadata", {}).get("sheet_revision"),
+            "slug": slug,
+            "bg_path": str(bg.relative_to(REPO)),
+            "bg_duration_s": bg_dur,
+            "audio_source": "seedance_native",
+            "music": None,
+            "sfx": [],
+        },
+    }
+    ed_path = artifacts / "edit_decisions.json"
+    ed_path.write_text(json.dumps(edit_decisions, indent=2) + "\n")
+    print(f"  edit_decisions: {ed_path.relative_to(REPO)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

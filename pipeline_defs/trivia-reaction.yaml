@@ -1,0 +1,275 @@
+name: trivia-reaction
+version: "0.1"
+description: >
+  "I just found out" style 15-18s vertical reaction reels driven by the
+  daily-trivia spreadsheet. For one Day N, the pipeline resolves the trivia
+  Question / CorrectAnswer / CorrectExplanation via the LocalizedTextConfig
+  Uid lookup, drafts VO copy in the "So I just found out…" reaction voice,
+  drives OpenArt to render an avatar talking-head clip with a locked
+  character reference (`ellie.travelcrush`) and a per-row varied
+  environment, then composes the final reel with word-by-word orange-pill
+  captions via Remotion's TriviaWithBg composition (reused with
+  showFactsOverlay=false and highlightColor=#FF6A2C).
+
+  Orchestration mirrors trivia-short: the TriviaReactionQueue sheet is the
+  human-facing review surface (per-row Status / Drive Link / OpenArt Prompt
+  columns); in-repo execution state lives under
+  projects/trivia-reaction/<slug>/artifacts/ as standard canonical artifacts. The select
+  stage reads one queue row + the matching DailyTriviaConfig row into a
+  brief; the publish stage writes back to the queue row.
+
+  Reference video: instagram.com/reels/DXL7nOrCOfC/ (analyzed once and
+  baked into styles/trivia-reaction.yaml; not re-analyzed per row).
+category: short_form
+stability: alpha
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+  notes: >
+    Format-locked to the reference reel analyzed at pipeline design time.
+    New refs require updating the style playbook, not the pipeline.
+
+production_modes:
+  - name: manual_openart
+    description: >
+      Human generates the avatar clip in the OpenArt web UI (using the
+      `ellie.travelcrush` saved character + the per-row prompt), drops the
+      mp4 into scripts/trivia_reaction/library/clips/, and writes the
+      filename into Queue!ClipFilename. Pipeline waits between script and
+      assets.
+    required_tools: []
+    best_for:
+      - First-time renders where prompt iteration is hands-on
+      - Days when the OpenArt automated driver is broken or rate-limited
+  - name: automated_openart
+    description: >
+      scripts/trivia_reaction/openart_generate.py drives the OpenArt UI via
+      the shared scripts/common/openart_driver.py (Playwright), generates
+      the avatar clip with character=`ellie.travelcrush`, saves the mp4 to
+      scripts/trivia_reaction/library/clips/, and writes the filename back
+      to the queue row. Asset stage auto-proceeds.
+    required_tools: []
+    best_for:
+      - Repeated rows
+      - Batch runs of multiple Days
+      - When the human is not at the keyboard
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/trivia-reaction/executive-producer
+  budget_default_usd: 0.40
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 25
+
+extensions:
+  custom_scripts: true        # scripts/trivia_reaction/*.py
+  custom_playbooks: true      # styles/trivia-reaction.yaml
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/trivia-reaction/executive-producer
+  - pipelines/trivia-reaction/select-director
+  - pipelines/trivia-reaction/script-director
+  - pipelines/trivia-reaction/asset-director
+  - pipelines/trivia-reaction/edit-director
+  - pipelines/trivia-reaction/compose-director
+  - pipelines/trivia-reaction/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  default: trivia-reaction
+  custom_allowed: false
+
+# External state. Three sheets + one Drive folder.
+#
+# - DailyTriviaConfig (DEV) is READ-ONLY content. Pipeline never writes there.
+# - LocalizedTextConfig (DEV) is READ-ONLY text dictionary. Uid -> EN (col B).
+# - TriviaReactionQueue is the workflow-state SoT for THIS pipeline. Per-row
+#   status, drive link, openart prompt, manual fields (slug, status overrides).
+# - The Drive folder is where renders land before publishing to social.
+external_state:
+  - kind: google_sheet
+    id: 1G1iffAILfxvfF_JZx7CWNTi9IF1y_LyKmi9hrgWGGfk
+    tab: "DailyTriviaConfig (DEV)"
+    role: trivia_source
+    auth: service_account
+    auth_path: ~/.google/claude-sheets-sa.json
+    notes: >
+      Row 1 = banner, row 2 = type row, row 3 = header. Data starts at row 4.
+      Pipeline reads per Day N:
+        col A  Uid             (trivia_uid{N})
+        col B  Day             (int, matches N)
+        col C  Question        (Uid -> LocalizedTextConfig)
+        col H  FirstAnswer     (Uid -> LocalizedTextConfig; the CORRECT answer)
+        col L  CorrectExplanation (Uid -> LocalizedTextConfig; the surprising-fact line)
+      Code resolves column letters at runtime via daily_trivia.cell_for to
+      survive sheet column re-orderings. The DEV tab is current ship-1 target;
+      PROD tabs are switched in via the --tab flag on select_row.py.
+  - kind: google_sheet
+    id: 1y-REopUmAtoirAp-8rOMNz7LlqLe2mjVAlkdhmGKgtY
+    tab: "LocalizedTextConfig (DEV)"
+    role: text_dictionary
+    auth: service_account
+    notes: >
+      Row 1-3 = banner / type / locale-code, row 4 = header. Data starts at
+      row 5. Col A = Uid, col B = EN. Lookup is exact-match. Trivia-reaction
+      is EN-only for ship-1; the other 12 locale columns are unused.
+  - kind: google_sheet
+    id: 1nFsNwGZXyBX91Vg2-5dftvnoMXSb2iHxfrPHGrItbW8
+    tab: Queue
+    role: source_of_truth
+    auth: service_account
+    notes: >
+      TriviaReactionQueue (ellie.travelcrush). Row 1 = banner, row 2 = header.
+      Data starts at row 3. Columns:
+        A Day | B Slug | C Status | D Question (EN) | E Correct Answer (EN) |
+        F Hook VO | G Fact VO | H Kicker VO | I Drive Link | J OpenArt Prompt |
+        K Caption
+      Status enum (simplified 2026-05-19 from the old 7-state model):
+        Draft / Ready to review / Ready to publish / Published.
+      The pipeline owns C/F/G/H/I/J/K; humans own A/B (and may override anything).
+      Per-row feedback flows through the chat, not the sheet.
+  - kind: google_drive_folder
+    id: 1uDneOUH21xUqh4oifQTh5sqgIVk6EREg
+    role: deliverable_drop
+    auth: service_account
+    notes: >
+      ellie.travelcrush folder under "1. Social Media Accounts - 2026".
+      publish.py uploads renders here. First upload is a new file; subsequent
+      re-renders for the same row replace the same Drive file in place so the
+      Queue!J link stays stable.
+
+stages:
+  - name: select
+    skill: pipelines/trivia-reaction/select-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Queue row found for the given Day; slug present and kebab-case
+      - DailyTriviaConfig row exists for that Day with Uids in cols C/H/L
+      - All three Uids resolve to non-empty EN strings in LocalizedTextConfig
+      - Sheet revision hash stamped into the brief
+    success_criteria:
+      - Schema-valid brief artifact
+      - metadata.trivia_reaction.day is an int >= 1
+      - metadata.trivia_reaction.slug matches /^[a-z0-9-]+$/
+      - metadata.trivia_reaction.question_en, correct_answer_en,
+        correct_explanation_en all non-empty
+
+  - name: script
+    skill: pipelines/trivia-reaction/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Three beats: hook, fact, kicker"
+      - "Hook opens with 'So I just found out' framing"
+      - "Total VO 14-17s when read at ~3 words/second (38-50 words)"
+      - "Kicker punches one surprising number or twist from CorrectExplanation"
+      - "Backdrop description set (varied per row, not the reference's jungle wall)"
+      - "OpenArt prompt assembles character ref + acting note + backdrop"
+    success_criteria:
+      - Schema-valid script artifact
+      - script.metadata.beats has exactly 3 entries keyed hook/fact/kicker
+      - script.metadata.vo_words estimated 30..55
+      - script.metadata.openart.character == "ellie.travelcrush"
+      - script.metadata.openart.prompt is non-empty
+      - script.metadata.openart.duration_s in [12, 18]
+
+  - name: assets
+    skill: pipelines/trivia-reaction/asset-director
+    required_artifacts_in:
+      - script
+      - brief
+    produces:
+      - asset_manifest
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Avatar mp4 exists at scripts/trivia_reaction/library/clips/<slug>.mp4
+      - Clip has an audio track (Seedance 2.0 native synced voice — audio_on=true)
+      - Asset provenance recorded (openart model, prompt, character, duration)
+      - Prompt includes spoken lines + voice direction (Seedance lip-syncs from these)
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - asset_manifest has exactly one video asset (the avatar clip, audio inline)
+      - All referenced files exist on disk
+
+  - name: edit
+    skill: pipelines/trivia-reaction/edit-director
+    required_artifacts_in:
+      - asset_manifest
+      - script
+      - brief
+    produces:
+      - edit_decisions
+    tools_available: []          # assemble.py is a custom_script
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - bg.mp4 written to projects/trivia-reaction/<slug>/assets/video/bg.mp4 with audio preserved
+      - No separate VO file — Seedance's native voice rides inside bg.mp4
+      - No music bed (matches reference)
+      - render_runtime locked to remotion
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - edit_decisions.render_runtime == "remotion"
+      - projects/trivia-reaction/<slug>/assets/video/bg.mp4 exists and passes ffprobe with a:0 audio stream
+
+  - name: compose
+    skill: pipelines/trivia-reaction/compose-director
+    required_artifacts_in:
+      - edit_decisions
+    produces:
+      - render_report
+    required_tools:
+      - transcriber
+    tools_available:
+      - transcriber
+    checkpoint_required: true
+    human_approval_default: true   # per user memory: review every render
+    review_focus:
+      - words.json transcribed and aligned to bg.mp4
+      - "Remotion TriviaWithBg comp rendered with: highlightColor=#FF6A2C,
+        showFactsOverlay=false, mode=Facts"
+      - Final mp4 exists at projects/trivia-reaction/<slug>/renders/<slug>.mp4
+      - "MANDATORY: extract frames at hook/fact/kicker beats and verify
+        captions render with orange pill, no caption drift > 200ms"
+      - "MANDATORY auto-fix: defects found during frame review are fixed
+        in-turn (patch words.json, re-render) before signaling done"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - render_report.frame_review_passed == true
+      - render_report.output_path ends with /renders/<slug>.mp4
+
+  - name: publish
+    skill: pipelines/trivia-reaction/publish-director
+    required_artifacts_in:
+      - render_report
+      - brief
+    produces:
+      - publish_log
+    tools_available: []          # publish.py is a custom_script
+    checkpoint_required: true
+    human_approval_default: true   # per user memory: never auto-publish
+    review_focus:
+      - Human explicitly approved publication in the current turn
+      - Drive file uploaded OR replaced in place (Queue!J stays stable)
+      - "Queue row updated: C=Ready to publish, J=<drive link>"
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - publish_log.sheet_updates includes Queue!C and Queue!J for the row
+      - publish_log.drive_link is a non-empty https URL

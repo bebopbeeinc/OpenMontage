@@ -49,8 +49,9 @@ OPENART_SUITE_BASE = "https://openart.ai/suite/animate-video"
 # Model display name -> URL slug on the Suite. The slug is the source of truth
 # for which generator runs; OpenArt has no in-page model picker on these URLs.
 MODEL_SLUGS: dict[str, str] = {
-    "Seedance 2.0": "byte-plus-seedance-2",
-    "HappyHorse":   "happyhorse",
+    "Seedance 2.0":   "byte-plus-seedance-2",
+    "HappyHorse":     "happyhorse",
+    "Kling 3.0 Omni": "kling-3-0-omni",
 }
 
 
@@ -194,11 +195,37 @@ def _ensure_logged_in(page: Page, target_url: str) -> None:
 # Generation flow — Setting popover (aspect + resolution radios, duration slider)
 # ---------------------------------------------------------------------------
 def _open_setting_popover(page: Page) -> None:
-    """Click the Setting card to open its popover. Idempotent."""
-    if page.locator("[role='dialog']").count() > 0:
+    """Click the Setting card to open its popover. Idempotent.
+
+    Tests "popover is open" by looking for a Setting-specific child (the
+    9:16 aspect radio). Checking `[role='dialog']` count is too broad: the
+    character picker side panel and the model picker also register as
+    dialogs, and if one of those is still attached we'd return early
+    without opening the Setting popover — leaving `_select_aspect` to
+    time out on a wrong-dialog locator.
+
+    If a non-Setting dialog is open, press Escape to close it first, then
+    click the Setting card. The same selector is used to confirm the
+    Setting popover successfully opened.
+    """
+    setting_marker = "[role='dialog'] [role='radio']:has-text('9:16')"
+    if page.locator(setting_marker).count() > 0:
         return
+    # A different dialog (character side panel, model picker) may be attached.
+    if page.locator("[role='dialog']").count() > 0:
+        page.keyboard.press("Escape")
+        time.sleep(0.4)
     page.locator(SEL.setting_card).first.click()
-    page.locator("[role='dialog']").first.wait_for(timeout=5_000)
+    try:
+        page.locator(setting_marker).first.wait_for(timeout=5_000)
+    except PWTimeout:
+        # Capture state for debug, then re-raise so the caller surfaces the failure.
+        try:
+            page.screenshot(path=str(REPO / ".playwright" / "setting_popover_open_fail.png"),
+                            full_page=True)
+        except Exception:
+            pass
+        raise
     time.sleep(0.3)
 
 
@@ -218,7 +245,7 @@ def _select_aspect(page: Page, label: str = "9:16") -> None:
     page.locator(SEL.aspect_radio_template.format(label=label)).first.click()
 
 
-def _select_resolution(page: Page, label: str = "1080p") -> None:
+def _select_resolution(page: Page, label: str = "480p") -> None:
     _open_setting_popover(page)
     page.locator(SEL.resolution_radio_template.format(label=label)).first.click()
 
@@ -640,6 +667,7 @@ def generate_clip(
     headless: bool = False,
     audio_on: bool = False,
     character: str | None = None,
+    resolution: str = "480p",
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` variants and download each.
 
@@ -684,7 +712,7 @@ def generate_clip(
 
         # Configure inside the Setting popover, then close it.
         _select_aspect(page, "9:16")
-        _select_resolution(page, "1080p")
+        _select_resolution(page, resolution)
         _set_duration(page, duration_s)
         _close_popover(page)
 

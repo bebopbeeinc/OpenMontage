@@ -44,6 +44,7 @@ corpus/
 # the media itself is large and regenerable, never commit it).
 scripts/trivia/library/
 scripts/trivia_images/library/
+scripts/trivia_reaction/library/
 
 # Environment & credentials
 .env

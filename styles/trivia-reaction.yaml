@@ -1,0 +1,310 @@
+identity:
+  name: "Trivia Reaction"
+  category: short-form
+  mood: surprised, amused, in-on-the-joke, hand-held-selfie intimate
+  # v9 pace — grounded by re-analyzing the reference reel on 2026-05-19.
+  # The reel is ONE continuous setup sentence (~10s) → REAL audible laugh
+  # break (~2s) → SHORT punchline through laughter (~3s). Earlier v7
+  # specs that claimed "no discrete break, continuous amused throughout"
+  # were a misread of the reel. See reference_evidence below.
+  pace: setup 0-10s (continuous build), audible laugh break 10-12s, punchline 12-15s
+  best_for: >
+    Single-fact viral shorts in the "So I just found out..." reaction format.
+    Specifically: daily-trivia rows whose Question+Answer pair sets up an
+    absurd-sounding rule, ratio, or twist that the agent can frame as a
+    long-setup → laugh-break → punchline arc.
+  reference: "instagram.com/reels/DXL7nOrCOfC/  (Eisha Chopra, mango fact)"
+  reference_evidence:
+    duration_s: 16.6
+    setup: "0.00-10.82s — 'So I just found out that apparently India produces 50% of the mangoes in the world and consumes 99% of them.'"
+    laugh_break: "10.82-13.10s (~2.3s) — eyes squeezed shut, hand to face, head tilts forward, audible exhale-giggles, no words"
+    punchline: "13.10-15.36s (~2.3s) — 'Only 1% leave the country.' Finger raised, eyes crinkled, smile audible under every word"
+    pose: "Sofa selfie, one hand behind head OR both hands forward holding the phone — the through-line is RELAXED, not the specific hand position"
+    caption: "Plan was to shoot this news with a poker face, but face had other plans. No idea if this is true, but no care."
+  not_for: >
+    Vocabulary / language quizzes ("What's the French word for hello?") —
+    these have no kicker beat and read as a flat answer. The select-director
+    fact-fit filter flags these as Skip.
+
+visual_language:
+  color_palette:
+    primary:    ["#FF6A2C"]              # caption emphasis pill — orange
+    accent:     ["#FFFFFF"]              # caption base text — white
+    text_stroke: "#0A061E"               # dark stroke around white text for readability
+    text_active: "#0A061E"               # text color when sitting on the orange pill
+    background: "varies per row"
+    music:      "none"                   # reference uses no music; we match
+  composition: >
+    9:16 vertical. Subject centered or slightly right of center, head-and-shoulders
+    framing (medium close-up). Varied backdrop per row — backdrop choice rotates
+    across rooms / environments tied to the fact's vibe.
+  texture: photoreal, phone-camera-style, slight handheld micro-wobble
+
+avatar:
+  character_ref: "ellie.travelcrush"     # OpenArt saved character name; the user maintains this
+  description: >
+    Female travel persona. The character reference is built once in OpenArt
+    (My Library -> Characters) and locked across every row so the avatar
+    identity stays consistent. Update the reference upstream if you want a
+    new look; never describe ellie's face from text in the per-row prompt.
+  # v9 acting spec — re-grounded by direct frame+audio analysis of the
+  # reference reel on 2026-05-19. The reel has a REAL audible laugh break
+  # between the setup sentence and the punchline. v7's "continuous amused
+  # throughout, NO discrete break" claim contradicted the actual reel and
+  # produced takes that felt composed/news-anchor instead of viral.
+  #
+  # History (so future revisions don't re-litigate):
+  # - v1 "amused throughout": too flat, no comedic landing
+  # - v2 "trying to keep a straight face" spoken admission: too explicit,
+  #   broke character too early, felt scripted
+  # - v3-v6 chased the silent-break beat with various phrasing: inconsistent
+  # - v7 "continuous amused, NO break": misread of the reel; emotions
+  #   trended composed/serious. Take09 (guinea-pig) failed here.
+  # - v8 successfully produced a 2s silent break but used directional
+  #   labels in the prompt — Seedance read "the kicker" as dialogue.
+  # - v9 (this spec): real audible laugh break, NO directional labels,
+  #   tested on guinea-pig take11/take13 — emotions match the reel.
+  #
+  # CRITICAL: write the acting as PROSE describing the emotional arc.
+  # Do NOT use timing markers like "0-2s:", "12-15s:", or beat names
+  # ("hook:", "fact:", "kicker:") in the OpenArt prompt body — Seedance
+  # reads them as dialogue (take10 literally said "The kicker?" aloud).
+  acting_beats:
+    arc: |
+      ONE emotional arc, not three separate beats. Tell Seedance the
+      story of how she breaks down at the absurdity of the fact:
+
+      1. STARTS RELAXED — sofa selfie, eyes warm and engaged with the
+         camera, slight smile already there like a friend about to spill
+         something fun over coffee. NOT deadpan, NOT news-anchor.
+      2. BUILDS THROUGH THE SETUP — as she works through the long
+         sentence her smile keeps building. Voice tightens with
+         suppressed amusement. Eyes crinkle. She holds it together.
+      3. BREAKS COMPLETELY — the moment she finishes the setup sentence
+         the absurdity catches up to her. Real, helpless audible laugh:
+         eyes squeeze shut, head tilts forward, hand comes up to her
+         face/mouth, shoulders shake, audible exhale-giggles for ~2s,
+         no words.
+      4. RECOVERS THROUGH THE PUNCHLINE — recovers just enough to
+         deliver the short closing line still laughing through it:
+         head tilts back, finger lifted in a small "and-I-quote"
+         gesture, eyes crinkled into slits, voice carrying the giggle.
+    pose: >
+      Relaxed selfie pose on a sofa or in a comfortable seated position
+      — phone held close at eye level, like she's video-calling a close
+      friend. Do NOT lock a specific hand position (earlier "one hand
+      behind her head" pinned this too literally); Seedance does best
+      when given the energy ("relaxed, intimate selfie") and lets the
+      character ref handle the physical specifics.
+  audio_on_openart: true                 # Seedance 2.0 generates native synced voice
+  voice_direction: >
+    Warm and casual from the start, gossiping with a friend, already
+    faintly amused by what she's about to share. Through the long
+    setup sentence her voice tightens with suppressed amusement, smile
+    leaking into every word. The [laughs] cues in the spoken line
+    represent a real audible laugh break — exhale-giggles, snorts,
+    breathy ha-ha sounds, no actual words, for about two full seconds.
+    She then delivers the short closing line through ongoing laughter
+    — voice carrying the giggle, smile audible under every word.
+    Female, mid-20s to mid-30s, intimate selfie energy. Never deadpan,
+    never news-anchor. Never says anything meta about her own laughing
+    — the warmth in her voice is the only acknowledgment.
+
+backdrops:
+  strategy: varied_per_row
+  rotation: >
+    The script-director picks a backdrop appropriate to the fact's vibe.
+    Avoid repeating the same setting two days in a row.
+  prompt_palette:
+    - "sunny kitchen with open shelves, morning light"
+    - "small cafe corner, cappuccino in front of her"
+    - "balcony at golden hour with city lights coming on behind"
+    - "cozy living room with eclectic art on the wall"
+    - "train window seat, blurred landscape passing"
+    - "beach boardwalk at dusk, soft warm light"
+    - "indoor plant corner, soft daylight"
+    - "tiled bathroom mirror selfie"
+    - "bookshop aisle, warm tungsten light"
+    - "art gallery white wall, single canvas behind"
+    - "rooftop pool deck, late afternoon"
+    - "scandi office nook, plant + lamp"
+  rules:
+    - "Always include a soft natural light direction in the prompt"
+    - "Keep the backdrop quiet — no busy crowds; backdrop is decoration not story"
+    - "Backdrop should not contain readable text; orange-pill captions own the text layer"
+
+typography:
+  captions:
+    font: "Montserrat"                   # already loaded by remotion-composer
+    weight: 900
+    case: UPPERCASE
+    size_px: 78                          # default; tune to 70-90 if VO is wordy
+    line_height: 1.15
+    letter_spacing: "-0.5px"
+    text_stroke_px: 2.5
+    text_stroke_color: "#0A061E"
+    paint_order: "stroke fill"
+  emphasis_pill:
+    fill: "#FF6A2C"
+    text_when_active: "#0A061E"
+    radius_px: 18
+    padding_px: "6 22 10"
+    activation: per-word (word lights up when its audio timestamp is current)
+
+motion:
+  transitions: []                        # single-take avatar clip; no cuts
+  caption_entrance: "spring(damping=12, stiffness=180, mass=0.7) — 20px translate up + opacity 0->1"
+  caption_pop: "spring(damping=11, stiffness=260, mass=0.5) — scale 1.0->1.06 on active word"
+  pacing_rules:
+    target_duration_seconds: 15
+    duration_min_seconds: 13
+    duration_max_seconds: 15            # Seedance 2.0 slider hard cap is 15s
+    words_per_page_max: 3
+    page_break_pause_ms: 350
+  # v9 audio-break expectation. Compose stage's transcribe step MUST use
+  # a model strong enough to catch words spoken through laughter — base.en
+  # + vad_filter=True drops words during the recovery line. Recommended:
+  # small.en + vad_filter=False + beam_size=5. See scripts/common/transcribe.py.
+  transcribe_recommendation:
+    model: "small.en"
+    vad_filter: false
+    beam_size: 5
+    expected_silent_gap_ms_min: 1500
+    expected_silent_gap_ms_max: 3000
+
+audio:
+  source: "seedance_native"              # voice is generated by Seedance 2.0 with the video
+  music_mood: "none"
+  music_volume: 0.0
+  sfx_style: "none — match the reference reel exactly"
+  loudness_target_lufs: null             # Seedance handles its own mix; we don't loudnorm
+
+asset_generation:
+  openart:
+    model: "Seedance 2.0"                # native synced voice
+    aspect: "9:16"
+    resolution: "480p"                   # global default per user memory; bumps to 1080p only for final-cut takes
+    duration_s: 15                       # Seedance 2.0 slider hard cap
+    variant_count: 1                     # per user memory — single take per row, not a pair
+    audio_on: true                       # Seedance generates dialogue + lip-sync
+    character: "ellie.travelcrush"
+    # v9 word budget — calibrated from the reel (22 setup + 6 punchline = 28 words,
+    # ~10.8s setup + ~2.3s break + ~2.3s punchline = 15.4s).
+    # Trivia-reaction copy hits 28-35 words; the laugh break absorbs slack.
+    duration_s_default: 15
+    word_target: [28, 35]
+    # CRITICAL: this template is INTENTIONALLY label-free. Earlier
+    # versions used "{hook} {fact} {kicker}" interpolations directly
+    # inside the prompt, which caused Seedance to read the labels
+    # ("0-2s hook:", "the kicker") as actual dialogue. v9 uses prose
+    # acting + a single quoted "She says:" block with [laughs] cues
+    # anchoring the audible break. Concatenate hook+fact into one
+    # continuous setup sentence before substituting into {setup_sentence}.
+    prompt_template: |
+      {acting_arc_prose} {pose_prose}.
+      Setting: {backdrop_description}.
+      She says: "{setup_sentence} [laughs] [laughs] [laughs] [laughs] {punchline_sentence}"
+      Voice: {voice_direction}
+      Medium close-up, handheld selfie framing, eye-level, soft natural light,
+      photoreal, subtle camera micro-wobble.
+      No on-screen text, no captions, no graphics — captions are added in post.
+    prompt_authoring_rules:
+      - "NEVER use beat names in the prompt body (no 'hook', 'fact', 'kicker', 'punchline', 'setup' as labels followed by ':')."
+      - "NEVER use timing markers in the prompt body (no '0-2s', '12-15s', etc) — Seedance reads them aloud."
+      - "Concatenate hook+fact into ONE setup sentence; describe the rest as prose."
+      - "Use [laughs] x4 between setup and punchline — stronger anchor than 1-2 cues."
+      - "Voice direction explains that [laughs] cues represent an audible break (not a silent gap), with exhale-giggles."
+      - "Punchline ends with '.' or '!' — '!' gives Seedance a stronger inflection cue."
+  image_negative_prompt: "captions, subtitles, on-screen text, watermark, low quality"
+  consistency_anchors:
+    - "Always use OpenArt character reference `ellie.travelcrush` — never describe her face from text"
+    - "Always 9:16 / handheld selfie framing"
+    - "Audio ON on OpenArt; VO is native Seedance"
+    - "Backdrop varies per row; subject does not"
+    - "NO directional labels in the OpenArt prompt body (see prompt_authoring_rules)"
+
+overlays:
+  word_caption:
+    bg_active: "#FF6A2C"
+    text_active: "#0A061E"
+    text_inactive: "#FFFFFF"
+    stroke: "#0A061E"
+    radius: 18
+
+# Instagram post caption (NOT the on-video caption — that's `overlays`).
+# Body voice modeled on the actual mango reel (see identity.reference_evidence.caption).
+# Hashtags added as a separate block — the source reel has none, but our
+# account is still growing and 3 niche tags per post materially help reach.
+post_caption:
+  structure: |
+    Two paragraphs separated by a blank line:
+      1. Reel-voice body (1-2 short sentences, dry/self-aware)
+      2. Hashtag block — 2 brand tags first, then 3 niche tags (5 total)
+  body:
+    voice: |
+      Dry, self-aware, meta about the recording experience rather than a
+      recap of the fact. Often references the performer's own composure
+      breaking ("Plan was to ... Plan failed at ...", "Tried to keep a
+      straight face..."), or includes a punchy disclaimer ("No idea if
+      this is true, but no care"). Conversational. One or two short
+      sentences max.
+    length_chars: [60, 120]
+    emojis: false                  # the warmth is in the voice; no decoration
+    forbidden:
+      - "Recap of the fact verbatim (the video already does that)"
+      - "Marketing-speak / 'wait, what??' SEO hooks"
+      - "Recapping the kicker (it's funnier when you have to watch for it)"
+    patterns:
+      - "Plan was to [X]. Plan failed at [specific Y from the fact]."
+      - "Tried to [keep a straight face / be cool about this]. [What broke me]."
+      - "[Punchy observation about how absurd the fact is]. [Dry follow-up: 'I don't have notes' / 'I have follow-up questions' / 'Documenting this here']."
+      - "[Brief disclaimer about not fact-checking]: 'No idea if this is true, but no care.'"
+  hashtags:
+    count: 5                       # 2 brand + 3 niche
+    brand_tags:                    # FIXED — same across every row, brand anchor
+      - "#TravelCrush"             # account/brand handle
+      - "#IJustFoundOut"           # series / format tag
+    niche_tags:
+      count: 3
+      style: niche                 # specific geography/topic, NOT generic
+      forbidden:
+        - "#TIL #DidYouKnow #ReactionReel #FunFact #Viral — overused generics, low ROI on reach"
+        - "#Reels #Instagram #Insta — platform-meta, looks lazy"
+        - "Same niche block across multiple posts — defeats the discovery purpose"
+      composition_rules:
+        - "Mix specific geography (e.g. #Switzerland, #Buñol) with topic (e.g. #GuineaPigs, #LaTomatina)"
+        - "If a place is central to the fact, include both country AND city/region"
+        - "Prefer existing communities (#CatTok, #MarineLife) over invented tags"
+        - "All 3 tags should be relevant to THIS fact specifically — no boilerplate"
+    order: "Brand tags first, niche tags second, all on one line separated by single spaces"
+  worked_examples:
+    - row: "owning-just-one-guinea-pig"
+      caption: |
+        Plan was to deliver this calmly. Plan failed at 'rent-a-guinea-pig.'
+
+        #TravelCrush #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
+    - row: "la-tomatina-tomato-fight"
+      caption: |
+        Spain decided once a year is for tomato warfare. I don't have notes.
+
+        #TravelCrush #IJustFoundOut #LaTomatina #Spain #Buñol
+    - row: "chickens-are-trex-relatives"
+      caption: |
+        Every nugget I've ever eaten is technically a dinosaur. Sitting with this.
+
+        #TravelCrush #IJustFoundOut #Dinosaurs #TRex #PaleontologyFacts
+
+remotion:
+  composition_id: "TriviaWithBg"
+  props:
+    highlightColor: "#FF6A2C"
+    baseColor: "#FFFFFF"
+    fontSize: 78
+    showFactsOverlay: false
+    mode: "Facts"
+  notes: >
+    Trivia-reaction reuses the trivia-short TriviaWithBg composition with
+    showFactsOverlay=false (no check/X buttons, no progress bar) and
+    highlightColor=#FF6A2C (orange pill). The composition's word-by-word
+    pop animation, caption page-building, and TikTok-style stroke are all
+    inherited as-is. No new composition file is needed.

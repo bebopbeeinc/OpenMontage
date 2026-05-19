@@ -8,11 +8,30 @@ apply_feedback_patches or similar).
 
 Usage:
     python scripts/common/transcribe.py <project-slug>
+    python scripts/common/transcribe.py <project-slug> --root projects/trivia-reaction
 
-Reads:   projects/<slug>/assets/video/bg.mp4
-Writes:  projects/<slug>/artifacts/words.json
+The `--root` arg is the directory that contains <slug>/ — defaults to
+`projects/` for the legacy bare layout (trivia-short, screen-demo, etc),
+override to `projects/trivia-reaction/` for the pipeline-namespaced
+trivia-reaction layout.
+
+Reads:   <root>/<slug>/assets/video/bg.mp4
+Writes:  <root>/<slug>/artifacts/words.json
          remotion-composer/public/words.json   (for renderer)
          remotion-composer/public/bg.mp4       (for renderer)
+
+Model defaults (v9, 2026-05-19):
+    model='small.en', vad_filter=False, beam_size=5
+
+These replace the previous base.en + vad_filter=True combination, which
+silently dropped words spoken through laughter on the trivia-reaction
+pipeline (e.g. "There's even a rent" got swallowed during a Seedance
+laugh break on Day 2 take12). small.en is ~3x slower but materially
+more accurate; vad_filter=False keeps short audible segments that the
+VAD would otherwise classify as silence. Pre-mixed Seedance / ElevenLabs
+audio has no background noise that needs filtering — VAD was net
+negative for our typical inputs. Documented in
+styles/trivia-reaction.yaml.motion.transcribe_recommendation.
 
 Post-processing: Whisper never capitalizes proper nouns, so the phrases in
 BRAND_TOKENS below are case-corrected before writing. Both single-word
@@ -100,11 +119,11 @@ def merge_split_tokens(words: list[dict]) -> int:
     return merges
 
 
-def _project_brand_tokens(slug: str) -> tuple[str, ...]:
+def _project_brand_tokens(project: Path) -> tuple[str, ...]:
     """Read per-project brand additions from brand_tokens_extra.json (written
     by apply_feedback_patches.py when the reviewer flagged a missing brand)."""
     import json
-    extra_path = REPO / "projects" / slug / "artifacts" / "brand_tokens_extra.json"
+    extra_path = project / "artifacts" / "brand_tokens_extra.json"
     if not extra_path.exists():
         return ()
     try:
@@ -143,8 +162,8 @@ def fix_casing(words: list[dict], extra_tokens: tuple[str, ...] = ()) -> int:
     return fixes
 
 
-def main(slug: str) -> None:
-    project = REPO / "projects" / slug
+def main(slug: str, root: Path = REPO / "projects") -> None:
+    project = root / slug
     src = project / "assets" / "video" / "bg.mp4"
     if not src.exists():
         sys.exit(f"source video not found: {src}")
@@ -152,10 +171,13 @@ def main(slug: str) -> None:
     words_out = project / "artifacts" / "words.json"
     words_out.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"transcribing {src} …")
-    model = WhisperModel("base.en", device="cpu", compute_type="int8")
+    print(f"transcribing {src} (model=small.en, vad=off, beam=5) …")
+    model = WhisperModel("small.en", device="cpu", compute_type="int8")
     segments, _info = model.transcribe(
-        str(src), word_timestamps=True, vad_filter=True,
+        str(src),
+        word_timestamps=True,
+        vad_filter=False,
+        beam_size=5,
     )
     words = [
         {
@@ -168,7 +190,7 @@ def main(slug: str) -> None:
     ]
 
     merges = merge_split_tokens(words)
-    extra = _project_brand_tokens(slug)
+    extra = _project_brand_tokens(project)
     if extra:
         print(f"  per-project brand tokens: {list(extra)}")
     fixes = fix_casing(words, extra_tokens=extra)
@@ -192,6 +214,12 @@ def main(slug: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: transcribe.py <project-slug>")
-    main(sys.argv[1])
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("slug", type=str, help="project slug (matches <root>/<slug>/)")
+    ap.add_argument("--root", type=str, default="projects",
+                    help="repo-relative root that contains <slug>/. "
+                         "Default 'projects'. Use 'projects/trivia-reaction' "
+                         "for the namespaced trivia-reaction layout.")
+    args = ap.parse_args()
+    main(args.slug, REPO / args.root)
