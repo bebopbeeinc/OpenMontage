@@ -451,13 +451,13 @@ async function saveFeedbackAndRerender(row, slug) {
 
 async function generateSegment(row, segment, force) {
   const msg = force
-    ? `Re-generate v1/v2 for ${segment} on row ${row}? Existing files will be ignored and new ones written alongside.`
-    : `Generate v1/v2 for ${segment} on row ${row}? This drives openart.ai and can take a few minutes.`;
+    ? `Re-generate ${segment} on row ${row}? Existing file will be ignored and a new one written alongside.`
+    : `Generate ${segment} on row ${row}? This drives openart.ai and can take a few minutes.`;
   if (!confirm(msg)) return;
   const r = await fetch("api/run", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({kind: "generate", row, segments: [segment], variants: 2, force: !!force}),
+    body: JSON.stringify({kind: "generate", row, segments: [segment], variants: 1, force: !!force}),
   });
   if (!r.ok) {
     alert(`generate failed: ${await r.text()}`);

@@ -122,8 +122,8 @@ def main() -> int:
         default="reaction,body,closer",
         help="comma-separated subset of {reaction,body,closer}",
     )
-    ap.add_argument("--variants", type=int, default=2,
-                    help="number of variants to generate per segment (default 2)")
+    ap.add_argument("--variants", type=int, default=1,
+                    help="number of variants to generate per segment (default 1)")
     ap.add_argument("--audio", action="store_true",
                     help="leave OpenArt's audio on (default: off; trivia VO is added in post)")
     ap.add_argument("--force", action="store_true", help="re-generate even if local file exists")
@@ -164,6 +164,7 @@ def main() -> int:
                 headless=args.headless,
                 audio_on=args.audio,
                 character=spec.character,
+                resolution="480p",
             )
             for p in saved:
                 print(f"✓ {spec.name}: {p}")

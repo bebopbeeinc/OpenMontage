@@ -560,7 +560,7 @@ async def _worker(job: Job) -> None:
                 await _run_publish(job)
             elif job.kind == "generate":
                 segs = job.extra.get("segments_cli", [])
-                variants = int(job.extra.get("variants", 2))
+                variants = int(job.extra.get("variants", 1))
                 force = bool(job.extra.get("force", False))
                 await _run_generate(job, segs, variants, force)
             else:
@@ -640,7 +640,7 @@ async def api_run(payload: dict):
             raise HTTPException(400, f"unknown segments: {bad}")
         extra["segments_cli"] = [SEGMENT_TO_GENERATE[s] for s in raw_segs]
         extra["segments_ui"] = list(raw_segs)
-        extra["variants"] = int(payload.get("variants", 2))
+        extra["variants"] = int(payload.get("variants", 1))
         extra["force"] = bool(payload.get("force", False))
 
     job = Job(id=uuid.uuid4().hex[:8], kind=kind, row=row, slug=slug, extra=extra)
