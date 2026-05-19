@@ -1,18 +1,20 @@
 #!/usr/bin/env python
-"""Upload a rendered trivia-reaction reel to the ellie.travelcrush Drive folder
+"""Upload trivia-reaction deliverables to the ellie.travelcrush Drive folder
 and write back to the TriviaReactionQueue row.
 
-First run for a slug: uploads as a new file, writes the webViewLink to
-Queue!J, and sets Queue!C = "Ready to publish".
+Two files per slug:
+  1. <slug>.mp4       — captioned final render (the posted version). The
+                        canonical Drive file. webViewLink → Queue!I.
+  2. <slug>_clip.mp4  — raw Seedance avatar clip (no captions). Secondary
+                        deliverable for reference / re-edits.
+                        webViewLink → Queue!L.
 
-Subsequent runs (re-renders) replace the Drive file content in place so the
-link stays stable, and flip Queue!C back to "Ready to publish".
+First run: both files are created. Subsequent runs (re-renders) update the
+file content in place so both links stay stable, and Queue!C stays at
+"Ready to publish".
 
 Usage:
     python scripts/trivia_reaction/publish.py <slug>
-
-Example:
-    python scripts/trivia_reaction/publish.py guinea-pigs-switzerland
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 
 SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 DRIVE_FOLDER_ID = "1uDneOUH21xUqh4oifQTh5sqgIVk6EREg"   # ellie.travelcrush
+LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -62,51 +65,64 @@ def find_row(sheets, slug: str) -> tuple[int, dict]:
     raise SystemExit(f"no Queue row with slug={slug!r}; run select_row.py first")
 
 
-def main(slug: str) -> int:
-    renders_dir = project_dir(slug) / "renders"
-    # trivia-reaction writes <slug>.mp4 (self-identifying name) into
-    # the per-pipeline namespaced /projects/trivia-reaction/<slug>/ tree.
-    render = renders_dir / f"{slug}.mp4"
-    if not render.exists():
-        render = None
-    if render is None:
-        sys.exit(f"render not found in {renders_dir}")
-    print(f"using render: {render.relative_to(REPO)}")
-
-    drive, sheets = build_clients()
-    sheet_row, qrow = find_row(sheets, slug)
-    existing_link = (qrow.get("drive_link") or "").strip()
+def _upload_or_replace(
+    drive, local_path: Path, drive_name: str, existing_link: str,
+) -> tuple[str, str]:
+    """Upload `local_path` to the ellie.travelcrush Drive folder as
+    `drive_name`. If `existing_link` resolves to a Drive file id, replace
+    that file's content in place (preserves the link). Returns
+    (webViewLink, action) where action is "created" or "replaced"."""
+    media = MediaFileUpload(str(local_path), mimetype="video/mp4", resumable=True)
     fid = file_id_from_link(existing_link)
-
-    media = MediaFileUpload(str(render), mimetype="video/mp4", resumable=True)
-
     if fid:
         f = drive.files().update(
             fileId=fid, media_body=media,
             fields="id,name,modifiedTime,webViewLink",
             supportsAllDrives=True,
         ).execute()
-        print(f"✓ replaced Drive file {fid} @ {f['modifiedTime']}")
-        link = f["webViewLink"]
-    else:
-        f = drive.files().create(
-            body={"name": f"{slug}.mp4", "parents": [DRIVE_FOLDER_ID]},
-            media_body=media,
-            fields="id,name,webViewLink",
-            supportsAllDrives=True,
-        ).execute()
-        link = f["webViewLink"]
-        print(f"✓ uploaded new Drive file: {f['id']}")
+        return f["webViewLink"], "replaced"
+    f = drive.files().create(
+        body={"name": drive_name, "parents": [DRIVE_FOLDER_ID]},
+        media_body=media,
+        fields="id,name,webViewLink",
+        supportsAllDrives=True,
+    ).execute()
+    return f["webViewLink"], "created"
+
+
+def main(slug: str) -> int:
+    render = project_dir(slug) / "renders" / f"{slug}.mp4"
+    clip = LIBRARY_DIR / f"{slug}.mp4"
+    if not render.exists():
+        sys.exit(f"render not found at {render}")
+    if not clip.exists():
+        sys.exit(f"raw clip not found at {clip} (run Generate first)")
+    print(f"using render: {render.relative_to(REPO)}")
+    print(f"using clip:   {clip.relative_to(REPO)}")
+
+    drive, sheets = build_clients()
+    sheet_row, qrow = find_row(sheets, slug)
+
+    render_link, render_action = _upload_or_replace(
+        drive, render, f"{slug}.mp4",
+        existing_link=(qrow.get("drive_link") or "").strip(),
+    )
+    print(f"✓ render {render_action}: {render_link}")
+
+    clip_link, clip_action = _upload_or_replace(
+        drive, clip, f"{slug}_clip.mp4",
+        existing_link=(qrow.get("drive_clip_link") or "").strip(),
+    )
+    print(f"✓ clip   {clip_action}: {clip_link}")
 
     queue_row.update_cells(
         sheets, sheet_row,
         status=queue_row.STATUS_READY_TO_PUBLISH,
-        drive_link=link,
+        drive_link=render_link,
+        drive_clip_link=clip_link,
     )
     print(f"✓ Queue row {sheet_row}: Status={queue_row.STATUS_READY_TO_PUBLISH}, "
-          f"Drive Link set")
-    print(f"  link: {link}")
-    print(f"  render available at: {render.relative_to(REPO)}")
+          f"both Drive links set")
     return 0
 
 

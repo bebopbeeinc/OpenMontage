@@ -67,9 +67,10 @@ Within TriviaReactionQueue!Queue:
 | F | Hook VO | edit | script |
 | G | Fact VO | edit | script |
 | H | Kicker VO | edit | script |
-| I | Drive Link | publish (re-publish detect) | publish |
+| I | Drive Link | publish (re-publish detect of captioned final) | publish |
 | J | OpenArt Prompt | asset-director (copy into OpenArt for manual mode) | script-director |
 | K | Caption | publish (human copies into Instagram post body) | script-director |
+| L | Drive Clip | publish (re-publish detect of raw avatar clip) | publish |
 
 ## Sheet Sync At Stage Entry
 

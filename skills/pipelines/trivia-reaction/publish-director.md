@@ -42,15 +42,20 @@ python scripts/trivia_reaction/publish.py <slug>
 
 What it does:
 
-1. Locate `projects/trivia-reaction/<slug>/renders/<slug>.mp4`. The
-   per-pipeline namespace + slug-named render means there's no risk of
-   confusion with the legacy trivia-short `final_with_bg.mp4` naming.
+1. Locate both deliverables:
+   - `projects/trivia-reaction/<slug>/renders/<slug>.mp4` — captioned
+     final render (the posted version)
+   - `scripts/trivia_reaction/library/clips/<slug>.mp4` — raw Seedance
+     avatar clip (no captions; secondary reference)
 2. Look up the Queue row by slug.
-3. If Queue!J already has a Drive link → `drive.files().update` replaces
-   the file content in place (link stays stable, useful for re-renders).
-   Else → `drive.files().create` uploads a new file to the
-   ellie.travelcrush folder.
-4. Write Queue!C = `Ready to publish` and Queue!J = `<webViewLink>`.
+3. For each deliverable: if Queue!I (render) / Queue!L (clip) already
+   has a Drive link → `drive.files().update` replaces the file content
+   in place (link stays stable, useful for re-renders). Else →
+   `drive.files().create` uploads a new file to the ellie.travelcrush
+   folder using `<slug>.mp4` for the render or `<slug>_clip.mp4` for
+   the raw clip.
+4. Write Queue!C = `Ready to publish`, Queue!I = render webViewLink,
+   Queue!L = clip webViewLink.
 
 ### 3. Write publish_log.json
 

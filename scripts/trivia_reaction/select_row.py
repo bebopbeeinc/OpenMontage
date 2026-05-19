@@ -90,6 +90,7 @@ def upsert_queue_row(
         "",                      # I drive link
         "",                      # J openart_prompt (script-director fills later)
         "",                      # K caption (script-director fills later)
+        "",                      # L drive_clip_link (publish fills later)
     ]
     return queue_row.append_row(write_sheets, row_values)
 

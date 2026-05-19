@@ -48,13 +48,14 @@ ROW_KEYS: tuple[str, ...] = (
     "hook_vo",              # F — VO line 1: "So I just found out…"
     "fact_vo",              # G — VO line 2: the surprising fact
     "kicker_vo",            # H — VO line 3: the punchline / number reveal
-    "drive_link",           # I — final mp4 webViewLink, written by publish
+    "drive_link",           # I — final captioned mp4 webViewLink, written by publish (the posted version)
     "openart_prompt",       # J — assembled Seedance prompt, written by script director; human-readable copy-paste source
     "caption",              # K — IG-ready post description + hashtags, written by script director
+    "drive_clip_link",      # L — raw avatar-clip webViewLink (Seedance output, no captions); secondary deliverable
 )
-QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 11
-QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:K{{row}}"
-QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:K{{max_row}}"
+QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 12
+QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:L{{row}}"
+QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:L{{max_row}}"
 
 FIELD_TO_HEADER: dict[str, str] = {
     "day":               "Day",
@@ -68,6 +69,7 @@ FIELD_TO_HEADER: dict[str, str] = {
     "drive_link":        "Drive Link",
     "openart_prompt":    "OpenArt Prompt",
     "caption":           "Caption",
+    "drive_clip_link":   "Drive Clip",
 }
 
 # Status enum — 4 states, simplified from the old 7-state model on 2026-05-19.

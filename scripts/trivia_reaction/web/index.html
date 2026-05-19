@@ -359,13 +359,23 @@ function actionsCell(r) {
 }
 
 function filesCell(r) {
-  // Drive link from Queue!I — present after publish.py succeeds.
-  // Everything else about file presence is derivable from the Status pill,
-  // so we surface only the one thing that isn't.
-  const driveLink = (r.drive_link || '').trim();
-  return driveLink
-    ? `<a href="${escapeHtml(driveLink)}" target="_blank" rel="noopener" style="font-size:11px;">drive link ↗</a>`
-    : '<span style="color: var(--muted); font-size: 11px;">—</span>';
+  // Two Drive links written by publish.py:
+  //   I drive_link      — captioned final mp4 (the posted version)
+  //   L drive_clip_link — raw Seedance avatar clip (no captions)
+  // We render both as stacked links so the human can grab either.
+  const renderLink = (r.drive_link || '').trim();
+  const clipLink = (r.drive_clip_link || '').trim();
+  if (!renderLink && !clipLink) {
+    return '<span style="color: var(--muted); font-size: 11px;">—</span>';
+  }
+  const parts = [];
+  if (renderLink) {
+    parts.push(`<a href="${escapeHtml(renderLink)}" target="_blank" rel="noopener" style="font-size:11px;">final ↗</a>`);
+  }
+  if (clipLink) {
+    parts.push(`<a href="${escapeHtml(clipLink)}" target="_blank" rel="noopener" style="font-size:11px; color: var(--muted);">clip ↗</a>`);
+  }
+  return parts.join('<br>');
 }
 
 function factsCell(r) {

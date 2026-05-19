@@ -127,11 +127,11 @@ external_state:
       TriviaReactionQueue (ellie.travelcrush). Row 1 = banner, row 2 = header.
       Data starts at row 3. Columns:
         A Day | B Slug | C Status | D Question (EN) | E Correct Answer (EN) |
-        F Hook VO | G Fact VO | H Kicker VO | I Drive Link | J OpenArt Prompt |
-        K Caption
+        F Hook VO | G Fact VO | H Kicker VO | I Drive Link (captioned final) |
+        J OpenArt Prompt | K Caption | L Drive Clip (raw Seedance output)
       Status enum (simplified 2026-05-19 from the old 7-state model):
         Draft / Ready to review / Ready to publish / Published.
-      The pipeline owns C/F/G/H/I/J/K; humans own A/B (and may override anything).
+      The pipeline owns C/F/G/H/I/J/K/L; humans own A/B (and may override anything).
       Per-row feedback flows through the chat, not the sheet.
   - kind: google_drive_folder
     id: 1uDneOUH21xUqh4oifQTh5sqgIVk6EREg
