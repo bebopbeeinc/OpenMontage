@@ -41,6 +41,21 @@ from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
 
 
+def _read_prompt_from_queue(slug: str) -> str:
+    """Look up `slug` in TriviaReactionQueue and return its Queue!J prompt.
+    Returns '' if the row doesn't exist or the prompt cell is empty."""
+    try:
+        ws = queue_row.build_sheets(write=False)
+        rows = queue_row.read_queue_bulk(ws)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠ sheet lookup failed: {e}", file=sys.stderr)
+        return ""
+    for r in rows:
+        if (r.get("slug") or "").strip() == slug:
+            return (r.get("openart_prompt") or "").strip()
+    return ""
+
+
 def _next_take_number(slug: str) -> int:
     """Return the next take number for this slug — looks at existing
     <slug>_takeNN.mp4 files in the library and returns max + 1.
@@ -90,27 +105,44 @@ def main() -> int:
                     help="override the OpenArt model name (default: Seedance 2.0)")
     args = ap.parse_args()
 
+    # Source of truth for the prompt is now the sheet (Queue!J, written
+    # by the script director). Older rows / dev machines may still have
+    # a local script.json; we prefer that when present because it carries
+    # per-row overrides for duration / model / character / resolution.
+    # When script.json is absent, fall back to sheet + playbook defaults.
     script_path = project_dir(args.slug) / "artifacts" / "script.json"
-    if not script_path.exists():
-        sys.exit(f"script.json not found at {script_path}; run the script-director stage first")
+    openart_cfg: dict = {}
+    if script_path.exists():
+        script = json.loads(script_path.read_text())
+        openart_cfg = script.get("metadata", {}).get("openart", {})
+        source = f"script.json ({script_path.relative_to(REPO)})"
+    else:
+        # Resolve prompt from the sheet.
+        prompt_from_sheet = _read_prompt_from_queue(args.slug)
+        if not prompt_from_sheet:
+            sys.exit(
+                f"No prompt found for slug={args.slug!r}: "
+                f"script.json missing at {script_path} AND Queue!J is empty. "
+                "Edit the prompt in TriviaReactionQueue!J before running."
+            )
+        openart_cfg = {"prompt": prompt_from_sheet}
+        source = "TriviaReactionQueue!J (sheet)"
 
-    script = json.loads(script_path.read_text())
-    openart_cfg = script.get("metadata", {}).get("openart", {})
     prompt = (openart_cfg.get("prompt") or "").strip()
+    # Playbook defaults (styles/trivia-reaction.yaml.asset_generation.openart).
+    # script.json overrides win when present.
     duration_s = int(openart_cfg.get("duration_s") or 15)
     # `.get(..., default)` instead of `or` so explicit null/None in script.json
     # passes through as None (driver skips character selection). Used for
     # models that don't expose OpenArt's saved-character UI (e.g. Kling 3.0 Omni).
     character = openart_cfg.get("character", "ellie.travelcrush")
     model = args.model_override or openart_cfg.get("model") or "Seedance 2.0"
-    audio_on = bool(openart_cfg.get("audio_on", True))  # default true for trivia-reaction
-    # Trivia-reaction defaults to 480p — the format is vertical / mobile-first,
-    # captions are burned in post, and the lower res keeps Seedance generation
-    # times + cost down. Override per row via script.metadata.openart.resolution.
+    audio_on = bool(openart_cfg.get("audio_on", True))  # trivia-reaction default
     resolution = (openart_cfg.get("resolution") or "480p").strip()
 
+    print(f"  prompt source: {source}")
     if not prompt:
-        sys.exit(f"script.metadata.openart.prompt is empty in {script_path}")
+        sys.exit(f"prompt is empty (source: {source})")
     if not (10 <= duration_s <= 20):
         sys.exit(f"duration_s must be 10..20 (got {duration_s})")
     if character != "ellie.travelcrush":
