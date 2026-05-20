@@ -105,10 +105,33 @@ class SheetSchema:
 
     def _resolve(self) -> dict[str, int]:
         lo, hi = min(HEADER_ROWS), max(HEADER_ROWS)
-        r = self._sheets.spreadsheets().values().get(
-            spreadsheetId=SHEET_ID,
-            range=f"{a1_tab(self._tab)}!{lo}:{hi}",
-        ).execute()
+        # Small retry on broken pipe / connection reset: googleapiclient's
+        # httplib2 keeps a persistent TLS connection that Google's LB will
+        # close after a while of idleness, and the next .execute() then
+        # surfaces [Errno 32]. Retrying lets httplib2 reopen the socket
+        # transparently. We keep this minimal here — the server uses a
+        # richer helper that also rebuilds the client; this path is only
+        # taken when a schema cache miss forces a re-resolve.
+        import time
+        last: BaseException | None = None
+        for attempt in range(3):
+            try:
+                r = self._sheets.spreadsheets().values().get(
+                    spreadsheetId=SHEET_ID,
+                    range=f"{a1_tab(self._tab)}!{lo}:{hi}",
+                ).execute(num_retries=2)
+                break
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError) as e:
+                last = e
+            except OSError as e:
+                if e.errno not in (32, 104):
+                    raise
+                last = e
+            if attempt < 2:
+                time.sleep(0.2 * (2 ** attempt))
+        else:
+            assert last is not None
+            raise last
         rows = r.get("values") or []
         out = self._resolve_from_rows(rows)
         self._field_to_index = out

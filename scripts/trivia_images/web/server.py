@@ -199,8 +199,14 @@ import threading                                # noqa: E402
 # wiring re-instantiated SheetSchema on every request and burned ~1s on
 # a fresh values.get() of the header rows each time. Caching here is
 # what makes that intent actually true.
-_sheets_client = None
-_sheets_lock = threading.Lock()
+#
+# The sheets client itself is per-thread (not a process singleton): the
+# google-api-python-client wraps a single httplib2.Http instance which
+# is NOT thread-safe, and /api/rows runs through asyncio.to_thread so
+# multiple worker threads were sharing one client. That's what produced
+# the intermittent "sheet read failed … [Errno 32] Broken pipe" 500s
+# when Google's LB closed an idle connection between two thread reads.
+_sheets_local = threading.local()
 _schema_cache: dict[str, SheetSchema] = {}
 _schema_lock = threading.Lock()
 # Discovered tabs: [{"name": str, "gid": str, "index": int}, ...]
@@ -209,20 +215,79 @@ _tabs_lock = threading.Lock()
 
 
 def _build_sheets():
-    global _sheets_client
-    if _sheets_client is not None:
-        return _sheets_client
-    with _sheets_lock:
-        if _sheets_client is not None:
-            return _sheets_client
-        from google.oauth2 import service_account
-        from googleapiclient.discovery import build
-        creds = service_account.Credentials.from_service_account_file(
-            str(SA_PATH),
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
-        )
-        _sheets_client = build("sheets", "v4", credentials=creds)
-    return _sheets_client
+    cli = getattr(_sheets_local, "client", None)
+    if cli is not None:
+        return cli
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    creds = service_account.Credentials.from_service_account_file(
+        str(SA_PATH),
+        scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    )
+    cli = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    _sheets_local.client = cli
+    return cli
+
+
+def _reset_sheets() -> None:
+    """Drop the thread-local sheets client so the next _build_sheets()
+    call materializes a fresh httplib2 connection. Called by
+    _sheets_execute when a transport error indicates the cached
+    httplib2.Http is poisoned (its persistent socket was closed by the
+    server but the client doesn't know yet)."""
+    _sheets_local.client = None
+
+
+# httplib2 surfaces a reaped idle TLS connection as one of these. We
+# retry after rebuilding the client so the user-visible /api/rows 500
+# stops being the user's problem.
+_TRANSIENT_TRANSPORT_ERRNOS = {32, 104}   # EPIPE, ECONNRESET
+
+
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError)):
+        return True
+    if isinstance(exc, OSError) and exc.errno in _TRANSIENT_TRANSPORT_ERRNOS:
+        return True
+    # httplib2 sometimes wraps the OSError in a generic ConnectionError
+    # or surfaces an ssl.SSLEOFError on the same root cause. Match on
+    # the message as a last-resort signal — better to over-retry than
+    # to show the user a 500 we could have recovered from.
+    msg = str(exc).lower()
+    if "broken pipe" in msg or "connection reset" in msg:
+        return True
+    if "ssl" in msg and ("eof" in msg or "unexpected" in msg):
+        return True
+    return False
+
+
+def _sheets_execute(build_req, *, num_retries: int = 2, max_attempts: int = 3):
+    """Execute a Sheets API request with retries for transient transport errors.
+
+    `build_req(sheets) -> request` materializes the request from the
+    current thread-local client. Wrapping the request in a callable
+    lets us drop a poisoned client and rebuild the request against a
+    fresh socket on retry — you can't re-execute a request whose
+    underlying http was already closed.
+
+    `num_retries=2` inside .execute() handles 429/5xx via
+    googleapiclient's own exponential backoff. `max_attempts=3` is the
+    additional outer loop that rebuilds the client on transport errors
+    (broken pipe, connection reset)."""
+    import time
+    last: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            return build_req(_build_sheets()).execute(num_retries=num_retries)
+        except Exception as e:
+            if not _is_transient_transport_error(e):
+                raise
+            last = e
+            _reset_sheets()
+            if attempt < max_attempts - 1:
+                time.sleep(0.2 * (2 ** attempt))
+    assert last is not None
+    raise last
 
 
 def _discover_tabs(refresh: bool = False) -> list[dict]:
@@ -251,11 +316,12 @@ def _discover_tabs(refresh: bool = False) -> list[dict]:
     with _tabs_lock:
         if not refresh and _tabs_cache is not None:
             return _tabs_cache
-        sheets = _build_sheets()
-        meta = sheets.spreadsheets().get(
-            spreadsheetId=SHEET_ID,
-            fields="sheets.properties(title,sheetId,index)",
-        ).execute()
+        meta = _sheets_execute(
+            lambda sheets: sheets.spreadsheets().get(
+                spreadsheetId=SHEET_ID,
+                fields="sheets.properties(title,sheetId,index)",
+            )
+        )
         tab_props: list[dict] = []
         for s in meta.get("sheets", []):
             p = s.get("properties") or {}
@@ -267,10 +333,12 @@ def _discover_tabs(refresh: bool = False) -> list[dict]:
 
         lo, hi = min(HEADER_ROWS), max(HEADER_ROWS)
         ranges = [f"{a1_tab(p['title'])}!{lo}:{hi}" for p in tab_props]
-        batch = sheets.spreadsheets().values().batchGet(
-            spreadsheetId=SHEET_ID,
-            ranges=ranges,
-        ).execute()
+        batch = _sheets_execute(
+            lambda sheets: sheets.spreadsheets().values().batchGet(
+                spreadsheetId=SHEET_ID,
+                ranges=ranges,
+            )
+        )
         value_ranges = batch.get("valueRanges") or []
         # Defensive: pair by index, fall back to empty rows if the
         # response is shorter than the request (shouldn't happen but
@@ -279,7 +347,7 @@ def _discover_tabs(refresh: bool = False) -> list[dict]:
         for i, p in enumerate(tab_props):
             name = p["title"]
             rows = (value_ranges[i].get("values") if i < len(value_ranges) else None) or []
-            schema = SheetSchema(sheets, tab=name)
+            schema = SheetSchema(_build_sheets(), tab=name)
             try:
                 schema.populate_from_rows(rows)
             except Exception:
@@ -369,14 +437,15 @@ def _drive_state_for(number: str, kind: str) -> dict:
 
 
 def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int = 1000, refresh_schema: bool = False) -> list[dict]:
-    sheets = _build_sheets()
     schema = _get_schema(tab, refresh=refresh_schema)
     # Read up to the rightmost column the schema cares about, with a
     # small cushion so an inserted column to the right of the tracked
     # range doesn't truncate the read on the next sheet edit.
     last_letter = _last_letter(schema.max_index() + 4)
     rng = f"{a1_tab(tab)}!A{min_row}:{last_letter}{max_row}"
-    resp = sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng).execute()
+    resp = _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng)
+    )
     raw = resp.get("values", [])
     # Warm the Drive listing once per /api/rows call — state_for goes through
     # the per-folder cache so 241 rows = 2 Drive API calls, not 482.
@@ -425,18 +494,19 @@ def _mark_question_complete(tab: str, row: int) -> bool:
     """Write ✓ to the row's `image complete` column. Returns False (without
     raising) when the tab doesn't carry that column — the rebuilt tabs
     (1-250 etc.) dropped it and the worker tolerates the gap."""
-    sheets = _build_sheets()
     schema = _get_schema(tab)
     try:
         col = schema.letter("complete")
     except KeyError:
         return False
-    sheets.spreadsheets().values().update(
-        spreadsheetId=SHEET_ID,
-        range=f"{a1_tab(tab)}!{col}{row}",
-        valueInputOption="USER_ENTERED",
-        body={"values": [["✓"]]},
-    ).execute()
+    _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range=f"{a1_tab(tab)}!{col}{row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [["✓"]]},
+        )
+    )
     return True
 
 
@@ -457,7 +527,6 @@ def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | Non
     if prompt_q is None and prompt_r is None:
         raise ValueError("nothing to write (both prompts are None)")
 
-    sheets = _build_sheets()
     schema = _get_schema(tab)
     q_letter = schema.letter("prompt_q")
     r_letter = schema.letter("prompt_r")
@@ -475,10 +544,12 @@ def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | Non
             "values": [[prompt_r]],
         })
         written[r_letter] = prompt_r
-    sheets.spreadsheets().values().batchUpdate(
-        spreadsheetId=SHEET_ID,
-        body={"valueInputOption": "USER_ENTERED", "data": data},
-    ).execute()
+    _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={"valueInputOption": "USER_ENTERED", "data": data},
+        )
+    )
     return written
 
 
