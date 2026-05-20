@@ -93,11 +93,14 @@
                            border-top: 1px dashed var(--border); padding-top: 6px; }
   .answers-ref .meta-row b { color: var(--text); font-weight: 500; }
 
+  /* Mid-iteration rows render two thumbs side by side, so allow the cell
+     to grow up to 196px (2 * 96 + 4px gap). */
   .thumb-cell { width: 96px; }
+  .thumb-cell.pair { width: 196px; }
   .thumb { width: 96px; height: 72px; border-radius: 4px;
            background: #0a0e14; border: 1px solid var(--border);
            display: flex; align-items: center; justify-content: center;
-           overflow: hidden; }
+           overflow: hidden; position: relative; flex-shrink: 0; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
   .thumb-missing { color: var(--muted); font-size: 11px; font-style: italic; }
 
@@ -115,6 +118,19 @@
   .drive-pill.none     { background: #21262d; color: var(--muted); }
   a.drive-pill:hover { filter: brightness(1.25); }
   a.drive-pill::after { content: " ↗"; opacity: 0.6; }
+
+  /* When a row is mid-iteration (approved + staging coexist for the same
+     name), thumbCell renders two thumbnails side by side so the user can
+     see what they're replacing as they iterate. .thumb-tag is a corner
+     badge identifying each thumbnail. */
+  .thumb-pair { display: flex; gap: 4px; }
+  .thumb-tag { position: absolute; top: 2px; left: 2px;
+               background: rgba(0,0,0,0.72); padding: 1px 5px;
+               border-radius: 3px; font-size: 9px; font-weight: 600;
+               font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+               pointer-events: none; }
+  .thumb-tag.approved { color: var(--accent); }
+  .thumb-tag.staging  { color: var(--warn); }
 
   .drive-links { display: inline-flex; gap: 12px; margin-left: 12px;
                  font-size: 12px; }
@@ -196,6 +212,20 @@
                     z-index: 10; cursor: zoom-out; }
   .modal-backdrop img { max-width: 90vw; max-height: 90vh; cursor: zoom-out;
                         border-radius: 6px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+  /* While the full-resolution image is streaming (~4s for 5 MB), show
+     a spinner over the backdrop so the click feels acknowledged. The
+     spinner is removed by the img's load/error handler. */
+  .modal-spinner { position: absolute; width: 44px; height: 44px;
+                   border: 3px solid rgba(255,255,255,0.18);
+                   border-top-color: var(--accent);
+                   border-radius: 50%;
+                   animation: modal-spin 0.9s linear infinite;
+                   pointer-events: none; }
+  .modal-status { position: absolute; bottom: 8vh; left: 0; right: 0;
+                  text-align: center; color: var(--muted); font-size: 12px;
+                  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                  pointer-events: none; }
+  @keyframes modal-spin { to { transform: rotate(360deg); } }
 
   .prompt-modal { background: var(--panel); border: 1px solid var(--border);
                   border-radius: 8px; padding: 20px; width: min(820px, 92vw);
@@ -379,30 +409,90 @@ function hasImg(r, kind) {
   return !!(d && d.state !== 'none');
 }
 
+// True when a WIP sits on top of a prior approval (iteration-after-
+// approval). The table cell uses this to grow wide enough for two
+// thumbnails side-by-side.
+function hasPair(drive) {
+  return !!(drive && drive.state === 'staging' && drive.approved_file_id);
+}
+
 function thumbCell(r, kind) {
-  // Thumbnails come straight from Drive's CDN (lh3.googleusercontent.com)
-  // via the file's thumbnailLink. Sized to ~512px so they look sharp on
-  // 2x/3x displays at the 96x72 css render size. The full-resolution image
-  // (used for the click-to-zoom modal) still goes through /api/image —
-  // the proxy serializes Drive downloads behind a single _api_lock, so we
-  // only pay that cost when the user actually opens the modal.
+  // Renders the thumbnail(s) for one Drive image. All images route
+  // through /api/image (server-side resize + cache); the proxy hits
+  // Drive's CDN with the SA token instead of letting the browser get
+  // throttled by anon CDN requests. Mid-iteration rows — where a WIP
+  // sits on top of a prior approval — render both thumbnails so the
+  // user can see what they're replacing while they tune the WIP.
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   if (!drive || drive.state === 'none') {
     return '<div class="thumb"><span class="thumb-missing">none</span></div>';
   }
-  const v = encodeURIComponent(drive.modified_time || drive.file_id || '');
   const short = kind === 'question_image' ? 'Q' : 'A';
-  const fullSrc = `api/image/${encodeURIComponent(r.slug)}/${short}?v=${v}`;
-  // Prefer Drive's thumbnailLink; fall back to the proxy for files that
-  // somehow lack one (non-image mime types, very old uploads, or files
-  // whose thumbnail Drive hasn't generated yet — those return 404 until
-  // the CDN catches up). onerror swaps to the proxy URL exactly once
-  // (data-fellback guards against a fallback loop).
-  const thumbSrc = drive.thumbnail_link || fullSrc;
-  const onerr = drive.thumbnail_link
-    ? `if(!this.dataset.fellback){this.dataset.fellback='1';this.src=this.dataset.full;}`
-    : '';
-  return `<div class="thumb"><img src="${thumbSrc}" alt="${escapeHtml(r.slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onerror="${onerr}" onclick="showModal(this.dataset.full)" /></div>`;
+  const pair = drive.state === 'staging' && !!drive.approved_file_id;
+  // Single-thumb path: tag the thumbnail by its actual state so the
+  // user always sees whether they're looking at the canonical version
+  // or a work-in-progress. The dual-thumb path below tags each one
+  // explicitly since the state field reflects only the primary.
+  const primaryThumb = renderThumb({
+    slug: r.slug, short,
+    thumbnailLink: drive.thumbnail_link,
+    cacheKey: drive.modified_time || drive.file_id || '',
+    fullSrcQuery: '',
+    tag: pair ? 'staging' : drive.state,   // 'approved' or 'staging'
+  });
+  if (!pair) return primaryThumb;
+  const approvedThumb = renderThumb({
+    slug: r.slug, short,
+    thumbnailLink: drive.approved_thumbnail_link,
+    cacheKey: drive.approved_modified_time || drive.approved_file_id || '',
+    fullSrcQuery: '&variant=approved',
+    tag: 'approved',
+  });
+  return `<div class="thumb-pair">${approvedThumb}${primaryThumb}</div>`;
+}
+
+function renderThumb({slug, short, thumbnailLink, cacheKey, fullSrcQuery, tag}) {
+  const v = encodeURIComponent(cacheKey);
+  // Two URLs: the small server-resized JPEG for the row thumbnail
+  // (thumb=1, ~30 KB), and the full-resolution version for the
+  // click-to-zoom modal. Both go through /api/image — Drive's
+  // thumbnail_link CDN 429s SA-owned files in shared drives, and the
+  // proxy gives us a single reliable path with a 10-minute bytes cache
+  // backing both sizes.
+  //
+  // `data-src` (instead of `src`) holds the URL until the
+  // IntersectionObserver promotes it as the row nears the viewport —
+  // that keeps initial paint to ~15 in-flight downloads instead of
+  // ~480, leaving plenty of connection budget for /api/active polls.
+  // thumbnailLink is accepted for forward-compat but ignored.
+  void thumbnailLink;
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}${fullSrcQuery}`;
+  const thumbSrc = `${baseSrc}&thumb=1`;
+  const fullSrc = baseSrc;
+  const tagHtml = tag ? `<span class="thumb-tag ${tag}">${tag === 'approved' ? 'APPROVED' : 'WIP'}</span>` : '';
+  return `<div class="thumb">${tagHtml}<img data-src="${thumbSrc}" alt="${escapeHtml(slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onclick="showModal(this.dataset.full)" /></div>`;
+}
+
+// Promotes <img data-src> to <img src> as the element nears the viewport.
+// rootMargin gives a 300px read-ahead so scrolling feels eager without
+// firing the whole table at once. Reused for every renderRows() — the
+// old img elements are GC'd with the previous innerHTML, so we only
+// need to re-observe the new set.
+const thumbObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const img = entry.target;
+    const src = img.dataset.src;
+    if (src) {
+      img.src = src;
+      img.removeAttribute('data-src');
+    }
+    thumbObserver.unobserve(img);
+  }
+}, { rootMargin: '300px 0px' });
+
+function observeThumbs() {
+  document.querySelectorAll('img[data-src]').forEach(img => thumbObserver.observe(img));
 }
 
 function drivePill(drive) {
@@ -533,7 +623,7 @@ function renderRows() {
           <div class="mode">${escapeHtml(r.mode || '')}</div>
           ${choicesInline(r)}
         </td>
-        <td class="thumb-cell">
+        <td class="thumb-cell ${hasPair(r.question_drive) ? 'pair' : ''}">
           <div style="display:flex; gap:6px; align-items:flex-start;">
             ${kindCheckboxCell(r, 'question_image')}
             ${thumbCell(r, 'question_image')}
@@ -541,7 +631,7 @@ function renderRows() {
           <div style="margin-top:4px;">${promptPill(hasQ)}${drivePill(r.question_drive)}${stateBadge(r.slug, 'question_image')}</div>
           <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${approveBtn(r, 'question_image')}${discardBtn(r, 'question_image')}</div>
         </td>
-        <td class="thumb-cell">
+        <td class="thumb-cell ${hasPair(r.answer_drive) ? 'pair' : ''}">
           <div style="display:flex; gap:6px; align-items:flex-start;">
             ${kindCheckboxCell(r, 'answer_image')}
             ${thumbCell(r, 'answer_image')}
@@ -553,6 +643,7 @@ function renderRows() {
       </tr>
     `;
   }).join('');
+  observeThumbs();
   updateBatchBar();
 }
 
@@ -771,7 +862,10 @@ async function runJob(row, slug, kind) {
     toast(`job ${job.id} queued (${kind})`);
     attachToJob(job.id);
     switchTab('log');
-    refreshActive();
+    // Refresh + re-anchor the schedule: the existing setTimeout may have
+    // been set with the idle (15s) delay, so without re-anchoring the
+    // next tick could be that far out even though we just created work.
+    refreshActive().then(scheduleActivePoll);
   } catch (e) {
     toast(`run failed: ${e.message}`, 'err');
   }
@@ -951,18 +1045,30 @@ async function pickNextRunningJob() {
   return null;
 }
 
+// Adaptive cadence: ping fast while work is in flight, back off when
+// idle so the table isn't burning a request every 3s for {}. Snaps
+// back to the busy interval the moment something starts running or
+// queuing, so the UI still feels live during a batch.
+const ACTIVE_POLL_BUSY_MS = 3000;
+const ACTIVE_POLL_IDLE_MS = 15000;
+let activePollDelay = ACTIVE_POLL_BUSY_MS;
+
 async function refreshActive() {
+  // Skip polling when the tab isn't visible — the user can't see
+  // badges update anyway, and the visibility-change listener kicks
+  // an immediate refresh when they come back.
+  if (typeof document !== 'undefined' && document.hidden) return;
   try {
     const data = await api('api/active');
     const next = data.active || {};
     // Only re-render the table if the active-job map actually changed.
-    // Otherwise the 3-second poll rewrites tbody on every tick, which
-    // cancels in-flight thumbnail downloads (each row contains <img>
-    // elements pointing at Drive CDN; setting innerHTML drops the old
-    // element and the browser restarts the load on the new one). For
-    // anything taking longer than the 3s poll interval, that means it
-    // never finishes — thumbnails appear permanently broken or load
-    // glacially as the cycle keeps interrupting itself.
+    // Otherwise the poll rewrites tbody on every tick, which cancels
+    // in-flight thumbnail downloads (each row contains <img> elements;
+    // setting innerHTML drops the old element and the browser restarts
+    // the load on the new one). For anything taking longer than the
+    // poll interval, that means it never finishes — thumbnails appear
+    // permanently broken or load glacially as the cycle keeps
+    // interrupting itself.
     const changed = JSON.stringify(active) !== JSON.stringify(next);
     active = next;
     const qs = $('queue-status');
@@ -970,7 +1076,16 @@ async function refreshActive() {
     if (r || q) qs.textContent = `${r} running · ${q} queued`;
     else qs.textContent = '';
     if (changed) renderRows();
+    activePollDelay = (r || q) ? ACTIVE_POLL_BUSY_MS : ACTIVE_POLL_IDLE_MS;
   } catch (e) { /* ignore poll failures */ }
+}
+
+function scheduleActivePoll() {
+  if (activePollTimer) clearTimeout(activePollTimer);
+  activePollTimer = setTimeout(async () => {
+    await refreshActive();
+    scheduleActivePoll();
+  }, activePollDelay);
 }
 
 async function loadJobs() {
@@ -1003,9 +1118,68 @@ function switchTab(tab) {
   if (tab === 'jobs') loadJobs();
 }
 
-function showModal(src) {
+async function showModal(src) {
   const root = $('modal-root');
-  root.innerHTML = `<div class="modal-backdrop" onclick="this.remove()"><img src="${src}" /></div>`;
+  // Full-resolution image is multi-MB and can take a few seconds to
+  // arrive (Drive download + tunnel). fetch() + a stream reader lets
+  // us show actual download progress instead of a static spinner —
+  // important when the user is on a slow connection and the modal
+  // would otherwise look frozen for tens of seconds. The bytes are
+  // collected into a Blob, then handed to the <img> as an object URL.
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="this.remove()">
+      <div class="modal-spinner"></div>
+      <div class="modal-status">loading…</div>
+    </div>
+  `;
+  const backdrop = root.querySelector('.modal-backdrop');
+  const spinner = backdrop.querySelector('.modal-spinner');
+  const status = backdrop.querySelector('.modal-status');
+  let reader = null;
+  // Close-during-load: cancel the stream so we don't keep downloading
+  // bytes the user no longer wants. The backdrop's onclick removes it,
+  // and we check `isConnected` on every chunk to detect that.
+  try {
+    const resp = await fetch(src);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
+    reader = resp.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      if (!backdrop.isConnected) {
+        try { await reader.cancel(); } catch (_) {}
+        return;
+      }
+      chunks.push(value);
+      received += value.length;
+      const mb = (received / 1048576).toFixed(1);
+      if (total) {
+        const pct = Math.round(received / total * 100);
+        const totalMb = (total / 1048576).toFixed(1);
+        status.textContent = `loading ${pct}% (${mb} / ${totalMb} MB)`;
+      } else {
+        status.textContent = `loading ${mb} MB…`;
+      }
+    }
+    if (!backdrop.isConnected) return;
+    const mime = resp.headers.get('Content-Type') || 'image/png';
+    const blob = new Blob(chunks, {type: mime});
+    const url = URL.createObjectURL(blob);
+    const img = document.createElement('img');
+    img.onload = () => URL.revokeObjectURL(url);
+    img.src = url;
+    spinner.remove();
+    status.remove();
+    backdrop.appendChild(img);
+  } catch (e) {
+    if (!backdrop.isConnected) return;
+    spinner.remove();
+    status.textContent = `failed: ${e.message}`;
+    status.style.color = 'var(--err)';
+  }
 }
 
 function closePromptEditor() {
@@ -1168,9 +1342,22 @@ async function discardImage(row, slug, kind) {
   }
 }
 
-// Poll /api/active every 3s so per-row badges and queue stats stay fresh
-// while a batch is draining. Cheap (just hits an in-memory dict server-side).
-activePollTimer = setInterval(refreshActive, 3000);
+// Recursive setTimeout (not setInterval) so the poll cadence can
+// adapt between busy/idle inside refreshActive without re-creating
+// the timer chain.
+scheduleActivePoll();
+
+// Snap back to fresh data when the user returns to the tab — both an
+// immediate poll and a re-anchored schedule, since setTimeout drift
+// while hidden can leave the next tick further out than we want.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      refreshActive();
+      scheduleActivePoll();
+    }
+  });
+}
 
 // Initial load. Catch any uncaught exception so a thrown init step
 // surfaces in the meta line instead of leaving the page frozen at

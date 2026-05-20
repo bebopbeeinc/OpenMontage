@@ -21,8 +21,11 @@ What it handles:
   - The googleapiclient SSL thread-safety footgun: the underlying
     httplib2.Http is NOT thread-safe, and concurrent calls from multiple
     threads on the same Resource crash inside OpenSSL with a SIGSEGV in
-    `BIO_copy_next_retry`. We serialize all API calls behind `_api_lock`
-    and keep cache mutations on the much-faster `_lock`.
+    `BIO_copy_next_retry`. We hand each thread its own Drive Resource via
+    `threading.local()` (see `_drive()`), so read paths (list/download)
+    run in parallel. `_api_lock` is kept on the mutation paths
+    (upload/move/trash) to preserve check-then-act atomicity — two
+    threads can't race on "find existing file → update or create".
   - In-process caching:
       - Folder listings (8s TTL by default; tunable per call).
       - Downloaded bytes keyed on (file_id, modified_time) so a re-uploaded
@@ -47,8 +50,8 @@ constructor.
 
 from __future__ import annotations
 
-import io
 import os
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,7 +60,7 @@ from typing import Iterable, Optional
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+from googleapiclient.http import MediaFileUpload
 
 DEFAULT_SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 DEFAULT_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/drive",)
@@ -77,9 +80,12 @@ class FileMeta:
 
     `thumbnail_link` is Drive's auto-generated thumbnail URL (lh3.googleusercontent.com).
     Empty for non-image files or when the field wasn't requested. The URL is
-    signed and publicly fetchable without auth, so it can be handed straight to
-    a browser `<img>` tag — avoids round-tripping multi-MB originals through
-    proxies that serialize Drive downloads.
+    signed and embeds an access token, so a plain HTTPS GET fetches it — no
+    Drive bearer header needed. Trivia-images fetches this server-side via
+    `_fetch_drive_thumbnail` and proxies the small (~30 KB) result through
+    `/api/image?thumb=1`; handing the CDN URL directly to a browser `<img>`
+    tag works for owner-shared files but Drive soft-throttles anon hits
+    against SA-owned files in Shared Drives.
     """
     id: str
     name: str
@@ -96,8 +102,12 @@ def _sa_path() -> Path:
 class DriveClient:
     """Thread-safe wrapper around the Drive v3 API.
 
-    See module docstring for the thread-safety rationale (OpenSSL segfaults
-    on concurrent reads of a shared httplib2.Http).
+    The underlying httplib2.Http is not thread-safe (OpenSSL segfaults
+    on concurrent reads of a shared instance), so each worker thread
+    gets its own Drive Resource via `_drive()`. Reads (list/download)
+    run in parallel; mutations (upload/move/trash) still serialize on
+    `_api_lock` to keep check-then-act sequences atomic. See module
+    docstring for the full rationale.
     """
 
     def __init__(
@@ -111,20 +121,36 @@ class DriveClient:
         sa = Path(sa_path) if sa_path else _sa_path()
         if not sa.is_file():
             raise FileNotFoundError(f"service account file not found: {sa}")
-        creds = service_account.Credentials.from_service_account_file(
+        self._creds = service_account.Credentials.from_service_account_file(
             str(sa), scopes=list(scopes),
         )
-        self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+        # Per-thread Drive client. The googleapiclient Resource wraps an
+        # httplib2.Http that segfaults libssl under concurrent use, so
+        # we used to serialize every call behind _api_lock — which made
+        # /api/image painfully sequential when many thumbnails loaded.
+        # A thread-local client gives each worker thread its own Http
+        # and lets downloads parallelize for real.
+        self._local = threading.local()
         self._list_ttl_s = list_ttl_s
         self._bytes_ttl_s = bytes_ttl_s
         # Cache mutex — microsecond holds.
         self._lock = Lock()
-        # API mutex — every googleapiclient call must run under this. The
-        # underlying httplib2.Http is shared across calls and concurrent use
-        # from multiple threads segfaults libssl. See module docstring.
+        # API mutex — held only by mutation paths now (upload/move/trash)
+        # to preserve check-then-act atomicity across threads (e.g.
+        # upload_or_replace's "list folder → update or create" sequence).
+        # Read paths no longer take it; their thread-local clients can
+        # safely call Drive in parallel.
         self._api_lock = Lock()
         self._list_cache: dict[str, tuple[float, dict[str, FileMeta]]] = {}
         self._bytes_cache: dict[tuple[str, str], tuple[float, bytes, str]] = {}
+
+    def _drive(self):
+        d = getattr(self._local, "client", None)
+        if d is not None:
+            return d
+        d = build("drive", "v3", credentials=self._creds, cache_discovery=False)
+        self._local.client = d
+        return d
 
     # ----- low-level helpers -----
 
@@ -163,21 +189,21 @@ class DriveClient:
 
         files: dict[str, FileMeta] = {}
         page_token: Optional[str] = None
-        with self._api_lock:
-            while True:
-                resp = self._drive.files().list(
-                    q=f"'{folder_id}' in parents and trashed=false",
-                    fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents,thumbnailLink)",
-                    pageSize=200,
-                    supportsAllDrives=True,
-                    includeItemsFromAllDrives=True,
-                    pageToken=page_token,
-                ).execute()
-                for f in resp.get("files", []):
-                    files[f["name"]] = self._meta_from_api(f)
-                page_token = resp.get("nextPageToken")
-                if not page_token:
-                    break
+        drive = self._drive()
+        while True:
+            resp = drive.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents,thumbnailLink)",
+                pageSize=200,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                pageToken=page_token,
+            ).execute()
+            for f in resp.get("files", []):
+                files[f["name"]] = self._meta_from_api(f)
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
 
         with self._lock:
             self._list_cache[folder_id] = (now, files)
@@ -216,16 +242,21 @@ class DriveClient:
         existing = listing.get(dest_name)
 
         media = MediaFileUpload(str(local_path), mimetype=mime_type, resumable=False)
+        # _api_lock still serializes mutations so two upload_or_replace
+        # calls for the same dest_name can't race on "find existing vs
+        # create new" — even with thread-local httplib2, that race would
+        # produce duplicate files in the folder.
         with self._api_lock:
+            drive = self._drive()
             if existing:
-                f = self._drive.files().update(
+                f = drive.files().update(
                     fileId=existing.id,
                     media_body=media,
                     fields="id,name,mimeType,modifiedTime,parents",
                     supportsAllDrives=True,
                 ).execute()
             else:
-                f = self._drive.files().create(
+                f = drive.files().create(
                     body={"name": dest_name, "parents": [folder_id]},
                     media_body=media,
                     fields="id,name,mimeType,modifiedTime,parents",
@@ -254,28 +285,32 @@ class DriveClient:
         """
         add_set = set(add_parents)
         remove_set = set(remove_parents)
+        drive = self._drive()
+        # The "get current parents → compute delta → update" sequence
+        # stays under _api_lock to keep it atomic against concurrent
+        # moves of the same file. Two threads racing here without the
+        # lock would each see the pre-move parents and double-apply.
         with self._api_lock:
-            cur = self._drive.files().get(
+            cur = drive.files().get(
                 fileId=file_id,
                 fields="id,name,mimeType,modifiedTime,parents",
                 supportsAllDrives=True,
             ).execute()
-        cur_parents = set(cur.get("parents") or ())
-        adds = [p for p in add_set if p not in cur_parents]
-        removes = [p for p in remove_set if p in cur_parents]
+            cur_parents = set(cur.get("parents") or ())
+            adds = [p for p in add_set if p not in cur_parents]
+            removes = [p for p in remove_set if p in cur_parents]
 
-        if not adds and not removes:
-            return self._meta_from_api(cur)
+            if not adds and not removes:
+                return self._meta_from_api(cur)
 
-        kwargs: dict = {
-            "fileId": file_id,
-            "fields": "id,name,mimeType,modifiedTime,parents",
-            "supportsAllDrives": True,
-        }
-        if adds: kwargs["addParents"] = ",".join(adds)
-        if removes: kwargs["removeParents"] = ",".join(removes)
-        with self._api_lock:
-            f = self._drive.files().update(**kwargs).execute()
+            kwargs: dict = {
+                "fileId": file_id,
+                "fields": "id,name,mimeType,modifiedTime,parents",
+                "supportsAllDrives": True,
+            }
+            if adds: kwargs["addParents"] = ",".join(adds)
+            if removes: kwargs["removeParents"] = ",".join(removes)
+            f = drive.files().update(**kwargs).execute()
 
         for fid in adds + removes:
             self.invalidate_listing(fid)
@@ -292,7 +327,7 @@ class DriveClient:
         recoverable for ~30 days from the Shared Drive's trash UI.
         """
         with self._api_lock:
-            f = self._drive.files().update(
+            f = self._drive().files().update(
                 fileId=file_id,
                 body={"trashed": True},
                 fields="id,name,mimeType,modifiedTime,parents,trashed",
@@ -314,9 +349,15 @@ class DriveClient:
         updates modified_time) invalidates naturally. Returns (bytes,
         mime_type, modified_time).
 
-        Holds `_api_lock` for the entire metadata + download flow because
-        `MediaIoBaseDownload.next_chunk()` issues an HTTPS GET per chunk
-        and we must keep the shared httplib2.Http single-threaded.
+        Read path: no `_api_lock`. Each calling thread has its own
+        httplib2.Http via `_drive()`, so parallel downloads stream
+        concurrently — what previously took 17s per 5 MB thumbnail
+        because everything was serialized now overlaps across threads.
+
+        `.execute()` on the media request pulls the whole file in a
+        single streamed response. The earlier `MediaIoBaseDownload`
+        chunked loop opened a fresh HTTPS GET per 1 MB chunk — five
+        TLS handshakes for a 5 MB file — which we don't need.
         """
         key = (file_id, modified_time)
         now = time.time()
@@ -325,22 +366,18 @@ class DriveClient:
             if cached and now - cached[0] < self._bytes_ttl_s:
                 return cached[1], cached[2], modified_time
 
-        with self._api_lock:
-            meta = self._drive.files().get(
-                fileId=file_id,
-                fields="mimeType,modifiedTime",
-                supportsAllDrives=True,
-            ).execute()
-            mime = meta.get("mimeType", "application/octet-stream")
-            mtime = meta.get("modifiedTime", "")
+        drive = self._drive()
+        meta = drive.files().get(
+            fileId=file_id,
+            fields="mimeType,modifiedTime",
+            supportsAllDrives=True,
+        ).execute()
+        mime = meta.get("mimeType", "application/octet-stream")
+        mtime = meta.get("modifiedTime", "")
 
-            req = self._drive.files().get_media(fileId=file_id, supportsAllDrives=True)
-            buf = io.BytesIO()
-            dl = MediaIoBaseDownload(buf, req)
-            done = False
-            while not done:
-                _, done = dl.next_chunk()
-            data = buf.getvalue()
+        data = drive.files().get_media(
+            fileId=file_id, supportsAllDrives=True,
+        ).execute()
 
         with self._lock:
             self._bytes_cache[key] = (now, data, mime)

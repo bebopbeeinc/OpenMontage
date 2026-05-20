@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -91,23 +92,38 @@ def drive_name(number: str, kind: str) -> str:
     return f"{number}{suffix}.png"
 
 
-def state_for(name: str) -> tuple[str, Optional[FileMeta]]:
+def state_for(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
     """Resolve a single trivia-images filename across both folders.
 
-    Approved wins when a file is in both (a manual-cleanup case). Approved
-    is computed as "directly under APPROVED but NOT under STAGING", since
-    the staging folder itself lives under approved and we don't want files
-    in WIP to read as approved by parent transitivity.
+    Returns (state, primary_meta, approved_coexists_meta).
+
+    Staging wins over approved when both exist: after a user approves an
+    image and then re-generates, the new WIP lands in STAGING while the
+    previous approval still sits in APPROVED. Surfacing the WIP keeps the
+    iteration loop visible in the UI — the user can see their latest
+    take and re-approve when happy. The third element exposes the
+    coexisting approved meta so /api/approve can trash the stale
+    approved before promoting the WIP (otherwise Drive ends up with two
+    files of the same name under APPROVED).
+
+    Approved is computed as "directly under APPROVED but NOT under
+    STAGING" because STAGING is a subfolder of APPROVED in Drive's tree
+    — without that exclusion, every WIP would also read as approved via
+    parent transitivity.
     """
     client = get_client()
-    approved = client.find_in_folder(APPROVED_FOLDER_ID, name)
-    if approved and APPROVED_FOLDER_ID in approved.parent_ids \
-       and STAGING_FOLDER_ID not in approved.parent_ids:
-        return "approved", approved
     staging = client.find_in_folder(STAGING_FOLDER_ID, name)
+    approved = client.find_in_folder(APPROVED_FOLDER_ID, name)
+    approved_is_real = bool(
+        approved
+        and APPROVED_FOLDER_ID in approved.parent_ids
+        and STAGING_FOLDER_ID not in approved.parent_ids
+    )
     if staging:
-        return "staging", staging
-    return "none", None
+        return "staging", staging, (approved if approved_is_real else None)
+    if approved_is_real:
+        return "approved", approved, None
+    return "none", None, None
 
 # Sheet location is owned by sheet_schema.py — the schema resolves
 # column letters by reading the header rows at runtime so adding a
@@ -171,6 +187,78 @@ jobs: dict[str, Job] = {}
 recent_job_ids: deque[str] = deque(maxlen=200)
 log_subscribers: dict[str, list[asyncio.Queue[str]]] = {}
 
+# Server-side downsized JPEGs keyed by (file_id, modified_time, max_dim).
+# Without this, /api/image was shipping 5 MB originals to render 96x72
+# thumbnails — first paint ate ~480 * 5 MB of bandwidth and serialized
+# behind _api_lock so /api/active polls were stuck behind the queue.
+# Pillow resize is ~50-100 ms per 5 MB image; cached results land in
+# ~30 KB so the second hit is near-instant.
+_thumb_cache: dict[tuple[str, str, int], tuple[float, bytes]] = {}
+_thumb_lock = threading.Lock()
+_THUMB_TTL_S = 600.0
+_THUMB_MAX_DIM = 256
+
+
+def _resize_to_thumb_jpeg(image_bytes: bytes, max_dim: int = _THUMB_MAX_DIM) -> bytes:
+    """Downsize raw image bytes to a `max_dim`-on-longest-edge JPEG.
+
+    Synchronous; wrap in asyncio.to_thread when calling from a handler.
+    Returns JPEG at quality 85 — visually indistinguishable from PNG
+    at thumbnail scale and ~10x smaller than the equivalent PNG.
+
+    This is the fallback path: when Drive's thumbnailLink CDN doesn't
+    return a usable thumbnail (or we don't have one in the metadata),
+    we pull the full file and resize here. The fast path uses
+    `_fetch_drive_thumbnail` which downloads ~30 KB directly from
+    Drive's CDN at the requested size, skipping the 5 MB transit.
+    """
+    from PIL import Image
+    import io as _io
+    src = Image.open(_io.BytesIO(image_bytes))
+    src.thumbnail((max_dim, max_dim), Image.LANCZOS)
+    # JPEG can't carry an alpha channel; flatten transparent originals
+    # against white so the visible bounds match the user's expectation.
+    if src.mode in ("RGBA", "LA", "P"):
+        background = Image.new("RGB", src.size, (255, 255, 255))
+        if src.mode == "P":
+            src = src.convert("RGBA")
+        background.paste(src, mask=src.split()[-1] if src.mode in ("RGBA", "LA") else None)
+        src = background
+    out = _io.BytesIO()
+    src.save(out, format="JPEG", quality=85, optimize=True)
+    return out.getvalue()
+
+
+def _fetch_drive_thumbnail(thumbnail_link: str, max_dim: int = _THUMB_MAX_DIM) -> Optional[bytes]:
+    """Fetch a downsized thumbnail directly from Drive's CDN.
+
+    Drive populates a signed `thumbnailLink` alongside the file metadata
+    for image-like content; the URL embeds an auth token, so a plain
+    HTTPS GET is enough — no SA bearer header needed. Substituting the
+    `=sNN` parameter lets us pick the exact size we display, so we
+    transit ~30 KB instead of the 5 MB original.
+
+    Returns None on any HTTP error (including 4xx rate limits) so the
+    caller can fall back to the full-download-plus-resize path. The
+    browser only ever sees /api/image (the proxy URL), so a CDN-side
+    rate limit affects one server-side IP rather than 480 browser
+    connections — and the resulting thumbnail bytes are cached for 10
+    minutes via `_thumb_cache`, so the burst is naturally amortized.
+    """
+    if not thumbnail_link:
+        return None
+    import re
+    url = re.sub(r"=s\d+(-c)?$", f"=s{max_dim}", thumbnail_link)
+    if "=s" not in url:
+        url = f"{url}=s{max_dim}"
+    try:
+        import urllib.request, urllib.error
+        req = urllib.request.Request(url, headers={"User-Agent": "trivia-images-proxy/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.read()
+    except Exception:
+        return None
+
 # Serializes the worker — the OpenArt Playwright driver opens a fresh
 # Chromium per call and uses a single persisted login state at
 # .playwright/openart-state.json. Running multiple workers concurrently would
@@ -192,8 +280,6 @@ def _emit(job: Job, line: str) -> None:
 # ---------------------------------------------------------------------------
 # Sheets read
 # ---------------------------------------------------------------------------
-import threading                                # noqa: E402
-
 # Process-wide singletons. Per the schema module's docstring, header
 # layout is meant to be resolved "once per process" — but the prior
 # wiring re-instantiated SheetSchema on every request and burned ~1s on
@@ -411,28 +497,47 @@ def _get_schema(tab: str, refresh: bool = False) -> SheetSchema:
 def _drive_state_for(number: str, kind: str) -> dict:
     """Resolve Drive state for one (number, kind) pair.
 
-    Returns {state, drive_name, file_id, modified_time}. `state` is one of
-    'approved' | 'staging' | 'none'. file_id + modified_time, when present,
-    let the frontend bust its image cache when the underlying file changes.
+    Returns {state, drive_name, file_id, modified_time, thumbnail_link,
+    approved_file_id, approved_modified_time, approved_thumbnail_link}.
+
+    `state` is one of 'approved' | 'staging' | 'none'. file_id +
+    modified_time, when present, let the frontend bust its image cache
+    when the underlying file changes.
+
+    Staging wins over approved when both coexist (see state_for). The
+    approved_* fields are set only when state == "staging" AND an
+    approved version coexists — the frontend uses them to render the
+    approved thumbnail alongside the WIP so the user can see what they
+    are replacing while iterating.
     """
     name = drive_name(number, kind)
     try:
-        state, meta = state_for(name)
+        state, meta, approved_meta = state_for(name)
     except Exception:
         # Drive transient — surface 'none' rather than crash the row list.
-        state, meta = "none", None
+        state, meta, approved_meta = "none", None, None
     out = {
         "state": state, "drive_name": name,
         "file_id": None, "modified_time": None, "thumbnail_link": None,
+        "approved_file_id": None, "approved_modified_time": None,
+        "approved_thumbnail_link": None,
     }
     if meta is not None:
         out["file_id"] = meta.id
         out["modified_time"] = meta.modified_time
-        # Bump =s220 (Drive's default) to =s512 so the thumbnail looks sharp on
-        # 2x/3x displays at the 96x72 css size. The browser fetches this URL
-        # directly from Google's CDN, bypassing our serialized /api/image proxy.
+        # Bump =s220 (Drive's default) to =s256 — enough for 2x retina at the
+        # 96x72 css render size, ~1/4 the bytes of =s512. The earlier =s512
+        # was sharper on 3x retina but caused Drive's CDN to 429 on first-
+        # paint bursts of ~480 thumbnails, which cascaded into /api/image
+        # fallbacks that saturated the proxy. Bandwidth wins over absolute
+        # sharpness for this density of thumbnails.
         if meta.thumbnail_link:
-            out["thumbnail_link"] = meta.thumbnail_link.replace("=s220", "=s512")
+            out["thumbnail_link"] = meta.thumbnail_link.replace("=s220", "=s256")
+    if approved_meta is not None:
+        out["approved_file_id"] = approved_meta.id
+        out["approved_modified_time"] = approved_meta.modified_time
+        if approved_meta.thumbnail_link:
+            out["approved_thumbnail_link"] = approved_meta.thumbnail_link.replace("=s220", "=s256")
     return out
 
 
@@ -659,7 +764,7 @@ def _stage_reference_from_drive(slug: str) -> Path:
     """
     import tempfile
     name = drive_name(slug.lstrip("q"), "question_image")
-    state, meta = state_for(name)
+    state, meta, _approved = state_for(name)
     if state == "none" or meta is None:
         raise RuntimeError(
             f"question image {name} not found on Drive — generate it first"
@@ -961,12 +1066,19 @@ def _kind_alias(kind: str) -> str:
 
 
 @app.get("/api/image/{slug}/{kind}")
-async def api_image(slug: str, kind: str):
+async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int = 0):
     """Stream an image for one (row slug, kind) pair, sourced from Drive.
 
-    Approved wins over staging (the canonical version is what the UI should
-    show by default). 404 when neither folder has it — there is no local
-    library to fall back to; Drive is the source of truth.
+    Default routing: staging wins over approved so the iteration loop is
+    visible (see state_for). Pass `?variant=approved` to fetch the
+    coexisting approved file explicitly — the UI uses this when both
+    thumbnails are rendered side-by-side and the user clicks the
+    approved one. 404 when neither folder has it (or, for
+    variant=approved, when only a staging file exists).
+
+    Pass `?thumb=1` to get a downsized JPEG (~256 px on longest edge,
+    ~30 KB) suitable for the row thumbnails. The full-resolution path
+    is used for the click-to-zoom modal.
     """
     if "/" in slug or ".." in slug or not slug.startswith("q"):
         raise HTTPException(400, "bad slug")
@@ -976,9 +1088,69 @@ async def api_image(slug: str, kind: str):
         raise HTTPException(400, "bad slug")
     name = drive_name(number, kind)
 
-    state, meta = await asyncio.to_thread(state_for, name)
+    state, meta, approved_coexists = await asyncio.to_thread(state_for, name)
+    if variant == "approved":
+        # The explicit approved variant covers two cases:
+        #   1. state == "staging" with an approved coexisting → use that
+        #      coexisting meta (state_for normally surfaces the staging
+        #      file here; the user wants the canonical one instead)
+        #   2. state == "approved" → fall through; meta already points at
+        #      the approved file
+        if approved_coexists is not None:
+            meta = approved_coexists
+            state = "approved"
+        elif state != "approved":
+            raise HTTPException(404, f"no approved variant for {slug}/{kind}")
     if meta is None:
         raise HTTPException(404, f"no image for {slug}/{kind}")
+
+    if thumb:
+        import time as _time
+        cache_key = (meta.id, meta.modified_time or "", _THUMB_MAX_DIM)
+        now = _time.time()
+        with _thumb_lock:
+            cached = _thumb_cache.get(cache_key)
+            if cached and now - cached[0] < _THUMB_TTL_S:
+                data = cached[1]
+                return Response(
+                    content=data, media_type="image/jpeg",
+                    headers={
+                        "Cache-Control": "private, max-age=600",
+                        "X-Drive-State": state,
+                        "X-Drive-File-Id": meta.id,
+                        "X-Drive-Modified": meta.modified_time or "",
+                        "X-Thumb": "cached",
+                    },
+                )
+        # Fast path: pull the small pre-rendered thumbnail directly from
+        # Drive's CDN (~30 KB). The signed token in `thumbnailLink` is
+        # what authenticates; no SA bearer needed.
+        data: bytes | None = None
+        source = "cdn"
+        if meta.thumbnail_link:
+            data = await asyncio.to_thread(_fetch_drive_thumbnail, meta.thumbnail_link)
+        if data is None:
+            # CDN didn't cough one up (rate limit, missing thumbnail,
+            # non-image mime). Pull the full file and resize in
+            # process — slower per request, but the result is cached so
+            # we only pay it once per (file_id, modified_time).
+            full_bytes, _full_mime, _mtime = await asyncio.to_thread(
+                get_client().download_bytes, meta.id, meta.modified_time,
+            )
+            data = await asyncio.to_thread(_resize_to_thumb_jpeg, full_bytes)
+            source = "resize"
+        with _thumb_lock:
+            _thumb_cache[cache_key] = (now, data)
+        return Response(
+            content=data, media_type="image/jpeg",
+            headers={
+                "Cache-Control": "private, max-age=600",
+                "X-Drive-State": state,
+                "X-Drive-File-Id": meta.id,
+                "X-Drive-Modified": meta.modified_time or "",
+                "X-Thumb": source,
+            },
+        )
 
     data, mime, mtime = await asyncio.to_thread(
         get_client().download_bytes, meta.id, meta.modified_time,
@@ -1020,11 +1192,24 @@ async def api_approve(payload: dict):
     kind = _kind_alias(str(payload.get("kind", "")).strip())
     name = drive_name(number, kind)
 
-    state, meta = await asyncio.to_thread(state_for, name)
+    state, meta, approved_coexists = await asyncio.to_thread(state_for, name)
     if state == "approved":
         raise HTTPException(409, f"{name} is already approved")
     if state == "none" or meta is None:
         raise HTTPException(404, f"{name} not found in staging — generate it first")
+
+    # Iteration-after-approval case: a previously-approved file still
+    # lives in APPROVED with the same name. Trash it so the WIP can be
+    # promoted without Drive ending up with two same-named files in the
+    # canonical folder (Drive allows duplicates, but the rest of this
+    # service assumes one canonical {N}{Q|A}.png per name).
+    #
+    # If trash() succeeds but move() below fails, we're left with no
+    # approved + the WIP still staged — retrying /api/approve picks up
+    # cleanly from there. The trashed file is recoverable for ~30 days
+    # from the Shared Drive's trash UI if we ever need it back.
+    if approved_coexists is not None:
+        await asyncio.to_thread(get_client().trash, approved_coexists.id)
 
     new_meta = await asyncio.to_thread(
         get_client().move, meta.id,
@@ -1040,6 +1225,7 @@ async def api_approve(payload: dict):
         "file_id": new_meta.id,
         "modified_time": new_meta.modified_time,
         "state": "approved",
+        "replaced_prior_approval": approved_coexists is not None,
     }
 
 
@@ -1067,7 +1253,7 @@ async def api_discard(payload: dict):
     kind = _kind_alias(str(payload.get("kind", "")).strip())
     name = drive_name(number, kind)
 
-    state, meta = await asyncio.to_thread(state_for, name)
+    state, meta, _approved = await asyncio.to_thread(state_for, name)
     if state == "none" or meta is None:
         raise HTTPException(404, f"{name} not on Drive — nothing to discard")
     if state == "approved":
