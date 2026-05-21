@@ -478,6 +478,8 @@ def _get_schema(tab: str, refresh: bool = False) -> SheetSchema:
     server or hit /api/rows?refresh=1 — there is no automatic detection
     for "same label, different column position".
     """
+    from sheet_schema import HEADER_ROWS
+
     if refresh:
         with _schema_lock:
             _schema_cache.pop(tab, None)
@@ -487,8 +489,20 @@ def _get_schema(tab: str, refresh: bool = False) -> SheetSchema:
     with _schema_lock:
         cached = _schema_cache.get(tab)
         if cached is None:
+            # Route the header fetch through _sheets_execute so a poisoned
+            # httplib2 socket gets rebuilt on retry. SheetSchema._resolve
+            # retries on broken pipe but reuses the same dead client, so
+            # this path is the one that has to own client recovery.
+            lo, hi = min(HEADER_ROWS), max(HEADER_ROWS)
+            resp = _sheets_execute(
+                lambda sheets: sheets.spreadsheets().values().get(
+                    spreadsheetId=SHEET_ID,
+                    range=f"{a1_tab(tab)}!{lo}:{hi}",
+                )
+            )
+            rows = resp.get("values") or []
             schema = SheetSchema(_build_sheets(), tab=tab)
-            schema.max_index()        # force resolution so the network cost is paid here, once
+            schema.populate_from_rows(rows)
             _schema_cache[tab] = schema
             cached = schema
     return cached
