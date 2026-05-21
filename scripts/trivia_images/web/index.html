@@ -779,18 +779,22 @@ function tabGid(name) {
 
 function renderTabStrip() {
   const strip = $('tab-strip');
-  strip.innerHTML = availableTabs.map(t => `
+  const tabButtons = availableTabs.map(t => `
     <button class="${t.name === currentTab ? 'active' : ''}" onclick="switchSheetTab('${t.name.replace(/'/g, "\\'")}')">${escapeHtml(t.name)}</button>
   `).join('');
+  // Re-discovers tabs from the workbook — needed when a tab was added,
+  // renamed, or removed in Sheets after this session started.
+  const refreshBtn = `<button title="Re-discover tabs from sheet" onclick="refreshTabs()" style="padding: 6px 10px;">↻</button>`;
+  strip.innerHTML = tabButtons + refreshBtn;
   const gid = tabGid(currentTab);
   if (gid) {
     $('sheet-link').href = `https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=${gid}#gid=${gid}`;
   }
 }
 
-async function loadTabs() {
+async function loadTabs(refresh = false) {
   try {
-    const data = await api('api/tabs');
+    const data = await api(refresh ? 'api/tabs?refresh=1' : 'api/tabs');
     availableTabs = data.tabs || [];
     if (!tabNames().includes(currentTab)) {
       currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || 'Brian';
@@ -800,6 +804,11 @@ async function loadTabs() {
     // strip is empty; /api/rows will surface a clean error below.
   }
   renderTabStrip();
+}
+
+async function refreshTabs() {
+  await loadTabs(true);
+  await loadRows();
 }
 
 // Reset the table to the "loading…" placeholder. Called on tab-switch
