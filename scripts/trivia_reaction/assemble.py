@@ -97,26 +97,25 @@ def _queue_revision_hash(qrow: dict) -> str:
     return "q" + hashlib.sha1(json.dumps(payload).encode()).hexdigest()[:11]
 
 
-_TAIL_FADE_S = 0.30  # Mask the model-generated artifact in the few hundred ms
-                     # after Seedance dialogue ends. Tuned on the la-tomatina
-                     # row where the glitch ran ~350ms past speech end. If a
-                     # future row has speech that runs hard against the clip
-                     # tail, the fade will gently taper it — that's
-                     # cinematically fine; a hard cut would be worse.
+_TAIL_SILENCE_S = 0.30   # Hard-silence the last N seconds: short fade
+_FADE_DURATION_S = 0.08  # then dead silence. A pure linear fade across
+                         # the same window only attenuates loud glitches
+                         # by 4-6 dB at most — still audible. Mirror of
+                         # openart_generate._apply_tail_fade.
 
 
 def normalize_bg(src: Path, dst: Path) -> None:
     """Normalize the Seedance clip to 1080x1920 h264 / AAC, with a short
-    end-of-audio fade-out so tail-glitches don't escape into the final
-    render (see _TAIL_FADE_S)."""
+    fade and silent tail so end-of-clip artifacts don't escape into the
+    final render."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     duration = ffprobe_duration(src)
-    fade_st = max(0.0, duration - _TAIL_FADE_S)
+    fade_st = max(0.0, duration - _TAIL_SILENCE_S)
     ffmpeg([
         "-i", str(src),
         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
                "crop=1080:1920,setsar=1",
-        "-af", f"afade=t=out:st={fade_st:.3f}:d={_TAIL_FADE_S:.3f}",
+        "-af", f"afade=t=out:st={fade_st:.3f}:d={_FADE_DURATION_S:.3f}",
         "-r", "30",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-preset", "medium", "-crf", "18",

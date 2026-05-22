@@ -42,12 +42,14 @@ from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
 
 # Seedance 2.0 clips often carry a short model-generated artifact in the
-# few hundred ms after dialogue ends. We tail-fade the audio at download
-# time so every consumer of the library clip (publish.py -> Drive,
-# assemble.py -> bg.mp4, manual re-edits) gets a clean source. The
-# normalize step in assemble.py keeps its own fade as a safety net but
-# operates on an already-faded signal here.
-_TAIL_FADE_S = 0.30
+# few hundred ms after dialogue ends. Hard-silence the last
+# _TAIL_SILENCE_S seconds: a quick _FADE_DURATION_S linear fade (so the
+# transition isn't a click) followed by dead silence to clip end.
+# A pure linear fade across the same window leaves the loudest part of
+# the glitch only 4-6 dB attenuated — still audible — which is what
+# bit us the first time.
+_TAIL_SILENCE_S = 0.30
+_FADE_DURATION_S = 0.08
 
 
 def _ffprobe_duration(path: Path) -> float:
@@ -60,15 +62,16 @@ def _ffprobe_duration(path: Path) -> float:
 
 
 def _apply_tail_fade(path: Path) -> None:
-    """Re-encode `path` in place with afade=t=out over the last
-    _TAIL_FADE_S seconds. Video stream is copied; only audio is touched."""
+    """Re-encode `path` in place: short fade then dead silence over the
+    last _TAIL_SILENCE_S seconds. Video stream is copied; only audio is
+    touched."""
     duration = _ffprobe_duration(path)
-    fade_st = max(0.0, duration - _TAIL_FADE_S)
+    fade_st = max(0.0, duration - _TAIL_SILENCE_S)
     tmp = path.with_name(path.stem + ".faded.tmp" + path.suffix)
     subprocess.run(
         ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
          "-i", str(path),
-         "-af", f"afade=t=out:st={fade_st:.3f}:d={_TAIL_FADE_S:.3f}",
+         "-af", f"afade=t=out:st={fade_st:.3f}:d={_FADE_DURATION_S:.3f}",
          "-c:v", "copy",
          "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
          str(tmp)],
@@ -217,10 +220,11 @@ def main() -> int:
 
     # Mask Seedance's end-of-clip audio artifact at the source so every
     # downstream consumer (Drive upload, bg.mp4, re-edits) gets a clean
-    # signal. See _TAIL_FADE_S.
+    # signal. See _TAIL_SILENCE_S / _FADE_DURATION_S.
     for p in saved:
         _apply_tail_fade(Path(p))
-    print(f"  · audio tail-fade applied ({_TAIL_FADE_S * 1000:.0f}ms)")
+    print(f"  · audio tail-silenced ({_TAIL_SILENCE_S * 1000:.0f}ms, "
+          f"fade={_FADE_DURATION_S * 1000:.0f}ms)")
 
     # Update canonical symlink to point at the first new variant unless
     # canonical exists and we weren't forced to swap it.
