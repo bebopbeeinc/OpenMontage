@@ -6,10 +6,11 @@ no separate TTS step. The OpenArt clip already carries the dialogue
 lip-synced; this stage just normalizes the clip and writes the metadata
 the compose stage needs.
 
-Inputs:
-    projects/trivia-reaction/<slug>/artifacts/brief.json
-    projects/trivia-reaction/<slug>/artifacts/script.json
-    scripts/trivia_reaction/library/clips/<slug>.mp4   (avatar clip from Seedance, audio inline)
+Inputs (preferred → fallback):
+    projects/trivia-reaction/<slug>/artifacts/brief.json   (optional; sheet_revision tag)
+    projects/trivia-reaction/<slug>/artifacts/script.json  (optional; beats)
+    TriviaReactionQueue row matching <slug>                (used when either file is missing)
+    scripts/trivia_reaction/library/clips/<slug>.mp4       (avatar clip from Seedance, audio inline)
 
 Outputs:
     projects/trivia-reaction/<slug>/assets/video/bg.mp4        (normalized 1080x1920 / h264 / AAC, audio preserved)
@@ -26,6 +27,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -34,6 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
+from scripts.trivia_reaction import queue_row  # noqa: E402
 from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
@@ -62,13 +65,58 @@ def ffprobe_has_audio(path: Path) -> bool:
     return r.stdout.strip() == "audio"
 
 
+def _find_queue_row(slug: str) -> dict | None:
+    """Look up `slug` in TriviaReactionQueue. Returns the row dict or None."""
+    try:
+        ws = queue_row.build_sheets(write=False)
+        rows = queue_row.read_queue_bulk(ws)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠ Queue lookup failed: {e}", file=sys.stderr)
+        return None
+    for r in rows:
+        if (r.get("slug") or "").strip() == slug:
+            return r
+    return None
+
+
+def _queue_revision_hash(qrow: dict) -> str:
+    """SHA-1 over the Queue cells that drive this pipeline. Same intent as
+    select_row.compute_revision_hash (which hashes DailyTriviaConfig) — this
+    variant hashes the workflow-SoT Queue row instead, so a hand-edit to
+    Queue!D/F/G/H is reflected in edit_decisions.metadata.sheet_revision
+    even when brief.json was never materialized locally."""
+    payload = [
+        (qrow.get("day") or "").strip(),
+        (qrow.get("slug") or "").strip(),
+        (qrow.get("question_en") or "").strip(),
+        (qrow.get("correct_answer_en") or "").strip(),
+        (qrow.get("hook_vo") or "").strip(),
+        (qrow.get("fact_vo") or "").strip(),
+        (qrow.get("kicker_vo") or "").strip(),
+    ]
+    return "q" + hashlib.sha1(json.dumps(payload).encode()).hexdigest()[:11]
+
+
+_TAIL_FADE_S = 0.30  # Mask the model-generated artifact in the few hundred ms
+                     # after Seedance dialogue ends. Tuned on the la-tomatina
+                     # row where the glitch ran ~350ms past speech end. If a
+                     # future row has speech that runs hard against the clip
+                     # tail, the fade will gently taper it — that's
+                     # cinematically fine; a hard cut would be worse.
+
+
 def normalize_bg(src: Path, dst: Path) -> None:
-    """Normalize the Seedance clip to 1080x1920 h264 / AAC, audio preserved."""
+    """Normalize the Seedance clip to 1080x1920 h264 / AAC, with a short
+    end-of-audio fade-out so tail-glitches don't escape into the final
+    render (see _TAIL_FADE_S)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
+    duration = ffprobe_duration(src)
+    fade_st = max(0.0, duration - _TAIL_FADE_S)
     ffmpeg([
         "-i", str(src),
         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
                "crop=1080:1920,setsar=1",
+        "-af", f"afade=t=out:st={fade_st:.3f}:d={_TAIL_FADE_S:.3f}",
         "-r", "30",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-preset", "medium", "-crf", "18",
@@ -86,13 +134,53 @@ def main() -> int:
     slug = args.slug
     project = project_dir(slug)
     artifacts = project / "artifacts"
-    if not (artifacts / "brief.json").exists():
-        sys.exit(f"missing {artifacts}/brief.json — run select_row.py first")
-    if not (artifacts / "script.json").exists():
-        sys.exit(f"missing {artifacts}/script.json — run script-director first")
+    artifacts.mkdir(parents=True, exist_ok=True)
+    brief_path = artifacts / "brief.json"
+    script_path = artifacts / "script.json"
 
-    brief = json.loads((artifacts / "brief.json").read_text())
-    script = json.loads((artifacts / "script.json").read_text())
+    # brief.json / script.json are optional caches. When either is missing we
+    # fall back to TriviaReactionQueue (the workflow-state SoT) the same way
+    # openart_generate.py does — see commit 337a6fb. Only fetch the Queue row
+    # if we actually need it, so the existing-files path keeps working
+    # offline.
+    qrow: dict | None = None
+
+    def _ensure_qrow() -> dict:
+        nonlocal qrow
+        if qrow is None:
+            qrow = _find_queue_row(slug)
+            if qrow is None:
+                sys.exit(
+                    f"no brief.json/script.json on disk AND no TriviaReactionQueue row "
+                    f"for slug={slug!r}. Run select_row.py --day N --slug {slug} "
+                    f"(or add the row to the sheet) and retry."
+                )
+        return qrow
+
+    if brief_path.exists():
+        brief = json.loads(brief_path.read_text())
+        sheet_revision = brief.get("metadata", {}).get("sheet_revision")
+        brief_source = f"brief.json ({brief_path.relative_to(REPO)})"
+    else:
+        row = _ensure_qrow()
+        sheet_revision = _queue_revision_hash(row)
+        brief_source = "TriviaReactionQueue (sheet)"
+
+    if script_path.exists():
+        script = json.loads(script_path.read_text())
+        beats = script.get("metadata", {}).get("beats", {})
+        script_source = f"script.json ({script_path.relative_to(REPO)})"
+    else:
+        row = _ensure_qrow()
+        beats = {
+            "hook":   (row.get("hook_vo") or "").strip(),
+            "fact":   (row.get("fact_vo") or "").strip(),
+            "kicker": (row.get("kicker_vo") or "").strip(),
+        }
+        script_source = "TriviaReactionQueue (sheet)"
+
+    print(f"  brief source:  {brief_source}")
+    print(f"  script source: {script_source}")
 
     # Locate the Seedance clip. Prefer canonical <slug>.mp4; fall back to v1.
     clip = LIBRARY_DIR / f"{slug}.mp4"
@@ -119,8 +207,6 @@ def main() -> int:
     print(f"  bg duration: {bg_dur:.2f}s  audio: {'present' if has_audio else 'MISSING'}")
     if not has_audio:
         sys.exit("audio dropped during normalize — re-encode args broken")
-
-    beats = script.get("metadata", {}).get("beats", {})
 
     # 2. meta.json — Remotion TriviaWithBg consumes this at render time.
     # Schema must match remotion-composer/src/RootTrivia.tsx TriviaMetaFile.
@@ -159,7 +245,7 @@ def main() -> int:
         "pipeline": "trivia-reaction",
         "render_runtime": "remotion",
         "metadata": {
-            "sheet_revision": brief.get("metadata", {}).get("sheet_revision"),
+            "sheet_revision": sheet_revision,
             "slug": slug,
             "bg_path": str(bg.relative_to(REPO)),
             "bg_duration_s": bg_dur,
