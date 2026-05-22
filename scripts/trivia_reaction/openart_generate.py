@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -39,6 +40,41 @@ from scripts.trivia_reaction import queue_row  # noqa: E402
 from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
+
+# Seedance 2.0 clips often carry a short model-generated artifact in the
+# few hundred ms after dialogue ends. We tail-fade the audio at download
+# time so every consumer of the library clip (publish.py -> Drive,
+# assemble.py -> bg.mp4, manual re-edits) gets a clean source. The
+# normalize step in assemble.py keeps its own fade as a safety net but
+# operates on an already-faded signal here.
+_TAIL_FADE_S = 0.30
+
+
+def _ffprobe_duration(path: Path) -> float:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(r.stdout.strip())
+
+
+def _apply_tail_fade(path: Path) -> None:
+    """Re-encode `path` in place with afade=t=out over the last
+    _TAIL_FADE_S seconds. Video stream is copied; only audio is touched."""
+    duration = _ffprobe_duration(path)
+    fade_st = max(0.0, duration - _TAIL_FADE_S)
+    tmp = path.with_name(path.stem + ".faded.tmp" + path.suffix)
+    subprocess.run(
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+         "-i", str(path),
+         "-af", f"afade=t=out:st={fade_st:.3f}:d={_TAIL_FADE_S:.3f}",
+         "-c:v", "copy",
+         "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+         str(tmp)],
+        check=True,
+    )
+    tmp.replace(path)
 
 
 def _read_prompt_from_queue(slug: str) -> str:
@@ -178,6 +214,13 @@ def main() -> int:
     print(f"✓ saved {len(saved)} variant(s):")
     for p in saved:
         print(f"  · {Path(p).relative_to(REPO)}")
+
+    # Mask Seedance's end-of-clip audio artifact at the source so every
+    # downstream consumer (Drive upload, bg.mp4, re-edits) gets a clean
+    # signal. See _TAIL_FADE_S.
+    for p in saved:
+        _apply_tail_fade(Path(p))
+    print(f"  · audio tail-fade applied ({_TAIL_FADE_S * 1000:.0f}ms)")
 
     # Update canonical symlink to point at the first new variant unless
     # canonical exists and we weren't forced to swap it.
