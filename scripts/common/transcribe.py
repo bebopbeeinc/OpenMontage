@@ -172,7 +172,16 @@ def main(slug: str, root: Path = REPO / "projects") -> None:
     words_out.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"transcribing {src} (model=small.en, vad=off, beam=5) …")
-    model = WhisperModel("small.en", device="cpu", compute_type="int8")
+    # local_files_only avoids the HF Hub roundtrip (and its UnicodeEncodeError
+    # on the user-agent header we hit 2026-05-25). Fall back to a download only
+    # if the snapshot is missing.
+    try:
+        model = WhisperModel(
+            "small.en", device="cpu", compute_type="int8",
+            local_files_only=True,
+        )
+    except (FileNotFoundError, OSError):
+        model = WhisperModel("small.en", device="cpu", compute_type="int8")
     segments, _info = model.transcribe(
         str(src),
         word_timestamps=True,
