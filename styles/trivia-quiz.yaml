@@ -1,0 +1,195 @@
+identity:
+  name: "Trivia Quiz"
+  category: short-form
+  mood: game-show energetic, faceless, countdown-driven, invites scoring
+  pace: >
+    Hook card 0-3s (locked brand) → Q1 question 3-7s + countdown bar → reveal
+    7-12s with surprise fact → Q2 12-15s + countdown → reveal 15-21s → Q3
+    21-24s + countdown → reveal 24-28s → score CTA 28-32s with Travel Crush
+    lockup. Three viewer-commit beats per video (one per countdown).
+  best_for: >
+    Faceless dailytrivia.tc posts that need a different lane from ellie.travelcrush's
+    persona-led "I just found out" format. The quiz format leans into game-show
+    energy and explicit comment-bait ("0/1/2/3 — comment yours"). Three hooks per
+    video (one per question), countdown forces an answer commitment in the
+    viewer's head, score prompt triggers comments — all together this is what
+    the SGE case studies (Manna, factualquizz, SnapBack Sports, 2 Truths 1 Lie)
+    consistently report.
+  reference_evidence:
+    primary: >
+      Manna Bible app — "Most Christians can't answer this…" — 6.2M views,
+      $90K MRR. Identical text-overlay hook on every post. Same playbook for
+      Trivia by Travel Crush.
+    secondary: >
+      factualquizz (125M views/6mo), SnapBack Sports trivia (15M views),
+      "2 truths, 1 lie" faceless trend (15.5M + 3.6M on top videos).
+    sge_framework: >
+      SGE 5 building blocks: locked hook + repeatable format + 20-40s duration
+      + viewer-commit beat + explicit CTA. Quiz format hits all five.
+  not_for: >
+    Single-fact reaction shorts — those belong to trivia-reaction (ellie's
+    lane) so the two accounts don't cannibalize. Also skip when the only
+    "Hard" question available is a vocabulary/language quiz with no kicker.
+
+show_identity:
+  # The brand of the show. These strings render on EVERY post so the feed
+  # builds recognition. Variants below are A/B candidates, never the default.
+  title: "Trivia by Travel Crush"
+
+  # The opening hook + closer CTA are a PAIRED UNIT — the closer text
+  # changes meaning based on the hook framing. "Only 10%..." pairs with
+  # "Are you in the 10%?"; demographic hooks pair with challenge-a-friend
+  # CTAs; etc. Variants are named so fixtures can pick a pair by key
+  # (hook_variant: <key>) instead of duplicating both fields per row.
+  default_hook_variant: ten_percent_callback
+
+  hook_closer_variants:
+    ten_percent_callback:
+      hook: "Only 10% can answer all 3"
+      closer:
+        intro: "Are you in the"
+        emphasis: "10%?"
+        cta: "Comment below if you are 👇"
+
+    demographic_challenge:        # nationality / gender / fandom framing
+      hook: "Brits can't get all 3"
+      closer:
+        intro: "Challenge your"
+        emphasis: "British friend"
+        cta: "Tag them in the comments 👇"
+
+    miss_the_kicker:              # for "most miss #3" style
+      hook: "Most people miss #3"
+      closer:
+        intro: "Did you miss"
+        emphasis: "#3?"
+        cta: "Tell us in the comments 👇"
+
+    bet_you_cant:                 # confrontational hooks
+      hook: "Bet you can't get all 3"
+      closer:
+        intro: "Did you prove me"
+        emphasis: "wrong?"
+        cta: "Brag in the comments 👇"
+  game_lockup:
+    text: "Play in bio 👇"
+    brand_label: "TRAVEL CRUSH"
+    show_qr: true                  # QR rendered on score card; falls back to text if disabled
+    placeholder_url: "play.travelcrush.com"   # v0.1; per-row smart link comes in v0.2
+
+  # SINGLE locked backdrop for both intro + outro. Same image is reused on
+  # the hook and score cards but with distinct Ken Burns curves (hook drifts
+  # in, score drifts out) so they feel like an opening + closing bookend
+  # without burning a second image generation per post. Saved to a library
+  # cache (scripts/trivia_quiz/library/show_bg.jpg) and reused across every
+  # post in the series — strong feed recognition. Regenerate with
+  # `--regen-show-assets`.
+  show_backdrop_prompt: >
+    Warm golden sunset over distant clouds seen from an airplane window,
+    dreamy travel postcard aesthetic, soft bokeh, cinematic photoreal,
+    no people, no text, 9:16 vertical, magazine quality.
+  # Bottom CTA on the score card. The default leans into the "ROUND" vocab
+  # already on the difficulty stamps for cohesion, and uses → instead of 👇
+  # so it doesn't visually compete with the score-prompt and lockup arrows
+  # above it. "Round" implies a series, which softly delivers FOMO without
+  # committing to a "tomorrow" / "daily" cadence that would break if a day
+  # is skipped — those words are deliberately avoided in every variant below.
+  bottom_cta_default: "Follow → never miss a round"
+  # Variants worth A/B testing once the format has baseline numbers.
+  # Constraint: no "tomorrow" / "daily" — those create a posting-cadence
+  # promise that's easy to break. Keep it series-coded but cadence-agnostic.
+  bottom_cta_variants:
+    - "Tap follow, never miss a round"
+    - "Follow → more rounds incoming"
+    - "Follow → think you can beat your score?"
+    - "Post your score in the comments"
+    - "Follow for the next round"
+
+visual_language:
+  # Distinct from ellie's orange-pill captions on purpose — this is the game
+  # show, not the reaction reel. Yellow countdown + green/red reveal stamps
+  # echo Duolingo's quiz vocabulary (a known TikTok aesthetic).
+  color_palette:
+    hook_card_bg:     "#0F172A"    # deep navy — high contrast for the locked hook
+    hook_card_text:   "#FBBF24"    # warm yellow — "show title" energy
+    question_card_bg: "rgba(15, 23, 42, 0.82)"  # navy overlay on backdrop
+    question_text:    "#FFFFFF"
+    countdown_full:   "#58CC02"    # green safe (early countdown)
+    countdown_warn:   "#FBBF24"    # yellow caution
+    countdown_danger: "#EF4444"    # red urgent (last second)
+    reveal_correct:   "#58CC02"    # the answer stamp
+    reveal_text:      "#FFFFFF"
+    surprise_fact:    "#FBBF24"    # 1-line fact below the reveal
+    score_card_bg:    "#0F172A"
+    travel_crush_brand: "#FF6A2C"  # ties back to the ellie palette for cross-brand familiarity
+  composition: >
+    9:16 vertical (1080x1920). Question card centered, occupies middle 60%
+    of frame. Countdown bar horizontal across the bottom-third, animates
+    100→0 over 3 seconds. Reveal stamp = green check on the correct choice,
+    spring-in. Surprise fact = 1-line yellow caption below the stamp.
+    Score card = centered score prompt + Travel Crush lockup (logo + QR +
+    "Play in bio 👇") bottom-third.
+  texture: clean, flat, game-show poster. No photoreal portrait people — that's
+    ellie's lane. Backdrops are environmental stills (places, objects) with a
+    subtle Ken Burns pan.
+
+segments:
+  # Locked durations. assemble_quiz.py reads these to budget VO + xfade.
+  hook_card:
+    duration_s: 3.0
+    vo_window_s: [0.0, 2.8]
+    sfx: "ticking_start"            # ticking sting starts under the locked hook
+    render: remotion_only           # no backdrop video here — composition draws it
+  q1:
+    duration_s: 8.0
+    backdrop_s: 8.0
+    countdown_s: 3.0                # bar visible 0-3s of the question window
+    vo_window_s: [4.5, 7.5]         # reveal speaks the answer + surprise fact
+    sfx: "ticking_loop+reveal_correct"
+  q2:
+    duration_s: 9.0
+    backdrop_s: 9.0
+    countdown_s: 3.0
+    vo_window_s: [5.0, 8.5]
+    sfx: "ticking_loop+reveal_correct"
+  q3:
+    duration_s: 8.0
+    backdrop_s: 8.0
+    countdown_s: 3.0
+    vo_window_s: [4.5, 7.5]
+    sfx: "ticking_loop+reveal_correct+drumroll"
+  score_card:
+    duration_s: 4.0
+    vo_window_s: [0.5, 3.5]
+    sfx: "applause_soft"
+    render: remotion_only
+  xfade_s: 0.3                      # overlap between adjacent segments
+
+vo_voice:
+  # ElevenLabs voice for the quiz host. Energetic, neutral-accent, faster than
+  # ellie's reaction-reel pace. Picked once; overridable per-row.
+  provider: elevenlabs
+  voice_id_env: ELEVENLABS_VOICE_TRIVIA_QUIZ
+  style: "energetic, game-show host, faster than conversational"
+  speed: 1.05
+
+brand_tokens:
+  # Reused by transcribe.py post-processing to fix Whisper drift.
+  - "Captain"
+  - "Travel Crush"
+  - "Fennec"
+
+guardrails:
+  no_leak:
+    fields_to_check:
+      - bottom_cta
+      - game_hook_line
+      - tiktok_caption
+      - instagram_caption
+      - pinned_comment
+    must_not_contain_any_of:
+      - q1.answer
+      - q2.answer
+      - q3.answer
+  difficulty_ladder: ["Easy", "Medium", "Hard"]
+  game_themed_q3_when_topic_allows: true

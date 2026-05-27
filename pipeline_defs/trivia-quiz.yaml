@@ -1,0 +1,204 @@
+name: trivia-quiz
+version: "0.1"
+description: >
+  Daily-trivia QUIZ pipeline. Produces a ~30s vertical short structured as:
+  locked-hook card (3s) → Q1 easy (~8s) → Q2 medium (~9s) → Q3 hard (~8s) →
+  score CTA card with Travel Crush lockup (~4s). Each question has a visible
+  3-second countdown bar, then a reveal stamp + 1-line surprise fact spoken
+  over the backdrop.
+
+  Parallel to trivia-short — same DAGed stage shape, same VO / music / SFX /
+  Whisper / Remotion machinery — but a different show format. trivia-short
+  delivers ONE fact in 15s; trivia-quiz delivers THREE in 30s with explicit
+  viewer-commit beats. The two pipelines coexist; rows pick one or the other.
+
+  v0.1 scope (this manifest): YAML fixture input, no Google Sheets integration
+  yet. Backdrops are stills with Ken Burns pan (no OpenArt). Smart-link is a
+  placeholder. Once the format is proven on 5+ posts, v0.2 will add Sheets
+  (Questions tab + Posts_Quiz tab), per-question OpenArt backdrops, and a
+  per-row tracked smart link.
+
+  See docs/trivia-quiz/v01-readme.md for the human-facing v0.1 operational
+  guide (created alongside this pipeline).
+category: short_form
+stability: alpha
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+
+# v0.1 has a single production mode (stills backdrops, manual asset prep).
+# Automated OpenArt backdrops land in v0.2.
+production_modes:
+  - name: stills_kenburns
+    description: >
+      Backdrops are stills (public-domain or hand-supplied) with an ffmpeg
+      Ken Burns slow-zoom pan. Each question backdrop is a single image at
+      assets/images/q{1,2,3}_bg.jpg, generated to 9s motion clips by the
+      asset stage. Cheapest, deterministic, zero credits — used to prove the
+      format works before investing in per-question OpenArt clips.
+    required_tools: []
+    best_for:
+      - v0.1 format-validation posts
+      - Days when OpenArt is unavailable
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/trivia-quiz/executive-producer
+  budget_default_usd: 0.20         # cheaper than trivia-short — no OpenArt in v0.1
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 15
+
+extensions:
+  custom_scripts: true              # scripts/trivia_quiz/*.py
+  custom_playbooks: false
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/trivia-quiz/executive-producer
+  - pipelines/trivia-quiz/idea-director
+  - pipelines/trivia-quiz/script-director
+  - pipelines/trivia-quiz/asset-director
+  - pipelines/trivia-quiz/edit-director
+  - pipelines/trivia-quiz/compose-director
+  - pipelines/trivia-quiz/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  custom_allowed: true
+
+# v0.1: NO external state. Inputs are a per-row YAML fixture under
+# projects/trivia-quiz/<slug>/inputs/quiz_row.yaml. v0.2 will add the Google Sheets
+# external_state block (Questions tab + Posts_Quiz tab) — same shape as
+# trivia-short's Posts tab block.
+external_state: []
+
+stages:
+  - name: idea
+    skill: pipelines/trivia-quiz/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Fixture file at projects/trivia-quiz/<slug>/inputs/quiz_row.yaml is present and schema-valid"
+      - "Three questions resolved: Q1=Easy, Q2=Medium, Q3=Hard difficulty ladder"
+      - "Each question has: question text, choices (or true/false), answer, surprise_fact"
+      - "When q3_game_tease=true, Q3 question or surprise_fact references a Travel Crush brand token"
+      - "No-leak guardrail: tomorrow_tease, game_hook_line, pinned_comment, and captions do NOT contain any Q1/Q2/Q3 answer string"
+      - "Locked show identity loaded from styles/trivia-quiz.yaml (title, default hook, score CTA, lockup)"
+    success_criteria:
+      - Schema-valid brief artifact
+      - metadata.quiz.q1, q2, q3 each have {question, answer, surprise_fact}
+      - metadata.quiz.q1.difficulty == "Easy"
+      - metadata.quiz.q2.difficulty == "Medium"
+      - metadata.quiz.q3.difficulty == "Hard"
+      - metadata.quiz.slug matches /^[a-z0-9-]+$/
+
+  - name: script
+    skill: pipelines/trivia-quiz/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "VO copy fits 4 VO_WINDOWS: hook_card / q1_reveal / q2_reveal / q3_reveal / score_card (5 lines)"
+      - "Each reveal line speaks the answer + surprise_fact in 2.5–3.5s"
+      - "Score-card VO mentions Travel Crush brand token verbatim (lockup voiceover)"
+      - "Brand tokens (Captain, Travel Crush, Fennec) are capitalized; transcribe.py post-processing already handles whisper drift"
+      - "Question cards themselves are NOT spoken — they read on screen during the countdown (silent commit beat)"
+    success_criteria:
+      - Schema-valid script artifact
+      - script.metadata.vo has exactly 5 lines (hook_card, q1_reveal, q2_reveal, q3_reveal, score_card)
+      - script.metadata.segments has 5 entries with locked durations
+
+  - name: assets
+    skill: pipelines/trivia-quiz/asset-director
+    required_artifacts_in:
+      - script
+      - brief
+    produces:
+      - asset_manifest
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "3 backdrop stills resolved (assets/images/q1_bg.jpg, q2_bg.jpg, q3_bg.jpg) — hand-supplied or public-domain"
+      - "Each still is at least 1080x1920 (or wider — ffmpeg crops to portrait)"
+      - "Backdrops are tonally coherent with the question topic (Sudan pyramids → desert; Turkey tea → market; Bahamas pigs → tropical sea)"
+      - "Ken Burns pan parameters set per backdrop (zoom_from, zoom_to, pan direction) — defaults are fine"
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Exactly 3 image assets keyed q1_bg, q2_bg, q3_bg
+
+  - name: edit
+    skill: pipelines/trivia-quiz/edit-director
+    required_artifacts_in:
+      - asset_manifest
+      - script
+      - brief
+    produces:
+      - edit_decisions
+    tools_available: []                # scripts/trivia_quiz/assemble_quiz.py is a custom_script
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "Default flags applied: --with-vo --with-music --with-sfx"
+      - "Ken Burns pan rendered for each Q backdrop, normalized to 1080x1920"
+      - "5 segments xfade-concatted into bg.mp4 at projects/trivia-quiz/<slug>/assets/video/bg.mp4"
+      - "Output duration ~32s (3 + 8 + 9 + 8 + 4, minus xfade overlaps)"
+      - "Ticking SFX during each countdown, reveal sting at each answer flash"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - projects/trivia-quiz/<slug>/assets/video/bg.mp4 exists and passes ffprobe
+      - edit_decisions.metadata.target_duration_s between 30.0 and 33.0
+
+  - name: compose
+    skill: pipelines/trivia-quiz/compose-director
+    required_artifacts_in:
+      - edit_decisions
+    produces:
+      - render_report
+    required_tools:
+      - transcriber
+    tools_available:
+      - transcriber
+    checkpoint_required: true
+    human_approval_default: true       # per user memory: always review renders
+    review_focus:
+      - "words.json brand-token post-processing applied (Captain, Travel Crush, Fennec)"
+      - "Remotion TriviaQuiz composition rendered (NOT TriviaWithBg — parallel new comp)"
+      - "Final mp4 exists at projects/trivia-quiz/<slug>/renders/final_quiz.mp4"
+      - "MANDATORY self-review: extract frames at hook_card (1.5s), each countdown (5/13/22s), each reveal (9/18/27s), and score_card (29s)"
+      - "MANDATORY auto-fix: any caption drift, lockup positioning, or countdown timing issues fixed in-turn before signaling done"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - render_report.frame_review_passed = true
+      - render_report.output_path = projects/trivia-quiz/<slug>/renders/final_quiz.mp4
+
+  - name: publish
+    skill: pipelines/trivia-quiz/publish-director
+    required_artifacts_in:
+      - render_report
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true       # per user memory: never auto-publish
+    review_focus:
+      - "Human explicitly approved publication in the current turn"
+      - "Caption + pinned comment templates rendered with the placeholder smart link"
+      - "Drive upload (folder shared with claude-sheets-config@travel-crush.iam.gserviceaccount.com)"
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - publish_log.drive_link is a non-empty https URL
+      - publish_log.captions.tiktok and publish_log.captions.instagram are non-empty

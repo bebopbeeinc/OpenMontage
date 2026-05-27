@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- Mounted at /trivia-quiz by web/server.py. base href lets fetch calls use
+     relative paths (api/foo) that resolve under the mount prefix. -->
+<base href="/trivia-quiz/" />
+<title>Trivia Quiz</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #22e88a;
+    --warn: #f0b429;
+    --err: #f85149;
+    --running: #58a6ff;
+    --purple: #a371f7;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  a { color: var(--running); }
+
+  header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; color: var(--purple); }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .links { display: inline-flex; gap: 12px; font-size: 12px; }
+  header .links a { text-decoration: none; }
+  header .links a:hover { text-decoration: underline; }
+
+  main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
+         height: calc(100vh - 53px); }
+  main.panel-hidden { grid-template-columns: 1fr; }
+  main.panel-hidden .panel { display: none; }
+  .rows { overflow: auto; }
+  .panel { background: var(--panel); border-left: 1px solid var(--border);
+           display: flex; flex-direction: column; overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--bg); text-align: left;
+             padding: 10px 8px; border-bottom: 1px solid var(--border);
+             color: var(--muted); font-weight: 500; z-index: 1; }
+  tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border);
+             vertical-align: top; }
+  tbody tr:hover { background: #11161d; }
+  tr.row-running { background: #14253a; }
+  tr.row-queued { background: #1a1f2a; }
+
+  td.ord { width: 46px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  td.ord .date { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  td.slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--purple); max-width: 150px; word-break: break-word; }
+  td.status { width: 130px; }
+  td.qs { max-width: 380px; }
+  td.qs .qrow { margin-bottom: 8px; }
+  td.qs .qrow:last-child { margin-bottom: 0; }
+  td.qs .qlabel { display: inline-block; font-size: 9px; font-weight: 600;
+                  color: var(--muted); letter-spacing: 0.05em; margin-right: 6px;
+                  vertical-align: top; padding-top: 1px; }
+  td.qs .qbody { display: inline-block; max-width: 330px; vertical-align: top; }
+  td.qs .q { color: var(--text); }
+  td.qs .a { color: var(--accent); font-size: 12px; }
+  td.files { width: 96px; font-size: 11px; }
+  td.files .ok  { color: var(--accent); }
+  td.files .no  { color: var(--muted); }
+  td.caption { width: 240px; font-size: 12px; color: var(--text); line-height: 1.4;
+               position: relative; padding-right: 30px; vertical-align: top; }
+  td.caption .copy-btn {
+    position: absolute; top: 8px; right: 6px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); padding: 2px 6px; border-radius: 4px;
+    font-size: 10px; cursor: pointer;
+  }
+  td.caption .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  td.caption .caption-empty { color: var(--muted); font-size: 11px; }
+  td.actions { width: 1%; white-space: nowrap; }
+
+  .pill { display: inline-block; padding: 2px 7px; border-radius: 10px;
+          font-size: 10px; font-weight: 500; }
+  .pill.draft             { background: #21262d; color: var(--muted); }
+  .pill.ready-to-publish  { background: #3a2e0c; color: var(--warn); }
+  .pill.approved          { background: #1f3a5f; color: var(--running); }
+  .pill.published         { background: #0c3a1f; color: var(--accent); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+  .state-badge { display: inline-block; padding: 2px 7px; border-radius: 10px;
+                 font-size: 10px; font-weight: 500; margin-left: 6px; }
+  .state-badge.queued  { background: #1f3a5f; color: var(--running); }
+  .state-badge.running { background: #14253a; color: var(--running);
+                         animation: pulse 1.4s ease-in-out infinite; }
+
+  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
+           padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit;
+           font-size: 12px; }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #4a2d82; border-color: var(--purple); color: #ede4ff; }
+  button.primary:hover:not(:disabled) { background: #5e3aa3; }
+  button.warn { background: #6e4a0e; border-color: #b08a2b; }
+  button.warn:hover:not(:disabled) { background: #a07016; }
+  button.small { padding: 3px 8px; font-size: 11px; }
+
+  .actions .btn-row { display: flex; gap: 6px; flex-direction: column; align-items: stretch; }
+
+  .toolbar { padding: 10px 18px; border-bottom: 1px solid var(--border);
+             background: #0a0e14; display: flex; gap: 10px; align-items: center;
+             flex-wrap: wrap; }
+  .toolbar .note { color: var(--muted); font-size: 11px; }
+  .toolbar .queue-status { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .panel-header h2 { margin: 0; font-size: 14px; }
+  .panel-header .panel-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+
+  .panel-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
+  .panel-tabs button { flex: 1; border-radius: 0; border: none; border-right: 1px solid var(--border);
+                       background: transparent; color: var(--muted); padding: 8px 12px; }
+  .panel-tabs button:last-child { border-right: none; }
+  .panel-tabs button.active { background: var(--bg); color: var(--text); }
+
+  .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 12px; padding: 12px 16px; overflow: auto; flex: 1;
+         white-space: pre-wrap; word-break: break-word; }
+  .log .log-empty { color: var(--muted); font-style: italic; }
+
+  .job-list { padding: 12px 16px; overflow: auto; flex: 1; }
+  .job-list .job { display: grid; grid-template-columns: 80px 1fr 70px;
+                   gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border);
+                   font-size: 12px; cursor: pointer; }
+  .job-list .job:hover { background: #1a2030; }
+  .job-list .job .id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                       color: var(--muted); }
+  .job-list .job .status { text-align: right; }
+  .status-queued { color: var(--muted); }
+  .status-running { color: var(--running); }
+  .status-success { color: var(--accent); }
+  .status-error { color: var(--err); }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+                    display: flex; align-items: center; justify-content: center;
+                    z-index: 10; cursor: zoom-out; padding: 24px; }
+  .review-modal { background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 20px; width: min(540px, 100%);
+                  max-height: 100%; display: flex; flex-direction: column;
+                  gap: 14px; cursor: default; overflow: auto;
+                  box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  .review-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .review-modal .modal-meta { color: var(--muted); font-size: 12px; }
+  .review-modal .actions-row { display: flex; gap: 8px; justify-content: flex-end;
+                               border-top: 1px solid var(--border); padding-top: 12px; }
+  .review-modal .actions-row .grow { flex: 1; }
+  video.review { width: 100%; max-height: 480px; background: black;
+                 border-radius: 6px; border: 1px solid var(--border); }
+
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px;
+           border-radius: 6px; background: var(--panel); border: 1px solid var(--border);
+           color: var(--text); font-size: 13px; z-index: 20; max-width: 380px; }
+  .toast.err { border-color: var(--err); color: var(--err); }
+  .toast.ok { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Trivia Quiz</h1>
+  <div class="meta" id="meta">loading…</div>
+  <div class="links">
+    <a id="link-sheet" href="#" target="_blank" rel="noopener">Posts_Quiz ↗</a>
+    <a id="link-drive" href="#" target="_blank" rel="noopener">Drive ↗</a>
+  </div>
+  <div class="spacer"></div>
+  <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
+  <button onclick="loadRows()">Refresh</button>
+  <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
+</header>
+
+<main id="main">
+  <div class="rows" id="rows-pane">
+    <div class="toolbar">
+      <span class="note">
+        Rows are authored in the Posts_Quiz sheet tab. Build &amp; Render runs
+        OpenArt backdrops + full audio (VO/music/SFX); Publish uploads to Drive.
+      </span>
+      <span id="queue-status" class="queue-status"></span>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Slug</th>
+          <th>Status</th>
+          <th>Q1 / Q2 / Q3</th>
+          <th>Caption</th>
+          <th>Local</th>
+          <th>Drive</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="8" style="padding: 40px; text-align: center; color: var(--muted);">
+          loading rows from Posts_Quiz…
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2 id="panel-title">Log</h2>
+      <div class="panel-meta" id="panel-meta">no job yet</div>
+    </div>
+    <div class="panel-tabs">
+      <button class="active" data-tab="log" onclick="switchTab('log')">Log</button>
+      <button data-tab="jobs" onclick="switchTab('jobs')">Recent Jobs</button>
+    </div>
+    <div class="log" id="log">
+      <span class="log-empty">No job running. Click an action on a row.</span>
+    </div>
+    <div class="job-list" id="job-list" style="display:none;"></div>
+  </div>
+</main>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let allRows = [];
+let health = null;
+let active = { by_slug: {} };
+let activeJobId = null;
+let activeEvt = null;
+let activeTab = 'log';
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}: ${await r.text().catch(()=>'')}`);
+  return r.json();
+}
+
+function toast(msg, kind='ok') {
+  const root = $('toast-root');
+  const div = document.createElement('div');
+  div.className = `toast ${kind}`;
+  div.textContent = msg;
+  root.appendChild(div);
+  setTimeout(() => div.remove(), 4500);
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function statusPillClass(s) {
+  if (!s) return 'draft';
+  const k = s.toLowerCase().replace(/\s+/g, '-');
+  return ({
+    'draft': 'draft',
+    'ready-to-publish': 'ready-to-publish',
+    'approved': 'approved',
+    'published': 'published',
+  })[k] || 'draft';
+}
+
+function inFlight(slug, kind) {
+  return active.by_slug?.[slug]?.[kind];
+}
+
+function stateBadge(state) {
+  if (!state) return '';
+  return `<span class="state-badge ${state}">${state}</span>`;
+}
+
+function actionsCell(r) {
+  const slug = r.slug || '';
+  const f = r.files || {};
+  const status = (r.status || '').trim();
+  if (!slug) return '<span style="color:var(--muted);font-size:11px;">no slug</span>';
+
+  // Published is a terminal state — the row is done, so no action buttons are
+  // shown (shared lifecycle with trivia-short / trivia-reaction, where every
+  // mutating action gates out at Published). To re-open a published row, walk
+  // its Final Status back in the sheet.
+  if (status === 'Published') {
+    return '<span style="color:var(--muted);font-size:11px;">done</span>';
+  }
+
+  const building = slug && inFlight(slug, 'build');
+  const publishing = slug && inFlight(slug, 'publish');
+  const marking = slug && inFlight(slug, 'mark_published');
+
+  const reviewBtn = f.render_exists
+    ? `<button class="small" onclick="openReview('${escapeHtml(slug)}', ${f.render_mtime || 0})">▷ Review</button>`
+    : '';
+
+  // Build & Render: available in any non-published state (re-runnable). On a
+  // fresh row it's the first build; on a row with a render it re-runs OpenArt
+  // + render in place, flipping status back to Ready to publish on success.
+  const isRebuild = f.render_exists;
+  const buildBtn = `<button class="${isRebuild ? 'small' : 'primary small'}"
+       ${building?'disabled':''}
+       onclick="runBuild('${escapeHtml(slug)}', ${isRebuild ? 'true' : 'false'})">
+       ${stateBadge(building)} ${isRebuild ? 'Re-build & Render' : 'Build & Render'}
+     </button>`;
+
+  // Publish: enabled only when status is Ready to publish AND a local render
+  // exists (mirrors trivia-reaction). Build flips the row to Ready to publish
+  // on success, so the button appears right after a build.
+  const canPublish = status === 'Ready to publish' && f.render_exists;
+  const pubBtn = canPublish
+    ? `<button class="warn small" ${publishing?'disabled':''}
+         onclick="runPublish('${escapeHtml(slug)}')">
+         ${stateBadge(publishing)} ${(r.drive_link||'').trim() ? 'Re-publish' : 'Publish'}
+       </button>`
+    : '';
+
+  // Mark as Published: status-only flip 'Ready to publish' -> 'Published'.
+  // Shown only once the row is Ready to publish AND a Drive link exists (i.e.
+  // Publish has run). The human's signal that the post is actually live.
+  const canMark = status === 'Ready to publish' && (r.drive_link||'').trim();
+  const markBtn = canMark
+    ? `<button class="primary small" ${marking?'disabled':''}
+         onclick="runMarkPublished('${escapeHtml(slug)}')">
+         ${stateBadge(marking)} ✓ Mark as Published
+       </button>`
+    : '';
+
+  return `<div class="btn-row">${reviewBtn}${buildBtn}${pubBtn}${markBtn}</div>`;
+}
+
+function filesCell(r) {
+  const f = r.files || {};
+  const flag = (ok, label) => `<div class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '·'} ${label}</div>`;
+  return flag(f.artifacts_exist, 'artifacts') + flag(f.bg_exists, 'bg.mp4') + flag(f.render_exists, 'render');
+}
+
+function driveCell(r) {
+  const link = (r.drive_link || '').trim();
+  if (!link) return '<span style="color: var(--muted); font-size: 11px;">—</span>';
+  return `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" style="font-size:11px;">final ↗</a>`;
+}
+
+function qBlock(label, q) {
+  if (!q || !q.question) return '';
+  return `
+    <div class="qrow">
+      <span class="qlabel">${label}</span><span class="qbody">
+        <span class="q">${escapeHtml(q.question)}</span>
+        ${q.answer ? `<div class="a">→ ${escapeHtml(q.answer)}</div>` : ''}
+      </span>
+    </div>`;
+}
+
+function questionsCell(r) {
+  return qBlock('Q1', r.q1) + qBlock('Q2', r.q2) + qBlock('Q3', r.q3);
+}
+
+function captionCell(r) {
+  const caption = (r.caption || '').trim();
+  if (!caption) return '<span class="caption-empty">—</span>';
+  return `${escapeHtml(caption)}
+    <button class="copy-btn" data-copy="${escapeHtml(caption)}"
+            onclick="copyText(this)" title="copy caption">copy</button>`;
+}
+
+async function copyText(btn) {
+  const text = btn.dataset.copy || '';
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('execCommand returned false');
+    }
+    toast('caption copied');
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  } catch (e) {
+    toast(`copy failed: ${e.message}`, 'err');
+  }
+}
+
+function renderRows() {
+  const tbody = $('tbody');
+  if (!allRows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--muted);">
+      no rows yet. Author rows in the Posts_Quiz sheet tab, then Refresh.
+    </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = allRows.map(r => {
+    const status = (r.status || '').trim();
+    const klass = statusPillClass(status);
+    const busy = (k) => inFlight(r.slug, k);
+    const rowState = (r.slug && (busy('build') === 'running' || busy('publish') === 'running'))
+                   ? 'row-running'
+                   : (r.slug && (busy('build') === 'queued' || busy('publish') === 'queued'))
+                   ? 'row-queued' : '';
+    return `
+      <tr class="${rowState}">
+        <td class="ord">${escapeHtml(r.order || '—')}${r.post_date ? `<div class="date">${escapeHtml(r.post_date)}</div>` : ''}</td>
+        <td class="slug">${escapeHtml(r.slug || '')}</td>
+        <td class="status"><span class="pill ${klass}">${escapeHtml(status || 'Draft')}</span></td>
+        <td class="qs">${questionsCell(r)}</td>
+        <td class="caption">${captionCell(r)}</td>
+        <td class="files">${filesCell(r)}</td>
+        <td class="files">${driveCell(r)}</td>
+        <td class="actions">${actionsCell(r)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function loadRows() {
+  $('meta').textContent = 'loading…';
+  try {
+    const [h, data] = await Promise.all([api('api/health'), api('api/rows')]);
+    health = h;
+    $('link-sheet').href = h.quiz_sheet_url;
+    $('link-drive').href = h.drive_folder_url;
+    allRows = data;
+    $('meta').textContent =
+      `${allRows.length} row(s) · sa=${h.sa_present ? 'ok' : 'MISSING'}`;
+    renderRows();
+  } catch (e) {
+    $('meta').textContent = 'load failed';
+    $('tbody').innerHTML =
+      `<tr><td colspan="8" style="padding:40px;text-align:center;color:var(--err);">
+         load failed: ${escapeHtml(e.message)}
+       </td></tr>`;
+  }
+}
+
+async function refreshActive() {
+  try {
+    const data = await api('api/active');
+    active = data || { by_slug: {} };
+    const qs = $('queue-status');
+    const r = data.running_count, q = data.queued_count;
+    qs.textContent = (r || q) ? `${r} running · ${q} queued` : '';
+    renderRows();
+  } catch (e) { /* ignore */ }
+}
+
+async function runBuild(slug, isRebuild=false) {
+  if (!slug) return;
+  if (isRebuild && !confirm(`Re-build & Render ${slug}? This re-runs OpenArt (spends credits) and overwrites the local bg.mp4 + render.`)) return;
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'build', slug}),
+    });
+    toast(`build queued (${slug})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`build failed: ${e.message}`, 'err');
+  }
+}
+
+async function runPublish(slug) {
+  if (!slug) return;
+  // Per user memory: never auto-publish. Require explicit confirm.
+  if (!confirm(`Upload ${slug}'s render to Drive? Make sure you reviewed the rendered video first.`)) return;
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'publish', slug}),
+    });
+    toast(`publish queued (${slug})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`publish failed: ${e.message}`, 'err');
+  }
+}
+
+async function runMarkPublished(slug) {
+  if (!slug) return;
+  if (!confirm(`Mark ${slug} as Published? Only do this once the post is actually live.`)) return;
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'mark_published', slug}),
+    });
+    toast(`mark-published queued (${slug})`);
+    attachToJob(job.id);
+    refreshActive();
+  } catch (e) {
+    toast(`mark failed: ${e.message}`, 'err');
+  }
+}
+
+async function attachToJob(id) {
+  if (activeEvt) { activeEvt.close(); activeEvt = null; }
+  activeJobId = id;
+  $('panel-title').textContent = `Log — ${id}`;
+  $('panel-meta').textContent = 'loading…';
+  const log = $('log');
+  log.innerHTML = '';
+  let preStatus = null;
+  let seeded = 0;
+  try {
+    const j = await api(`api/jobs/${id}`);
+    preStatus = j.status;
+    $('panel-meta').textContent = `${j.kind} · ${j.slug || '?'} · ${j.status}`;
+    for (const line of (j.log || [])) {
+      const span = document.createElement('div');
+      span.textContent = line;
+      log.appendChild(span);
+      seeded++;
+    }
+    log.scrollTop = log.scrollHeight;
+  } catch (e) {
+    $('panel-meta').textContent = `couldn't load: ${e.message}`;
+  }
+  if (preStatus === 'success' || preStatus === 'error') {
+    if (!seeded) log.innerHTML = '<span class="log-empty">(job finished with no log)</span>';
+    return;
+  }
+  activeEvt = new EventSource(`api/jobs/${id}/stream`);
+  activeEvt.onmessage = (e) => {
+    const line = JSON.parse(e.data);
+    const span = document.createElement('div');
+    span.textContent = line;
+    log.appendChild(span);
+    log.scrollTop = log.scrollHeight;
+  };
+  activeEvt.onerror = () => {
+    $('panel-meta').textContent = 'stream interrupted — falling back to polling';
+    if (activeEvt) { activeEvt.close(); activeEvt = null; }
+    pollUntilDone(id, log);
+  };
+  activeEvt.addEventListener('end', async () => {
+    activeEvt.close();
+    activeEvt = null;
+    try {
+      const j = await api(`api/jobs/${id}`);
+      $('panel-meta').textContent = `${j.kind} · ${j.slug || '?'} · ${j.status}`;
+      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
+    } catch (e) {}
+    await loadRows();
+    await refreshActive();
+  });
+}
+
+async function pollUntilDone(id, logEl) {
+  let lastLen = logEl.childElementCount;
+  while (true) {
+    let j;
+    try { j = await api(`api/jobs/${id}`); }
+    catch (e) { return; }
+    const lines = j.log || [];
+    for (let i = lastLen; i < lines.length; i++) {
+      const span = document.createElement('div');
+      span.textContent = lines[i];
+      logEl.appendChild(span);
+    }
+    lastLen = lines.length;
+    logEl.scrollTop = logEl.scrollHeight;
+    if (j.status === 'success' || j.status === 'error') {
+      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
+      await loadRows();
+      await refreshActive();
+      return;
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+function togglePanel() {
+  const main = $('main');
+  const hidden = !main.classList.contains('panel-hidden');
+  main.classList.toggle('panel-hidden', hidden);
+  $('toggle-panel-btn').textContent = hidden ? 'Show log' : 'Hide log';
+  try { localStorage.setItem('trivia_quiz_panel_hidden', hidden ? '1' : '0'); }
+  catch (e) {}
+}
+
+function restorePanelState() {
+  let hidden = false;
+  try { hidden = localStorage.getItem('trivia_quiz_panel_hidden') === '1'; }
+  catch (e) {}
+  if (hidden) {
+    $('main').classList.add('panel-hidden');
+    $('toggle-panel-btn').textContent = 'Show log';
+  }
+}
+
+async function loadJobs() {
+  try {
+    const jobs = await api('api/jobs');
+    const root = $('job-list');
+    if (!jobs.length) {
+      root.innerHTML = '<div style="color:var(--muted); font-style:italic;">no jobs yet</div>';
+      return;
+    }
+    root.innerHTML = jobs.map(j => `
+      <div class="job" onclick="attachToJob('${j.id}'); switchTab('log');">
+        <div class="id">${j.id}</div>
+        <div>${escapeHtml(j.kind)} · ${escapeHtml(j.slug || '?')}</div>
+        <div class="status status-${j.status}">${j.status}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    $('job-list').innerHTML = `<div style="color:var(--err);">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.panel-tabs button').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === tab);
+  });
+  $('log').style.display = tab === 'log' ? '' : 'none';
+  $('job-list').style.display = tab === 'jobs' ? '' : 'none';
+  if (tab === 'jobs') loadJobs();
+}
+
+function closeModal() { $('modal-root').innerHTML = ''; }
+
+function openReview(slug, renderMtime=0) {
+  // Cache-bust with the render's mtime so re-built takes load fresh.
+  const root = $('modal-root');
+  const src = `api/render/${encodeURIComponent(slug)}?t=${Math.floor(renderMtime || Date.now()/1000)}`;
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="review-modal" onclick="event.stopPropagation()">
+        <h2>Review — ${escapeHtml(slug)}</h2>
+        <div class="modal-meta">
+          Watch before publishing. Check: countdown timing, reveal stamp +
+          surprise fact, score card lockup, captions match the VO.
+        </div>
+        <video class="review" controls autoplay src="${src}"></video>
+        <div class="actions-row">
+          <span class="grow"></span>
+          <button onclick="closeModal()">Close</button>
+          <button class="warn" onclick="closeModal(); runPublish('${escapeHtml(slug)}')">
+            Publish…
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Initial load + slow poll for active jobs.
+restorePanelState();
+loadRows().then(refreshActive);
+setInterval(refreshActive, 3000);
+</script>
+</body>
+</html>

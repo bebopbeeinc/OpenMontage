@@ -1,3 +1,6 @@
+# Runtime logs (web server stdout/stderr, etc.)
+.logs/
+
 # Python
 __pycache__/
 *.pyc
@@ -45,6 +48,7 @@ corpus/
 scripts/trivia/library/
 scripts/trivia_images/library/
 scripts/trivia_reaction/library/
+scripts/trivia_quiz/library/
 
 # Environment & credentials
 .env

@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse
 # Pipeline sub-apps. Each must be a self-contained FastAPI app.
 from scripts.trivia.web import server as trivia
 from scripts.trivia_images.web import server as trivia_images
+from scripts.trivia_quiz.web import server as trivia_quiz
 from scripts.trivia_reaction.web import server as trivia_reaction
 
 REPO = Path(__file__).resolve().parents[1]
@@ -62,6 +63,18 @@ PIPELINES = [
         "stability": "beta",
     },
     {
+        "id": "trivia-quiz",
+        "path": "/trivia-quiz/",
+        "name": "Trivia Quiz",
+        "description": (
+            "~30s vertical quiz short driven by the Posts_Quiz sheet tab. Each "
+            "row is one post (3 questions: easy → medium → hard). Build & "
+            "Render runs OpenArt backdrops + full audio (VO/music/SFX) and the "
+            "Remotion TriviaQuiz composition; Publish uploads to Drive."
+        ),
+        "stability": "alpha",
+    },
+    {
         "id": "trivia-reaction",
         "path": "/trivia-reaction/",
         "name": "Trivia Reaction",
@@ -82,6 +95,7 @@ app = FastAPI(title="OpenMontage pipeline launcher")
 # mounting at "/<slug>" prefixes everything correctly.
 app.mount("/trivia", trivia.app)
 app.mount("/trivia-images", trivia_images.app)
+app.mount("/trivia-quiz", trivia_quiz.app)
 app.mount("/trivia-reaction", trivia_reaction.app)
 
 
