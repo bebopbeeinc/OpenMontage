@@ -228,16 +228,19 @@
   @keyframes modal-spin { to { transform: rotate(360deg); } }
 
   .prompt-modal { background: var(--panel); border: 1px solid var(--border);
-                  border-radius: 8px; padding: 20px; width: min(820px, 92vw);
+                  border-radius: 8px; padding: 20px; width: min(1040px, 94vw);
                   max-height: 90vh; display: flex; flex-direction: column;
                   gap: 14px; cursor: default;
                   box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
   .prompt-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
   .prompt-modal .modal-meta { color: var(--muted); font-size: 12px; }
   .prompt-modal .modal-meta b { color: var(--warn); }
+  .prompt-modal .body { display: flex; flex-direction: column; gap: 14px;
+                        overflow-y: auto; padding-right: 4px;
+                        margin-right: -4px; }
   .prompt-modal label { display: block; font-size: 12px; color: var(--muted);
                         margin-bottom: 4px; }
-  .prompt-modal textarea { width: 100%; min-height: 130px;
+  .prompt-modal textarea { width: 100%; min-height: 180px;
                            background: var(--bg); color: var(--text);
                            border: 1px solid var(--border); border-radius: 5px;
                            padding: 8px 10px;
@@ -245,6 +248,34 @@
                            resize: vertical; }
   .prompt-modal textarea:focus { outline: 2px solid var(--running); outline-offset: -1px; }
   .prompt-modal .field { display: flex; flex-direction: column; }
+  /* Field row: textarea on the left, the current image preview on the right.
+     The textarea grows to fill remaining space; the preview is a fixed-width
+     column so prompt and image scale together as the modal resizes. */
+  .prompt-modal .field-row { display: flex; gap: 14px; align-items: stretch; }
+  .prompt-modal .field-row .field { flex: 1 1 auto; min-width: 0; }
+  .prompt-modal .field-row .field textarea { height: 100%; }
+  .prompt-modal .preview { flex: 0 0 260px; display: flex; flex-direction: column;
+                           gap: 4px; }
+  .prompt-modal .preview .preview-frame { position: relative; width: 100%;
+                                          aspect-ratio: 4 / 3;
+                                          background: #0a0e14;
+                                          border: 1px solid var(--border);
+                                          border-radius: 5px; overflow: hidden;
+                                          display: flex; align-items: center;
+                                          justify-content: center; }
+  /* Mid-iteration: approved baseline + WIP side-by-side. Each frame keeps
+     its own 4:3 ratio inside half the column width so the author can compare
+     the prior render against the current candidate. */
+  .prompt-modal .preview .preview-pair { display: grid;
+                                         grid-template-columns: 1fr 1fr; gap: 6px; }
+  .prompt-modal .preview .preview-pair .preview-frame { aspect-ratio: 4 / 3; }
+  .prompt-modal .preview .preview-frame img { width: 100%; height: 100%;
+                                              object-fit: cover; cursor: zoom-in; }
+  .prompt-modal .preview .preview-missing { color: var(--muted); font-size: 11px;
+                                            font-style: italic; }
+  .prompt-modal .preview .preview-caption { color: var(--muted); font-size: 11px;
+                                            display: flex; justify-content: space-between;
+                                            gap: 8px; }
   .prompt-modal .actions-row { display: flex; gap: 8px; justify-content: flex-end;
                                border-top: 1px solid var(--border); padding-top: 12px; }
   .prompt-modal .actions-row .grow { flex: 1; }
@@ -269,7 +300,7 @@
   </div>
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
-  <button onclick="loadRows()">Refresh</button>
+  <button onclick="loadRows({force: true})" title="Re-read sheet + Drive folder listings (skips the 120s cache)">Refresh</button>
   <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
 </header>
 
@@ -754,13 +785,19 @@ function updateBatchBar() {
   $('check-all-a').indeterminate = !allA && eligibleAInView.some(r => selected.answer_image.has(r.row));
 }
 
-async function loadRows() {
+async function loadRows({force = false} = {}) {
+  // force=true is the "Refresh" button path — passes refresh=1 so the server
+  // re-probes Google (drops cached tab discovery + cached Drive folder
+  // listings). Without that, manual Drive edits (file copied/deleted via
+  // Drive's UI rather than this app) stay invisible until the 120s listing
+  // TTL expires, since only mutations through this app invalidate the cache.
   $('meta').textContent = 'loading…';
   loadingRows = true;
   try {
+    const refreshSuffix = force ? '&refresh=1' : '';
     const [health, data] = await Promise.all([
       api('api/health'),
-      api(`api/rows?${tabQuery()}`),
+      api(`api/rows?${tabQuery()}${refreshSuffix}`),
     ]);
     allRows = data;
     $('meta').textContent = `${allRows.length} row(s) · tab=${currentTab} · sa=${health.sa_present ? 'ok' : 'MISSING'}`;
@@ -1224,6 +1261,66 @@ function answersRefBlock(r) {
   `;
 }
 
+function modalPreviewFrame({slug, short, cacheKey, variantQuery, tag}) {
+  // Single 4:3 frame with a corner state tag. `src` is used directly (no lazy
+  // data-src/IntersectionObserver) since the modal opens deliberately and at
+  // most renders 4 frames (two pairs). Click-to-zoom opens in a new tab
+  // because showModal() clobbers #modal-root and would close the editor.
+  const v = encodeURIComponent(cacheKey);
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}${variantQuery}`;
+  const thumbSrc = `${baseSrc}&thumb=1`;
+  const fullSrc = baseSrc;
+  const tagLabel = tag === 'approved' ? 'APPROVED' : 'WIP';
+  return `
+    <div class="preview-frame">
+      <span class="thumb-tag ${tag}">${tagLabel}</span>
+      <img src="${thumbSrc}" referrerpolicy="no-referrer"
+           alt="${escapeHtml(slug)}/${short}"
+           onclick="window.open('${fullSrc}', '_blank', 'noopener')" />
+    </div>
+  `;
+}
+
+function modalPreviewBlock(r, kind) {
+  // Renders the current Drive image next to the prompt textarea. Mirrors
+  // thumbCell's pair behavior: when a WIP sits on top of a prior approval
+  // (drive.state === 'staging' && drive.approved_file_id), show both the
+  // approved baseline AND the WIP so the author can see what they're
+  // replacing while tuning the prompt.
+  const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
+  const labelLeft = kind === 'question_image' ? 'current Q image' : 'current A image';
+  if (!drive || drive.state === 'none') {
+    return `
+      <div class="preview-frame"><span class="preview-missing">no image yet</span></div>
+      <div class="preview-caption"><span>${labelLeft}</span><span>—</span></div>
+    `;
+  }
+  const short = kind === 'question_image' ? 'Q' : 'A';
+  const pair = drive.state === 'staging' && !!drive.approved_file_id;
+  const primaryFrame = modalPreviewFrame({
+    slug: r.slug, short,
+    cacheKey: drive.modified_time || drive.file_id || '',
+    variantQuery: '',
+    tag: pair ? 'staging' : drive.state,
+  });
+  if (!pair) {
+    return `
+      ${primaryFrame}
+      <div class="preview-caption"><span>${labelLeft}</span><span>click to zoom</span></div>
+    `;
+  }
+  const approvedFrame = modalPreviewFrame({
+    slug: r.slug, short,
+    cacheKey: drive.approved_modified_time || drive.approved_file_id || '',
+    variantQuery: '&variant=approved',
+    tag: 'approved',
+  });
+  return `
+    <div class="preview-pair">${approvedFrame}${primaryFrame}</div>
+    <div class="preview-caption"><span>${labelLeft} — approved vs WIP</span><span>click to zoom</span></div>
+  `;
+}
+
 function openPromptEditor(row, slug) {
   const r = allRows.find(x => x.row === row);
   if (!r) return;
@@ -1239,14 +1336,26 @@ function openPromptEditor(row, slug) {
           Saving does <b>not</b> regenerate the images — re-run Generate Q/A
           after saving to refresh the renders.
         </div>
-        ${answersRefBlock(r)}
-        <div class="field">
-          <label>Question prompt (Question IMAGE column)</label>
-          <textarea id="edit-q">${escapeHtml(r.prompt_q || '')}</textarea>
-        </div>
-        <div class="field">
-          <label>Answer prompt (Answer IMAGE column)</label>
-          <textarea id="edit-r">${escapeHtml(r.prompt_r || '')}</textarea>
+        <div class="body">
+          ${answersRefBlock(r)}
+          <div class="field-row">
+            <div class="field">
+              <label>Question prompt (Question IMAGE column)</label>
+              <textarea id="edit-q">${escapeHtml(r.prompt_q || '')}</textarea>
+            </div>
+            <div class="preview">
+              ${modalPreviewBlock(r, 'question_image')}
+            </div>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>Answer prompt (Answer IMAGE column)</label>
+              <textarea id="edit-r">${escapeHtml(r.prompt_r || '')}</textarea>
+            </div>
+            <div class="preview">
+              ${modalPreviewBlock(r, 'answer_image')}
+            </div>
+          </div>
         </div>
         <div class="actions-row">
           <span class="grow"></span>

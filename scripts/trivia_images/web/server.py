@@ -964,10 +964,29 @@ def _rows_sync(tab: str | None, refresh: bool):
     loop blocks every other request — most painfully /api/active, which
     the frontend polls every 3s. Wrap this in asyncio.to_thread so
     in-memory endpoints can slip through while Sheets is responding.
+
+    refresh=True also drops the cached Drive folder listings (staging,
+    approved, and both Resized subfolders) so manual Drive edits — the
+    user copying/moving/deleting a file via Drive's UI rather than this
+    app — show up on the next poll instead of sitting stale for the rest
+    of the 120s TTL.
     """
     if refresh:
         try:
             _discover_tabs(refresh=True)
+        except Exception:
+            pass
+        try:
+            client = get_client()
+            client.invalidate_listing(STAGING_FOLDER_ID)
+            client.invalidate_listing(APPROVED_FOLDER_ID)
+            # Resized subfolders are lazy — only invalidate if already resolved,
+            # otherwise we'd force a Drive round-trip for folders we may never
+            # touch this session.
+            for parent in (STAGING_FOLDER_ID, APPROVED_FOLDER_ID):
+                resized = _resized_folder_ids.get(parent)
+                if resized:
+                    client.invalidate_listing(resized)
         except Exception:
             pass
     validated = _validate_tab(tab)
