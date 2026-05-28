@@ -19,8 +19,23 @@
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
                font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
   main { max-width: 920px; margin: 0 auto; padding: 64px 32px; }
-  h1 { margin: 0 0 8px 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
-  .sub { color: var(--muted); margin: 0 0 40px 0; font-size: 14px; }
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 40px; }
+  .header h1 { margin: 0 0 8px 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
+  .header .sub { color: var(--muted); margin: 0; font-size: 14px; }
+
+  .deploy { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .deploy button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 13px;
+    cursor: pointer; transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .deploy button:hover:not(:disabled) { border-color: var(--accent); }
+  .deploy button:disabled { opacity: 0.6; cursor: progress; }
+  .deploy-status { font-size: 12px; color: var(--muted); max-width: 320px; text-align: right;
+                   white-space: pre-wrap; word-break: break-word; }
+  .deploy-status.ok { color: var(--accent); }
+  .deploy-status.warn { color: var(--warn); }
+  .deploy-status.err { color: #f85149; }
 
   .pipeline-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
   @media (min-width: 720px) { .pipeline-grid { grid-template-columns: 1fr 1fr; } }
@@ -46,8 +61,16 @@
 </head>
 <body>
 <main>
-  <h1>OpenMontage</h1>
-  <p class="sub">Pick a pipeline.</p>
+  <div class="header">
+    <div>
+      <h1>OpenMontage</h1>
+      <p class="sub">Pick a pipeline.</p>
+    </div>
+    <div class="deploy">
+      <button id="deploy-btn" type="button">Deploy latest</button>
+      <div id="deploy-status" class="deploy-status"></div>
+    </div>
+  </div>
   <div id="pipeline-grid" class="pipeline-grid">
     <div class="empty">Loading…</div>
   </div>
@@ -86,6 +109,205 @@ function escapeHtml(s) {
 }
 
 loadPipelines();
+
+// --- Deploy button ---------------------------------------------------------
+
+const deployBtn = document.getElementById("deploy-btn");
+const deployStatus = document.getElementById("deploy-status");
+
+function setStatus(msg, kind) {
+  deployStatus.textContent = msg;
+  deployStatus.className = "deploy-status" + (kind ? " " + kind : "");
+}
+
+async function getBoot() {
+  const r = await fetch("api/boot", { cache: "no-store" });
+  if (!r.ok) throw new Error("boot " + r.status);
+  return await r.json();
+}
+
+async function waitForRestart(originalBoot, deadlineMs) {
+  const start = Date.now();
+  while (Date.now() - start < deadlineMs) {
+    await new Promise(r => setTimeout(r, 800));
+    try {
+      const { boot_time } = await getBoot();
+      if (boot_time !== originalBoot) return boot_time;
+    } catch (_) { /* server briefly down during restart */ }
+  }
+  return null;
+}
+
+// Show the current mode in the corner so the operator knows how Deploy will behave.
+(async () => {
+  try {
+    const { supervised } = await getBoot();
+    deployBtn.dataset.modeTooltip = supervised
+      ? "Pull from origin and fully restart the server (supervised mode)."
+      : "Pull from origin. Auto-restart only works under uvicorn --reload — "
+        + "use scripts/run_launcher.sh for full restarts.";
+    deployBtn.title = deployBtn.dataset.modeTooltip;
+  } catch (_) { /* will surface on first click */ }
+})();
+
+// --- Active-job guard ------------------------------------------------------
+//
+// Poll the active-jobs endpoint and disable Deploy while pipeline runs are in
+// flight. The deploy endpoint enforces the same rule server-side (409); this
+// just keeps the button honest.
+
+let activeJobs = [];
+
+function jobLabel(j) {
+  const parts = [j.pipeline];
+  if (j.kind) parts.push(j.kind);
+  if (j.slug) parts.push(j.slug);
+  return `${parts.join(" · ")} (${j.status})`;
+}
+
+function applyJobsState() {
+  if (activeJobs.length === 0) {
+    deployBtn.disabled = false;
+    deployBtn.textContent = "Deploy latest";
+    deployBtn.title = deployBtn.dataset.modeTooltip || "";
+    // Only clear status if it was the jobs-blocking message; don't stomp on
+    // post-deploy messages.
+    if (deployStatus.dataset.kind === "jobs-blocked") {
+      setStatus("", "");
+      delete deployStatus.dataset.kind;
+    }
+    return;
+  }
+  deployBtn.disabled = true;
+  deployBtn.textContent = `Deploy (${activeJobs.length} running)`;
+  deployBtn.title = "Disabled: pipeline jobs are running.\n\n"
+    + activeJobs.map(jobLabel).join("\n");
+  setStatus(
+    `${activeJobs.length} pipeline job${activeJobs.length === 1 ? "" : "s"} running — `
+    + `Deploy will resume when they finish.`,
+    "",
+  );
+  deployStatus.dataset.kind = "jobs-blocked";
+}
+
+async function refreshActiveJobs() {
+  try {
+    const r = await fetch("api/jobs/active", { cache: "no-store" });
+    if (!r.ok) return;
+    const { jobs } = await r.json();
+    activeJobs = jobs || [];
+    applyJobsState();
+  } catch (_) { /* poll quietly */ }
+}
+
+refreshActiveJobs();
+setInterval(refreshActiveJobs, 4000);
+
+async function runDeploy({ force }) {
+  deployBtn.disabled = true;
+  setStatus(force ? "Force-deploying…" : "Pulling latest…", "");
+  delete deployStatus.dataset.kind;
+
+  let boot0;
+  try {
+    boot0 = (await getBoot()).boot_time;
+  } catch (e) {
+    setStatus("Couldn't reach server: " + e.message, "err");
+    deployBtn.disabled = false;
+    return;
+  }
+
+  const url = "api/deploy" + (force ? "?force=true" : "");
+  let response, result;
+  try {
+    response = await fetch(url, { method: "POST" });
+    result = await response.json();
+  } catch (e) {
+    setStatus("Deploy request failed: " + e.message, "err");
+    deployBtn.disabled = false;
+    return;
+  }
+
+  if (response.status === 409 && result.reason === "active_jobs") {
+    const list = (result.active_jobs || []).map(jobLabel).join("\n");
+    setStatus(
+      `Blocked — pipeline jobs are running:\n${list}\n\n` +
+      `Wait for them, or use "Deploy anyway" to kill them as part of the restart.`,
+      "warn",
+    );
+    deployStatus.dataset.kind = "conflict";
+    showForceButton();
+    deployBtn.disabled = activeJobs.length > 0;
+    return;
+  }
+
+  hideForceButton();
+
+  if (!result.ok) {
+    setStatus("git pull failed:\n" + (result.stderr || result.stdout || "unknown error"), "err");
+    deployBtn.disabled = false;
+    return;
+  }
+
+  if (!result.changed) {
+    setStatus("Already up to date.", "ok");
+    deployBtn.disabled = false;
+    return;
+  }
+
+  const shortBefore = (result.head_before || "").slice(0, 7);
+  const shortAfter = (result.head_after || "").slice(0, 7);
+
+  if (result.restart_method === "none") {
+    setStatus(
+      `Pulled ${shortBefore} → ${shortAfter}, but no restart mechanism is available.\n` +
+      `Run scripts/run_launcher.sh or uvicorn --reload to enable auto-restart, ` +
+      `then restart the server manually for now.`,
+      "warn",
+    );
+    deployBtn.disabled = false;
+    return;
+  }
+
+  const verb = result.restart_method === "supervisor" ? "Respawning" : "Reloading";
+  setStatus(`Pulled ${shortBefore} → ${shortAfter}. ${verb}…`, "");
+
+  const newBoot = await waitForRestart(boot0, 30000);
+  if (newBoot) {
+    setStatus(`Deployed ${shortAfter}. Server restarted.`, "ok");
+    loadPipelines();
+    refreshActiveJobs();
+  } else {
+    const hint = result.restart_method === "supervisor"
+      ? "The supervisor should have respawned by now — check the supervisor logs."
+      : "If you're not running uvicorn with --reload, restart manually or use scripts/run_launcher.sh.";
+    setStatus(`Pulled ${shortAfter}, but the server didn't come back in 30s.\n${hint}`, "warn");
+  }
+  deployBtn.disabled = false;
+}
+
+// --- Force-deploy button (shown on 409) ------------------------------------
+
+let forceBtn = null;
+function showForceButton() {
+  if (forceBtn) return;
+  forceBtn = document.createElement("button");
+  forceBtn.type = "button";
+  forceBtn.textContent = "Deploy anyway";
+  forceBtn.style.borderColor = "var(--warn)";
+  forceBtn.title = "Pull and restart the server even though pipeline jobs are running. "
+    + "Their child processes will be killed.";
+  forceBtn.addEventListener("click", () => {
+    if (!confirm("This will kill the running pipeline jobs as part of the restart. Continue?")) return;
+    runDeploy({ force: true });
+  });
+  deployBtn.insertAdjacentElement("afterend", forceBtn);
+}
+function hideForceButton() {
+  if (forceBtn) { forceBtn.remove(); forceBtn = null; }
+}
+
+deployBtn.addEventListener("click", () => runDeploy({ force: false }));
 </script>
 </body>
 </html>
