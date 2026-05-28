@@ -8,10 +8,14 @@ question image already exists (stage 1 produced it at
 **answer image** for the same row, using the question image as a visual
 reference so both share the same environment.
 
-The col R prompt on the sheet is intentionally written as a "Same Scene — STYLE:
-..." prompt that **depends on** the question image being attached as a reference.
-Submitting the col R prompt without the reference image will produce an image
+The answer-image prompt on the sheet is intentionally written as a "Same Scene —
+STYLE: ..." prompt that **depends on** the question image being attached as a
+reference. Submitting it without the reference image will produce an image
 that does not visually match the question image. That is a stage failure.
+
+Columns resolve by header label via `scripts/trivia_images/sheet_schema.py`
+across the workbook's differently-laid-out tabs — refer to the prompt by field
+name, never a fixed letter.
 
 ## Prerequisites
 
@@ -19,7 +23,7 @@ that does not visually match the question image. That is a stage failure.
 |---|---|---|
 | Artifact | `projects/trivia-q-{N}/artifacts/asset_manifest.json` | Stage 1 output — contains the question image path |
 | Library | `scripts/trivia_images/library/q{N}.<ext>` | The reference image file |
-| Sheet | `Brian` tab, col R | Answer IMAGE prompt — input to OpenArt |
+| Sheet | Answer-image-prompt column (`Answer IMAGE (CORRECT)` / `Answer IMAGE (CORRECT) Prompt` / `Answer IMAGE (CORRECT OR INCORRECT) Prompt`) | Answer IMAGE prompt — input to OpenArt |
 | Tool | `openart_image` | Registered BaseTool — supports `reference_image_path` |
 | Schema | `schemas/artifacts/asset_manifest.schema.json` | Stage output contract |
 
@@ -36,12 +40,13 @@ back to stage 1.
 ### 2. Read The Row
 
 Use the service-account credential at `~/.google/claude-sheets-sa.json` to read
-the answer-image prompt from `Brian!R{row}`. Validate:
+the answer-image prompt for the row (column resolved by `sheet_schema.py`).
+Validate:
 
-- **Column R is non-empty.** If blank, the prompt was never authored. Either
-  ask the user to fill it in or invoke the future `prompts` stage (when it
-  exists). Do not invent prompts.
-- **Column R starts with "Same Scene"** as a quick sanity check that the
+- **The answer-image prompt is non-empty.** If blank, the prompt was never
+  authored. Either ask the user to fill it in or invoke the future `prompts`
+  stage (when it exists). Do not invent prompts.
+- **The prompt starts with "Same Scene"** as a quick sanity check that the
   prompt was written for the reference-image flow. If it doesn't, warn the
   user — submitting a non-"Same Scene" prompt with a reference is still
   technically valid but may not produce the intended environment match.
@@ -75,6 +80,13 @@ Announce the call before executing it: state the tool name, provider, model,
 that this is a reference-image submission (not a plain text-to-image call),
 and the reference path.
 
+Like the question image, the answer keeps the full-res original **and** a
+512×384 lossless-PNG copy (`scripts/trivia_images/image_optimize.py`): original
+at `library/q{N}_answer.png` / Drive `WIP/`, resized at `library/resized/` /
+Drive `WIP/Resized/`, both promoted on approval. The reference passed to OpenArt
+is the **full-res original** question image (best fidelity — that's what the
+kept originals are for).
+
 ### 5. Produce The asset_manifest
 
 Write the updated `projects/trivia-q-{N}/artifacts/asset_manifest.json`
@@ -92,11 +104,11 @@ stage 1, append the answer image entry):
       "source_tool": "openart_image",
       "scene_id": "q{N}",
       "subtype": "question",
-      "prompt": "<col Q text>",
+      "prompt": "<question prompt text>",
       "model": "Nano Banana Pro",
       "provider": "openart",
       "format": "png",
-      "generation_summary": "OpenArt /suite/create-image/nano-banana-pro, 4:3 2K"
+      "generation_summary": "OpenArt /suite/create-image/nano-banana-pro, 4:3 2K original + 512×384 lossless-PNG resized copy"
     },
     {
       "id": "q{N}_answer",
@@ -105,11 +117,11 @@ stage 1, append the answer image entry):
       "source_tool": "openart_image",
       "scene_id": "q{N}_answer",
       "subtype": "answer",
-      "prompt": "<col R text>",
+      "prompt": "<answer prompt text>",
       "model": "Nano Banana Pro",
       "provider": "openart",
       "format": "png",
-      "generation_summary": "OpenArt same-scene remix, ref=scripts/trivia_images/library/q{N}.png, 4:3 2K"
+      "generation_summary": "OpenArt same-scene remix, ref=scripts/trivia_images/library/q{N}.png (full-res), 4:3 2K original + 512×384 lossless-PNG resized copy"
     }
   ],
   "total_cost_usd": 0.0,
@@ -117,7 +129,7 @@ stage 1, append the answer image entry):
     "row": <int>,
     "slug": "q{N}",
     "sheet_id": "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk",
-    "sheet_tab": "Brian"
+    "sheet_tab": "<the tab this row came from, e.g. 1-100>"
   }
 }
 ```
@@ -130,8 +142,8 @@ Mirrors `pipeline_defs/trivia-images.yaml` -> `stages.answer_image.review_focus`
 
 - Question image `q{N}.<ext>` exists and was passed to OpenArt as the
   reference / source image.
-- Col R prompt is the "Same Scene" variant — describes the answer scene while
-  sharing the environment of col Q.
+- The answer-image prompt is the "Same Scene" variant — describes the answer
+  scene while sharing the environment of the question-image prompt.
 - Output landed at `scripts/trivia_images/library/q{N}_answer.<ext>`.
 - `asset_manifest` accumulates BOTH images so the downstream trivia-short
   pipeline can read them as a pair.
@@ -150,7 +162,7 @@ Mirrors `pipeline_defs/trivia-images.yaml` -> `stages.answer_image.review_focus`
 - **The CDN extension of the saved file may not match `output_path`.** The
   driver rewrites the extension to match what OpenArt serves (often `.png`).
   Use the path(s) returned by the tool as authoritative.
-- **A non-"Same Scene" col R prompt is still technically valid** with a
+- **A non-"Same Scene" answer-image prompt is still technically valid** with a
   reference image — the model just may not honor the environment-preservation
   intent. Warn the user when the prompt doesn't start with "Same Scene".
 
@@ -158,7 +170,7 @@ Mirrors `pipeline_defs/trivia-images.yaml` -> `stages.answer_image.review_focus`
 
 - Re-generate the question image. If the question image is wrong, send back
   to stage 1.
-- Author the col R prompt. The prompt comes from the sheet. A future
+- Author the answer-image prompt. The prompt comes from the sheet. A future
   `prompts` stage may automate this.
 - Switch models. Nano Banana Pro is the standard for environment-preserving
   remixes on OpenArt.

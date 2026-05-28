@@ -1,19 +1,24 @@
 #!/usr/bin/env python
-"""Generate question images from the Trivia Spreadsheet (Brian tab).
+"""Generate question images from the Trivia Spreadsheet.
 
-Reads each row from the `Brian` tab of the trivia-questions sheet, uses the
-prompt in column Q to drive OpenArt's Nano Banana Pro image generator, saves
-the resulting image to a local library, and marks column D = ✓.
+Reads each row from a 1-100-format question tab of the trivia-questions sheet
+(default `1-100`), uses the question-image prompt to drive OpenArt's Nano Banana
+Pro image generator, and saves the resulting image to a local library.
 
-Sheet layout (Brian tab):
+Columns are resolved by HEADER LABEL at runtime via sheet_schema.py
+(FIELD_TO_HEADER holds the 1-100 labels; SheetSchema does the lookup), which
+tolerates column inserts/reorders within that layout. Fields used here:
     row 1: section-header labels (decorative)
-    row 2: column names (Number, Question text, ..., Question IMAGE, ...)
+    row 2: column names (resolver reads both header rows)
     row 3+: data rows
 
-    col C  Number                  (used as the image slug: q{number}.<ext>)
-    col D  image complete          (we write "✓" on success)
-    col Q  Question IMAGE          (the prompt for OpenArt — index 16)
-    col R  Answer IMAGE (CORRECT)  (a sibling prompt — not generated here)
+    `#`                    (the question number; used as the image slug: q{number}.<ext>)
+    `Question IMAGE Prompt` (the prompt for OpenArt)
+    `Answer IMAGE (CORRECT) Prompt` (a sibling prompt — not generated here)
+
+The 1-100 tab has no completion column, so disk presence of q{number}.<ext> is
+the completion signal (the legacy Brian-style tabs tracked this in an "image
+complete" column; that column is optional in the schema).
 
 Usage:
     # Single row (smoke test)
@@ -22,7 +27,7 @@ Usage:
     # Range of rows
     python scripts/trivia_images/generate.py --rows 3-20
 
-    # All remaining (col Q filled, col D empty)
+    # All remaining (question-image prompt filled, not yet marked complete)
     python scripts/trivia_images/generate.py --all
 
     # Force regenerate even if the local file exists / D is ✓
@@ -57,22 +62,43 @@ from sheet_schema import (  # noqa: E402
     SHEET_ID,
     SHEET_TAB,
     SheetSchema,
+    a1_tab,
+)
+from image_optimize import (  # noqa: E402
+    GAME_HEIGHT,
+    GAME_WIDTH,
+    optimize_image_bytes,
 )
 
 registry.discover()
 _openart_image = registry._tools["openart_image"]
 
 # Pipeline-local image library. Gitignored under scripts/trivia_images/library/
-# alongside the code that produces it.
+# alongside the code that produces it. Full-res originals live directly in
+# LIBRARY_DIR; the 512×384 game-optimized copies go in the `resized/` subdir
+# (mirrors the Drive layout: originals + a Resized subfolder).
 LIBRARY_DIR = Path(__file__).resolve().parent / "library"
+RESIZED_DIR = LIBRARY_DIR / "resized"
+
+
+def _write_resized(original: Path) -> Path:
+    """Write a 512×384 lossless-PNG copy of `original` into RESIZED_DIR.
+
+    Leaves the original untouched. Returns the resized path
+    (`resized/<stem>.png`).
+    """
+    RESIZED_DIR.mkdir(parents=True, exist_ok=True)
+    dest = RESIZED_DIR / f"{original.stem}.png"
+    dest.write_bytes(optimize_image_bytes(original.read_bytes()))
+    return dest
 
 MODEL = "Nano Banana Pro"
 ASPECT = "4:3"          # matches the "4:3 aspect ratio" trailer in every prompt
 RESOLUTION = "2K"       # 1K / 2K / 4K available; 2K is the quality/cost sweet spot
 
 # Columns are resolved by header label at runtime via SheetSchema —
-# inserting/reordering columns in the Brian tab is safe so long as the
-# header labels stay the same.
+# inserting/reordering columns in any question tab is safe so long as
+# the header labels stay the same.
 
 
 def _build_sheets():
@@ -111,7 +137,7 @@ def _resolve_rows(sheets, schema: SheetSchema, args) -> list[int]:
         # Pull every data row so we can filter by "Q filled, complete empty".
         from sheet_schema import index_to_letter
         last = index_to_letter(schema.max_index() + 4)
-        values = _read_range(sheets, f"{SHEET_TAB}!A{DATA_START_ROW}:{last}1000")
+        values = _read_range(sheets, f"{a1_tab(SHEET_TAB)}!A{DATA_START_ROW}:{last}1000")
         rows = []
         for i, v in enumerate(values):
             row_num = DATA_START_ROW + i
@@ -122,15 +148,25 @@ def _resolve_rows(sheets, schema: SheetSchema, args) -> list[int]:
     sys.exit("specify one of --row N | --rows N-M | --all")
 
 
-def _mark_complete(sheets, schema: SheetSchema, row: int) -> None:
-    """Write '✓' into the `image complete` column of the given row."""
-    col = schema.letter("complete")
+def _mark_complete(sheets, schema: SheetSchema, row: int) -> str | None:
+    """Write '✓' into the `image complete` column of the given row.
+
+    Returns the column letter written, or None if the tab has no
+    completion column (the 1-100 layout doesn't — disk presence is the
+    completion signal there). `complete` is an OPTIONAL_FIELDS entry, so
+    `schema.letter` raises KeyError when the column is absent.
+    """
+    try:
+        col = schema.letter("complete")
+    except KeyError:
+        return None
     sheets.spreadsheets().values().update(
         spreadsheetId=SHEET_ID,
-        range=f"{SHEET_TAB}!{col}{row}",
+        range=f"{a1_tab(SHEET_TAB)}!{col}{row}",
         valueInputOption="USER_ENTERED",
         body={"values": [["✓"]]},
     ).execute()
+    return col
 
 
 def _output_path(number: str, variants: int) -> list[Path]:
@@ -154,6 +190,36 @@ def _existing_variants(number: str) -> list[Path]:
     return found
 
 
+def _optimize_library() -> int:
+    """Backfill: write a 512×384 resized/ copy for every original in the
+    library. Originals are left untouched; existing resized copies are
+    overwritten (idempotent).
+    """
+    if not LIBRARY_DIR.exists():
+        print(f"no library at {LIBRARY_DIR}")
+        return 0
+    images: list[Path] = []
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        # Top-level originals only — don't recurse into resized/.
+        images.extend(sorted(LIBRARY_DIR.glob(f"*{ext}")))
+    if not images:
+        print(f"library has no originals: {LIBRARY_DIR}")
+        return 0
+
+    print(f"backfilling resized/ for {len(images)} original(s) → {GAME_WIDTH}×{GAME_HEIGHT} PNG\n")
+    done = failed = 0
+    for p in images:
+        try:
+            resized = _write_resized(p)
+            print(f"  ✓ {p.name} → resized/{resized.name}  ({resized.stat().st_size//1024} KB)")
+            done += 1
+        except Exception as e:
+            print(f"  ✗ {p.name}: {e}", file=sys.stderr)
+            failed += 1
+    print(f"\ndone. {done} resized, {failed} failed.")
+    return 1 if failed else 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     grp = ap.add_mutually_exclusive_group(required=False)
@@ -171,7 +237,13 @@ def main() -> int:
                     help="run the browser headless (after first login)")
     ap.add_argument("--sleep-between", type=float, default=1.5,
                     help="seconds to wait between rows (default 1.5)")
+    ap.add_argument("--optimize-library", action="store_true",
+                    help=(f"backfill: write a {GAME_WIDTH}×{GAME_HEIGHT} resized/ copy for "
+                          f"every original in the local library (originals untouched), then exit"))
     args = ap.parse_args()
+
+    if args.optimize_library:
+        return _optimize_library()
 
     if args.variants < 1:
         sys.exit("--variants must be ≥ 1")
@@ -188,13 +260,13 @@ def main() -> int:
     # if the prompt column has moved.
     from sheet_schema import index_to_letter
     last_letter = index_to_letter(schema.max_index() + 4)
-    range_a1 = f"{SHEET_TAB}!A{min(rows)}:{last_letter}{max(rows)}"
+    range_a1 = f"{a1_tab(SHEET_TAB)}!A{min(rows)}:{last_letter}{max(rows)}"
     block = _read_range(sheets, range_a1)
     row_to_fields: dict[int, dict[str, str]] = {}
     for offset, v in enumerate(block):
         row_to_fields[min(rows) + offset] = _row_fields(schema, v)
 
-    print(f"Brian tab — {len(rows)} target row(s):")
+    print(f"{SHEET_TAB} tab — {len(rows)} target row(s):")
     plan: list[tuple[int, dict[str, str], list[Path]]] = []
     for r in rows:
         f = row_to_fields.get(r, {"number": "", "complete": "", "prompt": ""})
@@ -248,10 +320,19 @@ def main() -> int:
             print(f"  ✗ row {r}: {result.error}", file=sys.stderr)
         else:
             for s in result.data.get("saved_paths", []):
-                print(f"  ✓ {s}")
+                orig = Path(s)
+                # Keep the full-res original; write a 512×384 lossless-PNG copy
+                # into resized/ for the game.
+                resized = _write_resized(orig)
+                kb = resized.stat().st_size // 1024
+                print(f"  ✓ {orig.name}  +  resized/{resized.name} "
+                      f"({GAME_WIDTH}×{GAME_HEIGHT} PNG, {kb} KB)")
             if not args.no_mark:
-                _mark_complete(sheets, schema, r)
-                print(f"  ✓ marked {schema.letter('complete')}{r} = ✓")
+                col = _mark_complete(sheets, schema, r)
+                if col:
+                    print(f"  ✓ marked {col}{r} = ✓")
+                else:
+                    print(f"  · skipped complete-mark (no 'image complete' column on {SHEET_TAB})")
         if args.sleep_between and r != plan[-1][0]:
             time.sleep(args.sleep_between)
 

@@ -1,12 +1,20 @@
-"""Brian-tab schema and header-row resolver for trivia_images.
+"""Sheet schema and header-row resolver for trivia_images.
 
-The Brian tab has two header rows: row 1 holds section labels (e.g.
-"image drive", "image complete") and row 2 holds the per-column names
-the team types ("Number", "Question text", "Answer 1 (correct)", …).
-Hardcoded column indices (C, D, Q, R, …) broke whenever someone
-inserted a column to the left, so this module resolves field → live
-column letter at runtime by reading **both header rows** once per
-process. Row 2 wins when a label appears in both.
+The 1-100 tab is the canonical layout. Its two header rows: row 1 holds
+section labels (e.g. "GPT", "Stella's Config") and row 2 holds the
+per-column names the team types ("#", "Question text", "Answer 1
+(correct)", "Question IMAGE Prompt", …). Hardcoded column indices broke
+whenever someone inserted a column to the left, so this module resolves
+field → live column letter at runtime by reading **both header rows**
+once per process. Row 2 wins when a label appears in both.
+
+`FIELD_TO_HEADER` holds the 1-100-tab labels and the resolver requires
+all non-optional ones, so only tabs in that layout resolve. The
+workbook's legacy Brian-style tabs (BrianOld, 1-250, 251-500, …) use
+"Number"/"Question IMAGE", and the RN tab uses "Correct Answer"/
+"Button N"/"Answer IMAGE (CORRECT OR INCORRECT) Prompt"; both differ and
+are skipped by tab discovery. Any future tab created in the 1-100 format
+is picked up automatically.
 
 Single source of truth for both `scripts/trivia_images/generate.py` and
 `scripts/trivia_images/web/server.py`. Adding a column in the sheet is
@@ -22,7 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 
 SHEET_ID = "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk"
-SHEET_TAB = "Brian"      # default tab if discovery hasn't named a preferred one
+SHEET_TAB = "1-100"      # default tab if discovery hasn't named a preferred one
 HEADER_ROWS = (1, 2)    # row 1 = section banners, row 2 = per-column names
 DATA_START_ROW = 3
 
@@ -39,21 +47,29 @@ SCOPES_RO = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 # across the codebase; the labels are what users see, and the only
 # thing that needs to match the sheet. Renaming a tracked label
 # requires updating this map in one place.
+#
+# These are the **1-100-tab** header labels — the current canonical
+# layout for trivia-images. Discovery only surfaces tabs carrying ALL of
+# the required labels below, so tabs in other layouts fall out of the tab
+# list: the legacy Brian-style tabs (BrianOld, 1-250, 251-500, …) use
+# "Number"/"Question IMAGE", and the RN tab uses "Correct Answer"/
+# "Button N"/"Answer IMAGE (CORRECT OR INCORRECT) Prompt". Any future tab
+# created in the 1-100 format is picked up automatically.
 FIELD_TO_HEADER: dict[str, str] = {
-    "number":            "Number",
-    "complete":          "image complete",     # lives in row 1
+    "number":            "#",
+    "complete":          "image complete",   # not present on 1-100; kept optional
     "category":          "Category",
     "mode":              "MODE",
     "question":          "Question text",
     "answer_correct":    "Answer 1 (correct)",
-    "answer_2":          "Answer  2",          # the sheet has two spaces in these labels
-    "answer_3":          "Answer  3",
-    "answer_4":          "Answer  4",
+    "answer_2":          "Answer 2",
+    "answer_3":          "Answer 3",
+    "answer_4":          "Answer 4",
     "response_correct":  "Response Text - CORRECT",
     "response_incorrect": "Response Text - INCORRECT answer",
     "hint":              "HINT",
-    "prompt_q":          "Question IMAGE",
-    "prompt_r":          "Answer IMAGE (CORRECT)",
+    "prompt_q":          "Question IMAGE Prompt",
+    "prompt_r":          "Answer IMAGE (CORRECT) Prompt",
 }
 
 # Optional fields — resolver returns None for these if the header label

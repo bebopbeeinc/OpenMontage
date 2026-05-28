@@ -1,10 +1,11 @@
 """Trivia images web UI (FastAPI sub-app, mounted by web/server.py at /trivia-images).
 
-Surfaces the Brian tab of the trivia-questions sheet as a per-row table and
+Surfaces the question tabs of the trivia-questions sheet (default `1-100`; every
+tab matching the 1-100 header layout is selectable) as a per-row table and
 exposes the two stages of the trivia-images pipeline:
 
-  - Generate Question:  col Q -> openart_image -> q{N}.<ext>
-  - Generate Answer:    col R + q{N}.<ext> as reference -> openart_image -> q{N}_answer.<ext>
+  - Generate Question:  question-image prompt -> openart_image -> q{N}.<ext>
+  - Generate Answer:    answer-image prompt + q{N}.<ext> as reference -> openart_image -> q{N}_answer.<ext>
 
 Each call runs the OpenArt Playwright driver in a worker thread (the tool
 itself is sync), streams its stdout to a per-job log subscriber, and returns
@@ -29,7 +30,12 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 
 REPO = Path(__file__).resolve().parents[3]
 WEB_DIR = Path(__file__).resolve().parent
@@ -43,6 +49,12 @@ SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
 from tools.publishers.google_drive import FileMeta, get_client  # noqa: E402
+from drive_config import APPROVED_FOLDER_ID, STAGING_FOLDER_ID  # noqa: E402
+from image_optimize import (  # noqa: E402
+    GAME_HEIGHT,
+    GAME_WIDTH,
+    optimize_image_bytes,
+)
 from sheet_schema import (  # noqa: E402
     DATA_START_ROW,
     SHEET_ID,
@@ -66,11 +78,39 @@ def _validate_tab(tab: str | None) -> str:
         raise HTTPException(400, f"unknown tab {tab!r}; allowed: {names}")
     return tab
 
-# Trivia-images Drive layout. Approved is the visible root ("Question
-# Images"); staging is the "WIP" subfolder underneath where freshly-
-# generated images land before the human approves them.
-APPROVED_FOLDER_ID = "1wENmER7aQ6wk23jP6wOggc7mviLAB_pw"
-STAGING_FOLDER_ID = "1NMb2WeJp7HVsO-gzvOA-B0wK83uFta9k"
+# Trivia-images Drive layout (folder IDs in drive_config.py — shared with
+# the batch optimizer). Approved is the visible root ("Question Images");
+# staging is the "WIP" subfolder underneath where freshly-generated images
+# land before the human approves them. The full-res original lives in those
+# two folders; a 512×384 game-optimized copy lives in a "Resized" subfolder
+# of each (created on first use). Both move in lockstep on approval.
+_RESIZED_SUBFOLDER = "Resized"
+_resized_folder_ids: dict[str, str] = {}
+_resized_folder_lock = threading.Lock()
+# Listing-cache lifetime for state resolution. Safe to keep long because every
+# mutation (upload_or_replace / move / trash) invalidates the folder's listing.
+_STATE_LIST_TTL_S = 120.0
+
+
+def resized_folder_id(parent_id: str) -> str:
+    """Resolve (find-or-create + cache) the "Resized" subfolder under `parent_id`.
+
+    The Resized folders are made anyone-with-link readable so the files inside
+    inherit public access — that's what lets /api/image redirect straight to
+    Google's CDN without flipping sharing on each file. Idempotent (no-op if a
+    folder is already public)."""
+    cached = _resized_folder_ids.get(parent_id)
+    if cached:
+        return cached
+    with _resized_folder_lock:
+        cached = _resized_folder_ids.get(parent_id)
+        if cached:
+            return cached
+        client = get_client()
+        meta = client.find_or_create_folder(parent_id, _RESIZED_SUBFOLDER)
+        client.ensure_anyone_reader(meta.id)
+        _resized_folder_ids[parent_id] = meta.id
+        return meta.id
 
 
 def drive_name(number: str, kind: str) -> str:
@@ -92,32 +132,40 @@ def drive_name(number: str, kind: str) -> str:
     return f"{number}{suffix}.png"
 
 
-def state_for(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
-    """Resolve a single trivia-images filename across both folders.
+def _resolve_state(
+    name: str, staging_id: str, approved_id: str
+) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
+    """Resolve a filename across a (staging, approved) folder pair.
 
     Returns (state, primary_meta, approved_coexists_meta).
 
     Staging wins over approved when both exist: after a user approves an
-    image and then re-generates, the new WIP lands in STAGING while the
-    previous approval still sits in APPROVED. Surfacing the WIP keeps the
+    image and then re-generates, the new WIP lands in staging while the
+    previous approval still sits in approved. Surfacing the WIP keeps the
     iteration loop visible in the UI — the user can see their latest
     take and re-approve when happy. The third element exposes the
     coexisting approved meta so /api/approve can trash the stale
     approved before promoting the WIP (otherwise Drive ends up with two
-    files of the same name under APPROVED).
+    files of the same name under approved).
 
-    Approved is computed as "directly under APPROVED but NOT under
-    STAGING" because STAGING is a subfolder of APPROVED in Drive's tree
-    — without that exclusion, every WIP would also read as approved via
-    parent transitivity.
+    Approved is computed as "directly under approved but NOT under
+    staging" because the original staging folder (WIP) is a subfolder of
+    approved (the root) in Drive's tree — without that exclusion, every
+    WIP would also read as approved via parent transitivity. (The Resized
+    subfolders aren't nested in each other, so the exclusion is a no-op
+    there, but it's harmless.)
     """
     client = get_client()
-    staging = client.find_in_folder(STAGING_FOLDER_ID, name)
-    approved = client.find_in_folder(APPROVED_FOLDER_ID, name)
+    # Longer-lived listing cache than the Drive client's 8s default: these
+    # folders only change via this app's own upload/move/trash calls, which
+    # invalidate the cache, so a stale read can't outlast a mutation. Cuts the
+    # repeated multi-second folder listings that made /api/image slow.
+    staging = client.list_folder(staging_id, ttl_s=_STATE_LIST_TTL_S).get(name)
+    approved = client.list_folder(approved_id, ttl_s=_STATE_LIST_TTL_S).get(name)
     approved_is_real = bool(
         approved
-        and APPROVED_FOLDER_ID in approved.parent_ids
-        and STAGING_FOLDER_ID not in approved.parent_ids
+        and approved_id in approved.parent_ids
+        and staging_id not in approved.parent_ids
     )
     if staging:
         return "staging", staging, (approved if approved_is_real else None)
@@ -125,10 +173,110 @@ def state_for(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
         return "approved", approved, None
     return "none", None, None
 
+
+def state_for(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
+    """State of the full-res original (WIP vs Question Images root)."""
+    return _resolve_state(name, STAGING_FOLDER_ID, APPROVED_FOLDER_ID)
+
+
+def state_for_resized(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
+    """State of the 512×384 resized copy (WIP/Resized vs Question Images/Resized)."""
+    return _resolve_state(name, resized_folder_id(STAGING_FOLDER_ID),
+                          resized_folder_id(APPROVED_FOLDER_ID))
+
+
+def migrate_resized(name: str, original_meta: FileMeta, original_state: str) -> FileMeta:
+    """Create the 512×384 resized copy for `name` from its full-res original
+    and upload it to the Resized subfolder matching the original's location
+    (WIP/Resized for staging, Question Images/Resized for approved).
+
+    On-demand backfill for images generated before the resize step existed:
+    /api/image calls this when a resized copy is missing but the original is
+    present, so legacy images migrate themselves the first time they're viewed.
+    The bulk equivalent is scripts/trivia_images/optimize_drive.py.
+    """
+    import tempfile
+
+    client = get_client()
+    data, _mime, _ = client.download_bytes(original_meta.id, original_meta.modified_time)
+    png = optimize_image_bytes(data)
+    parent = APPROVED_FOLDER_ID if original_state == "approved" else STAGING_FOLDER_ID
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        tf.write(png)
+        tmp = Path(tf.name)
+    try:
+        meta = client.upload_or_replace(
+            resized_folder_id(parent), name, tmp, mime_type="image/png",
+        )
+    finally:
+        tmp.unlink(missing_ok=True)
+    return meta   # inherits public from the Resized folder
+
+
+# File IDs already made anyone-with-link readable, so we don't re-check sharing
+# on every request (the check is idempotent but still a Drive round-trip).
+_public_ids: set[str] = set()
+_public_lock = threading.Lock()
+
+
+def ensure_public(file_id: str) -> None:
+    """Grant anyone-with-link read on a Drive file (cached per process).
+
+    Lets the browser fetch it straight from Google's CDN (see _cdn_url) instead
+    of streaming through this server. The trivia image assets are intentionally
+    public — see the /api/image redirect path.
+    """
+    with _public_lock:
+        if file_id in _public_ids:
+            return
+    get_client().ensure_anyone_reader(file_id)
+    with _public_lock:
+        _public_ids.add(file_id)
+
+
+def _cdn_url(file_id: str, *, thumb: bool) -> str:
+    """Public Drive CDN URL for a file. `thumbnail` serves a CDN-resized image
+    (Google does the downscale), so even a full-res original is cheap to fetch."""
+    size = 256 if thumb else 1024
+    return f"https://drive.google.com/thumbnail?id={file_id}&sz=w{size}"
+
+
+# Names with an in-flight background migration, so concurrent /api/image
+# requests for the same image don't each kick off a redundant download+resize.
+_migrating: set[str] = set()
+_migrating_lock = threading.Lock()
+
+
+def _schedule_resized_migration(name: str, original_meta: FileMeta,
+                                original_state: str) -> None:
+    """Fire-and-forget backfill of the resized copy.
+
+    Lets /api/image return immediately (serving the original's already-generated
+    CDN thumbnail) instead of blocking on a 2–5 MB download + optimize + upload.
+    Deduped per name so a grid full of legacy images doesn't migrate the same
+    one twice at once.
+    """
+    with _migrating_lock:
+        if name in _migrating:
+            return
+        _migrating.add(name)
+
+    async def _run() -> None:
+        try:
+            await asyncio.to_thread(migrate_resized, name, original_meta, original_state)
+        except Exception:
+            pass
+        finally:
+            with _migrating_lock:
+                _migrating.discard(name)
+
+    asyncio.create_task(_run())
+
 # Sheet location is owned by sheet_schema.py — the schema resolves
 # column letters by reading the header rows at runtime so adding a
-# column in Brian doesn't break this app. The fields we read/write are
-# listed below; see FIELD_TO_HEADER in sheet_schema for the labels.
+# column (or switching between tabs with different layouts) doesn't
+# break this app. The fields we read/write are listed below; see
+# FIELD_TO_HEADER in sheet_schema for the accepted labels per field.
 ROW_FIELDS = [
     "number", "complete", "category", "mode", "question",
     "answer_correct", "answer_2", "answer_3", "answer_4",
@@ -186,78 +334,6 @@ class Job:
 jobs: dict[str, Job] = {}
 recent_job_ids: deque[str] = deque(maxlen=200)
 log_subscribers: dict[str, list[asyncio.Queue[str]]] = {}
-
-# Server-side downsized JPEGs keyed by (file_id, modified_time, max_dim).
-# Without this, /api/image was shipping 5 MB originals to render 96x72
-# thumbnails — first paint ate ~480 * 5 MB of bandwidth and serialized
-# behind _api_lock so /api/active polls were stuck behind the queue.
-# Pillow resize is ~50-100 ms per 5 MB image; cached results land in
-# ~30 KB so the second hit is near-instant.
-_thumb_cache: dict[tuple[str, str, int], tuple[float, bytes]] = {}
-_thumb_lock = threading.Lock()
-_THUMB_TTL_S = 600.0
-_THUMB_MAX_DIM = 256
-
-
-def _resize_to_thumb_jpeg(image_bytes: bytes, max_dim: int = _THUMB_MAX_DIM) -> bytes:
-    """Downsize raw image bytes to a `max_dim`-on-longest-edge JPEG.
-
-    Synchronous; wrap in asyncio.to_thread when calling from a handler.
-    Returns JPEG at quality 85 — visually indistinguishable from PNG
-    at thumbnail scale and ~10x smaller than the equivalent PNG.
-
-    This is the fallback path: when Drive's thumbnailLink CDN doesn't
-    return a usable thumbnail (or we don't have one in the metadata),
-    we pull the full file and resize here. The fast path uses
-    `_fetch_drive_thumbnail` which downloads ~30 KB directly from
-    Drive's CDN at the requested size, skipping the 5 MB transit.
-    """
-    from PIL import Image
-    import io as _io
-    src = Image.open(_io.BytesIO(image_bytes))
-    src.thumbnail((max_dim, max_dim), Image.LANCZOS)
-    # JPEG can't carry an alpha channel; flatten transparent originals
-    # against white so the visible bounds match the user's expectation.
-    if src.mode in ("RGBA", "LA", "P"):
-        background = Image.new("RGB", src.size, (255, 255, 255))
-        if src.mode == "P":
-            src = src.convert("RGBA")
-        background.paste(src, mask=src.split()[-1] if src.mode in ("RGBA", "LA") else None)
-        src = background
-    out = _io.BytesIO()
-    src.save(out, format="JPEG", quality=85, optimize=True)
-    return out.getvalue()
-
-
-def _fetch_drive_thumbnail(thumbnail_link: str, max_dim: int = _THUMB_MAX_DIM) -> Optional[bytes]:
-    """Fetch a downsized thumbnail directly from Drive's CDN.
-
-    Drive populates a signed `thumbnailLink` alongside the file metadata
-    for image-like content; the URL embeds an auth token, so a plain
-    HTTPS GET is enough — no SA bearer header needed. Substituting the
-    `=sNN` parameter lets us pick the exact size we display, so we
-    transit ~30 KB instead of the 5 MB original.
-
-    Returns None on any HTTP error (including 4xx rate limits) so the
-    caller can fall back to the full-download-plus-resize path. The
-    browser only ever sees /api/image (the proxy URL), so a CDN-side
-    rate limit affects one server-side IP rather than 480 browser
-    connections — and the resulting thumbnail bytes are cached for 10
-    minutes via `_thumb_cache`, so the burst is naturally amortized.
-    """
-    if not thumbnail_link:
-        return None
-    import re
-    url = re.sub(r"=s\d+(-c)?$", f"=s{max_dim}", thumbnail_link)
-    if "=s" not in url:
-        url = f"{url}=s{max_dim}"
-    try:
-        import urllib.request, urllib.error
-        req = urllib.request.Request(url, headers={"User-Agent": "trivia-images-proxy/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.read()
-    except Exception:
-        return None
 
 # Serializes the worker — the OpenArt Playwright driver opens a fresh
 # Chromium per call and uses a single persisted login state at
@@ -384,8 +460,9 @@ def _discover_tabs(refresh: bool = False) -> list[dict]:
       2. values.batchGet for every tab's header rows (rows 1-2) in a
          single request
     We then resolve each candidate's schema in pure Python — tabs
-    without the required header labels (e.g. "Topics", "RN" pivot
-    tables) are skipped silently. Resolved schemas are warmed into
+    without the 1-100 layout's required header labels (the "Topics"
+    pivot, the legacy Brian-style tabs, and the differently-labelled
+    "RN" tab) are skipped silently. Resolved schemas are warmed into
     _schema_cache as a side effect so /api/rows doesn't pay another
     header fetch when the user clicks a tab.
 
@@ -640,7 +717,7 @@ def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | Non
 
     Pass `None` for any field you don't want to touch. Passing both as
     None is a programming error (caller should validate before calling).
-    Column letters are resolved at runtime from the Brian header rows
+    Column letters are resolved at runtime from the tab's header rows
     so inserting/reordering columns in the sheet stays safe.
     """
     if prompt_q is None and prompt_r is None:
@@ -728,6 +805,7 @@ def _run_generation_sync(job: Job, prompt: str,
         inputs["reference_image_path"] = str(reference_image_path)
 
     saved_path: Path | None = None
+    resized_path: Path | None = None
     try:
         result = tool.execute(inputs)
         if not result.success:
@@ -739,20 +817,38 @@ def _run_generation_sync(job: Job, prompt: str,
         saved_path = Path(saved[0])
         _emit(job, f"  ✓ generated ({result.duration_seconds:.1f}s)")
 
-        # Upload to staging. The Drive name is the canonical {N}{Q|A}.png
-        # regardless of what extension the CDN gave us.
         dest_name = drive_name(job.slug.lstrip("q"), job.kind)
         client = get_client()
+
+        # 1) Full-res original → staging (WIP). Kept "just in case" and used as
+        #    the answer-remix reference (best fidelity).
         meta = client.upload_or_replace(STAGING_FOLDER_ID, dest_name, saved_path)
         job.extra["drive_file_id"] = meta.id
         job.extra["drive_name"] = meta.name
         job.output_path = f"drive://{meta.name}"
-        _emit(job, f"  ✓ uploaded to staging: {meta.name} (id={meta.id})")
+        _emit(job, f"  ✓ original uploaded to WIP: {meta.name} (id={meta.id})")
+
+        # 2) 512×384 lossless-PNG copy → WIP/Resized. This is what the UI shows
+        #    and the game consumes; on approval it moves to the approved
+        #    Resized subfolder in lockstep with the original.
+        resized_bytes = optimize_image_bytes(saved_path.read_bytes())
+        import tempfile as _tf
+        fd, rstr = _tf.mkstemp(prefix=f"trivia-{job.slug}-{job.kind}-resized-", suffix=".png")
+        _os.close(fd)
+        resized_path = Path(rstr)
+        resized_path.write_bytes(resized_bytes)
+        rmeta = client.upload_or_replace(
+            resized_folder_id(STAGING_FOLDER_ID), dest_name, resized_path,
+            mime_type="image/png",
+        )
+        job.extra["resized_file_id"] = rmeta.id
+        _emit(job, f"  ✓ resized → {GAME_WIDTH}×{GAME_HEIGHT} PNG "
+                   f"({len(resized_bytes) // 1024} KB) uploaded to WIP/Resized")
     finally:
-        # Always unlink the tempfile(s). Both the path we allocated and the
-        # path the driver actually wrote (it may have rewritten the extension
-        # from .jpg to .png/.webp).
-        for p in {output_path, saved_path} - {None}:
+        # Always unlink the tempfile(s): the path we allocated, the path the
+        # driver actually wrote (it may have rewritten the extension from .jpg
+        # to .png/.webp), and the resized temp.
+        for p in {output_path, saved_path, resized_path} - {None}:
             try:
                 if p and p.exists():
                     p.unlink()
@@ -801,9 +897,9 @@ async def _run_job(job: Job) -> None:
         if job.kind == "question_image":
             prompt = job.extra.get("prompt", "").strip()
             if not prompt:
-                raise RuntimeError("col Q prompt is empty for this row")
+                raise RuntimeError("question-image prompt is empty for this row")
             await asyncio.to_thread(_run_generation_sync, job, prompt, None)
-            # Mark col D = ✓ after the file lands (matches generate.py default).
+            # Mark the completion column ✓ after the file lands (matches generate.py default).
             if not job.extra.get("no_mark"):
                 try:
                     marked = await asyncio.to_thread(_mark_question_complete, job.tab, job.row)
@@ -816,7 +912,7 @@ async def _run_job(job: Job) -> None:
         elif job.kind == "answer_image":
             prompt = job.extra.get("prompt", "").strip()
             if not prompt:
-                raise RuntimeError("col R prompt is empty for this row")
+                raise RuntimeError("answer-image prompt is empty for this row")
             _emit(job, "  → downloading reference (question image) from Drive…")
             ref_tempfile = await asyncio.to_thread(_stage_reference_from_drive, job.slug)
             await asyncio.to_thread(
@@ -927,13 +1023,15 @@ async def api_rows(tab: str | None = None, refresh: int = 0):
 
 @app.post("/api/prompts")
 async def api_prompts(payload: dict):
-    """Persist prompt edits back to the Brian sheet.
+    """Persist prompt edits back to the selected question tab.
 
-    Payload: {row, prompt_q?, prompt_r?}. At least one of prompt_q / prompt_r
-    must be present. The Brian sheet is the source of truth — this endpoint
-    writes col Q and/or col R for the given row, and the next /api/rows
-    fetch will reflect the new values. Editing here does NOT regenerate the
-    images; the user re-runs generate to refresh the renders.
+    Payload: {tab?, row, prompt_q?, prompt_r?}. `tab` defaults to SHEET_TAB
+    when omitted. At least one of prompt_q / prompt_r must be present. The
+    sheet is the source of truth — this endpoint writes the question-image
+    and/or answer-image prompt column (resolved by header label) for the given
+    row, and the next /api/rows fetch will reflect the new values. Editing here
+    does NOT regenerate the images; the user re-runs generate to refresh the
+    renders.
 
     A whitespace-only prompt clears the cell (sheet stores '' — same effect
     as deleting the cell content in the Sheets UI). Empty string is OK; we
@@ -1083,8 +1181,12 @@ def _kind_alias(kind: str) -> str:
 async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int = 0):
     """Stream an image for one (row slug, kind) pair, sourced from Drive.
 
+    Serves the **512×384 resized** copy (what the game uses), so the UI shows
+    exactly what ships. Falls back to the full-res original for legacy images
+    that predate resized copies.
+
     Default routing: staging wins over approved so the iteration loop is
-    visible (see state_for). Pass `?variant=approved` to fetch the
+    visible (see _resolve_state). Pass `?variant=approved` to fetch the
     coexisting approved file explicitly — the UI uses this when both
     thumbnails are rendered side-by-side and the user clicks the
     approved one. 404 when neither folder has it (or, for
@@ -1102,81 +1204,50 @@ async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int
         raise HTTPException(400, "bad slug")
     name = drive_name(number, kind)
 
-    state, meta, approved_coexists = await asyncio.to_thread(state_for, name)
+    # Resolve which Drive file to serve. Prefer the 512×384 resized copy; fall
+    # back to the full-res original (and kick off a background migration so the
+    # resized exists next time). This fallback must also cover variant=approved:
+    # the row data marks "has approved copy" from the *original* folders, so the
+    # UI may ask for an approved variant whose resized copy doesn't exist yet —
+    # without the original fallback that 404s and the thumbnail breaks.
+    rstate, rmeta, rapproved = await asyncio.to_thread(state_for_resized, name)
     if variant == "approved":
-        # The explicit approved variant covers two cases:
-        #   1. state == "staging" with an approved coexisting → use that
-        #      coexisting meta (state_for normally surfaces the staging
-        #      file here; the user wants the canonical one instead)
-        #   2. state == "approved" → fall through; meta already points at
-        #      the approved file
-        if approved_coexists is not None:
-            meta = approved_coexists
+        target = rapproved or (rmeta if rstate == "approved" else None)
+    else:
+        target = rmeta   # primary (staging wins over approved; see _resolve_state)
+    state = "approved" if variant == "approved" else rstate
+    from_resized = target is not None   # resized files inherit public from the folder
+
+    if target is None:
+        # No suitable resized — fall back to the original folders.
+        ostate, ometa, oapproved = await asyncio.to_thread(state_for, name)
+        if variant == "approved":
+            target = oapproved or (ometa if ostate == "approved" else None)
+            if target is None:
+                raise HTTPException(404, f"no approved variant for {slug}/{kind}")
             state = "approved"
-        elif state != "approved":
-            raise HTTPException(404, f"no approved variant for {slug}/{kind}")
-    if meta is None:
-        raise HTTPException(404, f"no image for {slug}/{kind}")
+        else:
+            if ometa is None:
+                raise HTTPException(404, f"no image for {slug}/{kind}")
+            target, state = ometa, ostate
+        # Serving an original means its resized copy is missing — create it in
+        # the background so subsequent views come from Resized.
+        _schedule_resized_migration(name, target, state)
 
-    if thumb:
-        import time as _time
-        cache_key = (meta.id, meta.modified_time or "", _THUMB_MAX_DIM)
-        now = _time.time()
-        with _thumb_lock:
-            cached = _thumb_cache.get(cache_key)
-            if cached and now - cached[0] < _THUMB_TTL_S:
-                data = cached[1]
-                return Response(
-                    content=data, media_type="image/jpeg",
-                    headers={
-                        "Cache-Control": "private, max-age=600",
-                        "X-Drive-State": state,
-                        "X-Drive-File-Id": meta.id,
-                        "X-Drive-Modified": meta.modified_time or "",
-                        "X-Thumb": "cached",
-                    },
-                )
-        # Fast path: pull the small pre-rendered thumbnail directly from
-        # Drive's CDN (~30 KB). The signed token in `thumbnailLink` is
-        # what authenticates; no SA bearer needed.
-        data: bytes | None = None
-        source = "cdn"
-        if meta.thumbnail_link:
-            data = await asyncio.to_thread(_fetch_drive_thumbnail, meta.thumbnail_link)
-        if data is None:
-            # CDN didn't cough one up (rate limit, missing thumbnail,
-            # non-image mime). Pull the full file and resize in
-            # process — slower per request, but the result is cached so
-            # we only pay it once per (file_id, modified_time).
-            full_bytes, _full_mime, _mtime = await asyncio.to_thread(
-                get_client().download_bytes, meta.id, meta.modified_time,
-            )
-            data = await asyncio.to_thread(_resize_to_thumb_jpeg, full_bytes)
-            source = "resize"
-        with _thumb_lock:
-            _thumb_cache[cache_key] = (now, data)
-        return Response(
-            content=data, media_type="image/jpeg",
-            headers={
-                "Cache-Control": "private, max-age=600",
-                "X-Drive-State": state,
-                "X-Drive-File-Id": meta.id,
-                "X-Drive-Modified": meta.modified_time or "",
-                "X-Thumb": source,
-            },
-        )
-
-    data, mime, mtime = await asyncio.to_thread(
-        get_client().download_bytes, meta.id, meta.modified_time,
-    )
-    return Response(
-        content=data,
-        media_type=mime,
+    # Serve straight from Google's CDN: 302 to the Drive CDN URL so the browser
+    # fetches the image directly (the CDN does any downscaling via `?sz=`) and
+    # this server stays out of the byte path. Resized files inherit public
+    # access from the Resized folder, so no per-file sharing call is needed;
+    # only an original served via fallback needs to be made public itself.
+    if not from_resized:
+        await asyncio.to_thread(ensure_public, target.id)
+    return RedirectResponse(
+        _cdn_url(target.id, thumb=bool(thumb)),
+        status_code=302,
         headers={
-            "Cache-Control": "private, max-age=300",
+            "Cache-Control": "private, max-age=600",
             "X-Drive-State": state,
-            "X-Drive-File-Id": meta.id,
-            "X-Drive-Modified": mtime,
+            "X-Drive-File-Id": target.id,
         },
     )
 
@@ -1230,6 +1301,24 @@ async def api_approve(payload: dict):
         add_parents=[APPROVED_FOLDER_ID],
         remove_parents=[STAGING_FOLDER_ID],
     )
+
+    # Lockstep: promote the 512×384 resized copy from WIP/Resized to the
+    # approved Resized subfolder so the game's approved-Resized view tracks the
+    # approved originals. Same stale-approved trash as the original. Best-effort
+    # — a missing resized (e.g. a legacy image generated before resized copies
+    # existed) just means there's nothing to promote.
+    resized_promoted = False
+    rstate, rmeta, rapproved_coexists = await asyncio.to_thread(state_for_resized, name)
+    if rmeta is not None and rstate != "approved":
+        if rapproved_coexists is not None:
+            await asyncio.to_thread(get_client().trash, rapproved_coexists.id)
+        await asyncio.to_thread(
+            get_client().move, rmeta.id,
+            add_parents=[resized_folder_id(APPROVED_FOLDER_ID)],
+            remove_parents=[resized_folder_id(STAGING_FOLDER_ID)],
+        )
+        resized_promoted = True
+
     return {
         "ok": True,
         "row": row,
@@ -1240,6 +1329,7 @@ async def api_approve(payload: dict):
         "modified_time": new_meta.modified_time,
         "state": "approved",
         "replaced_prior_approval": approved_coexists is not None,
+        "resized_promoted": resized_promoted,
     }
 
 

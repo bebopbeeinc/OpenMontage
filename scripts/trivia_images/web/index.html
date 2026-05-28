@@ -373,7 +373,7 @@ let activePollTimer = null;
 // same approved/staging Drive folders; row numbers don't overlap
 // across tabs so Drive filenames stay unique.
 let availableTabs = [];                  // [{name, gid, index}, ...]
-let currentTab = 'Brian';
+let currentTab = '1-100';   // overridden by /api/tabs default on load
 // True while /api/rows is in flight — suppresses renderRows() so the
 // background active-poll doesn't repaint the loading placeholder.
 let loadingRows = false;
@@ -470,7 +470,10 @@ function renderThumb({slug, short, thumbnailLink, cacheKey, fullSrcQuery, tag}) 
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagHtml = tag ? `<span class="thumb-tag ${tag}">${tag === 'approved' ? 'APPROVED' : 'WIP'}</span>` : '';
-  return `<div class="thumb">${tagHtml}<img data-src="${thumbSrc}" alt="${escapeHtml(slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onclick="showModal(this.dataset.full)" /></div>`;
+  // referrerpolicy=no-referrer: /api/image 302-redirects to Google's Drive CDN,
+  // which returns 429 (anti-hotlink) when a cross-origin Referer is present.
+  // Sending no Referer makes the CDN serve the image.
+  return `<div class="thumb">${tagHtml}<img data-src="${thumbSrc}" referrerpolicy="no-referrer" alt="${escapeHtml(slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onclick="showModal(this.dataset.full)" /></div>`;
 }
 
 // Promotes <img data-src> to <img src> as the element nears the viewport.
@@ -561,7 +564,7 @@ function rowMatchesFilter(r) {
 function rowEligible(r, kind) {
   // What prerequisites must hold for this row to be selectable for `kind`?
   if (kind === 'question_image') return !!r.prompt_q;
-  // answer_image needs col R; the question image is required at run-time but
+  // answer_image needs the answer-image prompt; the question image is required at run-time but
   // we don't gate selection on it — if Q is missing, we'll auto-add Q to the
   // batch (see toggleKind / toggleAll), so the worker queues Q first and the
   // file is on disk by the time the A job runs.
@@ -601,7 +604,7 @@ function renderRows() {
     const hasQImg = hasImg(r, 'question_image');
     const hasAImg = hasImg(r, 'answer_image');
     // A can run when we have a Q reference (either already on Drive, or
-    // pending in this same batch via the auto-cascade) and the col R prompt.
+    // pending in this same batch via the auto-cascade) and the answer-image prompt.
     const canAnswer = hasR;
     const selQ = selected.question_image.has(r.row);
     const selA = selected.answer_image.has(r.row);
@@ -797,7 +800,7 @@ async function loadTabs(refresh = false) {
     const data = await api(refresh ? 'api/tabs?refresh=1' : 'api/tabs');
     availableTabs = data.tabs || [];
     if (!tabNames().includes(currentTab)) {
-      currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || 'Brian';
+      currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || '1-100';
     }
   } catch (e) {
     // Server down or unreachable — leave availableTabs empty so the
@@ -1127,14 +1130,13 @@ function switchTab(tab) {
   if (tab === 'jobs') loadJobs();
 }
 
-async function showModal(src) {
+function showModal(src) {
   const root = $('modal-root');
-  // Full-resolution image is multi-MB and can take a few seconds to
-  // arrive (Drive download + tunnel). fetch() + a stream reader lets
-  // us show actual download progress instead of a static spinner —
-  // important when the user is on a slow connection and the modal
-  // would otherwise look frozen for tens of seconds. The bytes are
-  // collected into a Blob, then handed to the <img> as an object URL.
+  // The image is served via /api/image, which 302-redirects to Drive's public
+  // CDN. We let a plain <img src> follow the redirect (a cross-origin fetch()
+  // would be blocked by CORS reading Google's CDN response). The asset is the
+  // ~270 KB 512×384 copy, so it arrives quickly — a spinner until onload is
+  // enough; no streaming-progress UI needed.
   root.innerHTML = `
     <div class="modal-backdrop" onclick="this.remove()">
       <div class="modal-spinner"></div>
@@ -1144,51 +1146,23 @@ async function showModal(src) {
   const backdrop = root.querySelector('.modal-backdrop');
   const spinner = backdrop.querySelector('.modal-spinner');
   const status = backdrop.querySelector('.modal-status');
-  let reader = null;
-  // Close-during-load: cancel the stream so we don't keep downloading
-  // bytes the user no longer wants. The backdrop's onclick removes it,
-  // and we check `isConnected` on every chunk to detect that.
-  try {
-    const resp = await fetch(src);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const total = parseInt(resp.headers.get('Content-Length') || '0', 10);
-    reader = resp.body.getReader();
-    const chunks = [];
-    let received = 0;
-    while (true) {
-      const {done, value} = await reader.read();
-      if (done) break;
-      if (!backdrop.isConnected) {
-        try { await reader.cancel(); } catch (_) {}
-        return;
-      }
-      chunks.push(value);
-      received += value.length;
-      const mb = (received / 1048576).toFixed(1);
-      if (total) {
-        const pct = Math.round(received / total * 100);
-        const totalMb = (total / 1048576).toFixed(1);
-        status.textContent = `loading ${pct}% (${mb} / ${totalMb} MB)`;
-      } else {
-        status.textContent = `loading ${mb} MB…`;
-      }
-    }
+  const img = document.createElement('img');
+  // No Referer: the /api/image redirect lands on Google's Drive CDN, which
+  // 429s cross-origin referred embeds (see grid thumbnail note).
+  img.referrerPolicy = 'no-referrer';
+  img.onload = () => {
     if (!backdrop.isConnected) return;
-    const mime = resp.headers.get('Content-Type') || 'image/png';
-    const blob = new Blob(chunks, {type: mime});
-    const url = URL.createObjectURL(blob);
-    const img = document.createElement('img');
-    img.onload = () => URL.revokeObjectURL(url);
-    img.src = url;
     spinner.remove();
     status.remove();
     backdrop.appendChild(img);
-  } catch (e) {
+  };
+  img.onerror = () => {
     if (!backdrop.isConnected) return;
     spinner.remove();
-    status.textContent = `failed: ${e.message}`;
+    status.textContent = 'failed to load';
     status.style.color = 'var(--err)';
-  }
+  };
+  img.src = src;
 }
 
 function closePromptEditor() {
@@ -1261,7 +1235,7 @@ function openPromptEditor(row, slug) {
       <div class="prompt-modal" onclick="event.stopPropagation()">
         <h2>Edit prompts — ${escapeHtml(slug)} (row ${row})</h2>
         <div class="modal-meta">
-          Writes directly to the prompt columns in the Brian sheet.
+          Writes directly to the prompt columns in the selected tab.
           Saving does <b>not</b> regenerate the images — re-run Generate Q/A
           after saving to refresh the renders.
         </div>

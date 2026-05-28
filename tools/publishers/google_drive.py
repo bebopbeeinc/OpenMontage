@@ -51,6 +51,8 @@ constructor.
 from __future__ import annotations
 
 import os
+import socket
+import ssl
 import threading
 import time
 from dataclasses import dataclass
@@ -61,6 +63,17 @@ from typing import Iterable, Optional
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+
+# Transient transport failures worth retrying: Google's load balancer drops the
+# idle persistent TLS connection httplib2 reuses, so the next call surfaces
+# EPIPE / ECONNRESET / an SSL error before any HTTP response. Re-issuing the
+# request makes httplib2 reopen the socket. (HTTP 5xx / 429 are handled
+# separately by googleapiclient's built-in `num_retries` backoff.)
+_TRANSIENT_TRANSPORT = (
+    BrokenPipeError, ConnectionResetError, ConnectionAbortedError,
+    TimeoutError, ssl.SSLError, socket.timeout,
+)
+_TRANSIENT_ERRNOS = {32, 104}   # EPIPE, ECONNRESET
 
 DEFAULT_SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 DEFAULT_SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/drive",)
@@ -152,6 +165,32 @@ class DriveClient:
         self._local.client = d
         return d
 
+    def _execute(self, request, *, num_retries: int = 4):
+        """Execute a Drive API request with transient-failure retries.
+
+        `num_retries` is forwarded to googleapiclient's `.execute()`, which
+        retries HTTP 5xx and 429 with randomized exponential backoff. On top of
+        that we catch dropped-connection errors (EPIPE/ECONNRESET/SSL) — which
+        raise before any HTTP status and so aren't covered by `num_retries` —
+        and re-issue the request, letting httplib2 reopen the socket. Without
+        this, a Drive blip surfaces as an HTTP 500 (or an empty listing → a
+        spurious 404) to the user.
+        """
+        last: BaseException | None = None
+        for attempt in range(4):
+            try:
+                return request.execute(num_retries=num_retries)
+            except _TRANSIENT_TRANSPORT as e:
+                last = e
+            except OSError as e:
+                if e.errno not in _TRANSIENT_ERRNOS:
+                    raise
+                last = e
+            if attempt < 3:
+                time.sleep(0.3 * (2 ** attempt))
+        assert last is not None
+        raise last
+
     # ----- low-level helpers -----
 
     def _meta_from_api(self, f: dict) -> FileMeta:
@@ -191,14 +230,14 @@ class DriveClient:
         page_token: Optional[str] = None
         drive = self._drive()
         while True:
-            resp = drive.files().list(
+            resp = self._execute(drive.files().list(
                 q=f"'{folder_id}' in parents and trashed=false",
                 fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents,thumbnailLink)",
                 pageSize=200,
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
                 pageToken=page_token,
-            ).execute()
+            ))
             for f in resp.get("files", []):
                 files[f["name"]] = self._meta_from_api(f)
             page_token = resp.get("nextPageToken")
@@ -218,6 +257,41 @@ class DriveClient:
         depend on a fresh state."""
         with self._lock:
             self._list_cache.pop(folder_id, None)
+
+    def find_or_create_folder(self, parent_id: str, name: str) -> FileMeta:
+        """Return the subfolder `name` directly under `parent_id`, creating it
+        if absent.
+
+        Folder-typed lookup (vs. `find_in_folder`, which matches any file by
+        name). Serialized under `_api_lock` so two callers racing to create the
+        same subfolder can't end up with duplicates.
+        """
+        safe = name.replace("'", r"\'")
+        with self._api_lock:
+            drive = self._drive()
+            resp = self._execute(drive.files().list(
+                q=(f"'{parent_id}' in parents and trashed=false "
+                   f"and mimeType='application/vnd.google-apps.folder' "
+                   f"and name='{safe}'"),
+                fields="files(id,name,mimeType,modifiedTime,parents)",
+                pageSize=10,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            ))
+            files = resp.get("files", [])
+            if files:
+                return self._meta_from_api(files[0])
+            f = self._execute(drive.files().create(
+                body={
+                    "name": name,
+                    "parents": [parent_id],
+                    "mimeType": "application/vnd.google-apps.folder",
+                },
+                fields="id,name,mimeType,modifiedTime,parents",
+                supportsAllDrives=True,
+            ))
+            self.invalidate_listing(parent_id)
+            return self._meta_from_api(f)
 
     # ----- upload -----
 
@@ -249,19 +323,19 @@ class DriveClient:
         with self._api_lock:
             drive = self._drive()
             if existing:
-                f = drive.files().update(
+                f = self._execute(drive.files().update(
                     fileId=existing.id,
                     media_body=media,
                     fields="id,name,mimeType,modifiedTime,parents",
                     supportsAllDrives=True,
-                ).execute()
+                ))
             else:
-                f = drive.files().create(
+                f = self._execute(drive.files().create(
                     body={"name": dest_name, "parents": [folder_id]},
                     media_body=media,
                     fields="id,name,mimeType,modifiedTime,parents",
                     supportsAllDrives=True,
-                ).execute()
+                ))
 
         meta = self._meta_from_api(f)
         self.invalidate_listing(folder_id)
@@ -291,11 +365,11 @@ class DriveClient:
         # moves of the same file. Two threads racing here without the
         # lock would each see the pre-move parents and double-apply.
         with self._api_lock:
-            cur = drive.files().get(
+            cur = self._execute(drive.files().get(
                 fileId=file_id,
                 fields="id,name,mimeType,modifiedTime,parents",
                 supportsAllDrives=True,
-            ).execute()
+            ))
             cur_parents = set(cur.get("parents") or ())
             adds = [p for p in add_set if p not in cur_parents]
             removes = [p for p in remove_set if p in cur_parents]
@@ -310,7 +384,7 @@ class DriveClient:
             }
             if adds: kwargs["addParents"] = ",".join(adds)
             if removes: kwargs["removeParents"] = ",".join(removes)
-            f = drive.files().update(**kwargs).execute()
+            f = self._execute(drive.files().update(**kwargs))
 
         for fid in adds + removes:
             self.invalidate_listing(fid)
@@ -327,12 +401,12 @@ class DriveClient:
         recoverable for ~30 days from the Shared Drive's trash UI.
         """
         with self._api_lock:
-            f = self._drive().files().update(
+            f = self._execute(self._drive().files().update(
                 fileId=file_id,
                 body={"trashed": True},
                 fields="id,name,mimeType,modifiedTime,parents,trashed",
                 supportsAllDrives=True,
-            ).execute()
+            ))
         # We don't know which folders this lived under without a metadata
         # round-trip, so blow the whole listing cache. Cheap (rebuilt on next
         # access).
@@ -340,14 +414,49 @@ class DriveClient:
             self._list_cache.clear()
         return self._meta_from_api(f)
 
+    # ----- sharing -----
+
+    def ensure_anyone_reader(self, file_id: str) -> None:
+        """Idempotently grant `anyone-with-link: reader` on a file.
+
+        Lets a browser fetch the file straight from Google's CDN
+        (`drive.google.com/thumbnail?id=…`, `…/uc?id=…`) without an auth header
+        and without the soft-throttling Drive applies to anonymous hits on
+        *non-public* service-account files in a Shared Drive. Checks for an
+        existing `anyone` permission first so re-calls are a single list and no
+        write.
+        """
+        with self._api_lock:
+            drive = self._drive()
+            perms = self._execute(drive.permissions().list(
+                fileId=file_id,
+                fields="permissions(id,type,role)",
+                supportsAllDrives=True,
+            )).get("permissions", [])
+            if any(p.get("type") == "anyone" for p in perms):
+                return
+            self._execute(drive.permissions().create(
+                fileId=file_id,
+                body={"type": "anyone", "role": "reader"},
+                fields="id",
+                supportsAllDrives=True,
+            ))
+
     # ----- download -----
 
-    def download_bytes(self, file_id: str, modified_time: str = "") -> tuple[bytes, str, str]:
+    def download_bytes(
+        self, file_id: str, modified_time: str = "", *, mime_hint: Optional[str] = None,
+    ) -> tuple[bytes, str, str]:
         """Fetch the file content.
 
         Cached by (file_id, modified_time) so a re-uploaded file (which
         updates modified_time) invalidates naturally. Returns (bytes,
         mime_type, modified_time).
+
+        Pass `mime_hint` when the caller already knows the content type (e.g.
+        from the listing it just read) to skip a `files.get` metadata round-trip
+        — that halves the Drive calls per uncached fetch. Without it we look the
+        mime up first.
 
         Read path: no `_api_lock`. Each calling thread has its own
         httplib2.Http via `_drive()`, so parallel downloads stream
@@ -367,17 +476,20 @@ class DriveClient:
                 return cached[1], cached[2], modified_time
 
         drive = self._drive()
-        meta = drive.files().get(
-            fileId=file_id,
-            fields="mimeType,modifiedTime",
-            supportsAllDrives=True,
-        ).execute()
-        mime = meta.get("mimeType", "application/octet-stream")
-        mtime = meta.get("modifiedTime", "")
+        if mime_hint:
+            mime, mtime = mime_hint, modified_time
+        else:
+            meta = self._execute(drive.files().get(
+                fileId=file_id,
+                fields="mimeType,modifiedTime",
+                supportsAllDrives=True,
+            ))
+            mime = meta.get("mimeType", "application/octet-stream")
+            mtime = meta.get("modifiedTime", "")
 
-        data = drive.files().get_media(
+        data = self._execute(drive.files().get_media(
             fileId=file_id, supportsAllDrives=True,
-        ).execute()
+        ))
 
         with self._lock:
             self._bytes_cache[key] = (now, data, mime)
