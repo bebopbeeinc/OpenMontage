@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import (
@@ -234,11 +235,22 @@ def ensure_public(file_id: str) -> None:
         _public_ids.add(file_id)
 
 
-def _cdn_url(file_id: str, *, thumb: bool) -> str:
+def _cdn_url(file_id: str, *, thumb: bool, version: str | None = None) -> str:
     """Public Drive CDN URL for a file. `thumbnail` serves a CDN-resized image
-    (Google does the downscale), so even a full-res original is cheap to fetch."""
+    (Google does the downscale), so even a full-res original is cheap to fetch.
+
+    `version` is appended as an otherwise-ignored query param so the browser
+    keys its cache on it. This matters because upload_or_replace reuses the
+    file_id when re-rendering an image (files.update), so the CDN URL is
+    byte-identical across edits. Without a version token the browser serves the
+    stale cached bytes — clearing the cache was the only way to see the new
+    image (refresh fetched fresh metadata but redirected to the same CDN URL).
+    Pass the row's modified_time so a re-render produces a fresh cache key."""
     size = 256 if thumb else 1024
-    return f"https://drive.google.com/thumbnail?id={file_id}&sz=w{size}"
+    url = f"https://drive.google.com/thumbnail?id={file_id}&sz=w{size}"
+    if version:
+        url += f"&v={quote(str(version), safe='')}"
+    return url
 
 
 # Names with an in-flight background migration, so concurrent /api/image
@@ -1197,7 +1209,8 @@ def _kind_alias(kind: str) -> str:
 
 
 @app.get("/api/image/{slug}/{kind}")
-async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int = 0):
+async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int = 0,
+                    v: str | None = None):
     """Stream an image for one (row slug, kind) pair, sourced from Drive.
 
     Serves the **512×384 resized** copy (what the game uses), so the UI shows
@@ -1261,7 +1274,7 @@ async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int
     if not from_resized:
         await asyncio.to_thread(ensure_public, target.id)
     return RedirectResponse(
-        _cdn_url(target.id, thumb=bool(thumb)),
+        _cdn_url(target.id, thumb=bool(thumb), version=v),
         status_code=302,
         headers={
             "Cache-Control": "private, max-age=600",
