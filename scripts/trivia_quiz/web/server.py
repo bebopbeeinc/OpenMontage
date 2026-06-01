@@ -292,9 +292,27 @@ async def _write_status(job: Job, status: str) -> None:
 
 
 async def _run_mark_published(job: Job) -> None:
-    """Status-only flip 'Ready to publish' -> 'Published'. Shared behavior with
-    trivia-short / trivia-reaction — the human's signal that the post is live."""
+    """Flip 'Ready to publish' -> 'Published' (the human's signal the post is
+    live), then best-effort capture the live TikTok video's ID by caption so the
+    row gets a durable link for stats sync. The capture never blocks the flip."""
     await _write_status(job, "Published")
+
+    # Best-effort: the post is live now, so find its TikTok video and store the
+    # id (+ baseline snapshot). Requires TikTok creds/tokens in the environment;
+    # if absent, we skip silently-but-loudly — the daily stats sync will still
+    # match it by caption later.
+    account = os.environ.get("TRIVIA_QUIZ_TIKTOK_ACCOUNT", "dailytrivia.tc")
+    try:
+        from scripts.social_stats.quiz_stats_sync import link_published_video
+        res = await asyncio.to_thread(link_published_video, account, job.slug)
+        if res.get("found"):
+            _emit(job, f"  linked TikTok video {res['video_id']} "
+                       f"(caption match {res['score']}) — stats will track it")
+        else:
+            _emit(job, f"  ⚠ no TikTok video linked yet ({res.get('reason')}); "
+                       f"stats sync will retry by caption")
+    except Exception as e:  # noqa: BLE001
+        _emit(job, f"  ⚠ TikTok video-id capture skipped: {e}")
 
 
 async def _worker(job: Job) -> None:

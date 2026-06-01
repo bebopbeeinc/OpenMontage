@@ -250,18 +250,21 @@ def cmd_auth(account: str) -> int:
     return 0
 
 
-# --- subcommand: fetch -----------------------------------------------------
-def cmd_fetch(account: str, max_videos: int) -> int:
+# --- fetch (reusable) ------------------------------------------------------
+def fetch_stats(account: str, max_videos: int = 20) -> dict:
+    """Pull profile + recent-video stats and return the result dict.
+
+    Also writes it to out/<account>/tiktok_api_stats.json. Importable so other
+    tools (e.g. the Posts_Quiz writeback) can reuse one fetch path.
+    """
     token = _valid_access_token(account)
     out_dir = _out_dir(account)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n=== account '{account}' (Display API) ===", file=sys.stderr)
     user = _get_json(USERINFO_URL, token, {"fields": ",".join(USER_FIELDS)})
     udata = (user.get("data") or {}).get("user", {})
     if not udata:
-        print(f"✗ user/info returned no data: {json.dumps(user, indent=2)}", file=sys.stderr)
-        return 2
+        raise SystemExit(f"✗ user/info returned no data: {json.dumps(user, indent=2)}")
 
     videos = _post_json(
         VIDEOLIST_URL, token,
@@ -276,10 +279,15 @@ def cmd_fetch(account: str, max_videos: int) -> int:
         "profile": udata,
         "videos": vlist,
     }
-    out_json = out_dir / "tiktok_api_stats.json"
-    out_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    (out_dir / "tiktok_api_stats.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
 
-    # Human-readable summary to stdout.
+
+# --- subcommand: fetch -----------------------------------------------------
+def cmd_fetch(account: str, max_videos: int) -> int:
+    print(f"\n=== account '{account}' (Display API) ===", file=sys.stderr)
+    result = fetch_stats(account, max_videos)
+    udata, vlist = result["profile"], result["videos"]
     print(json.dumps({
         "display_name": udata.get("display_name"),
         "followers": udata.get("follower_count"),
@@ -287,7 +295,7 @@ def cmd_fetch(account: str, max_videos: int) -> int:
         "videos": udata.get("video_count"),
         "recent_pulled": len(vlist),
     }, indent=2))
-    print(f"  full data saved → {out_json}", file=sys.stderr)
+    print(f"  full data saved → {_out_dir(account) / 'tiktok_api_stats.json'}", file=sys.stderr)
     return 0
 
 
