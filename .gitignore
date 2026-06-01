@@ -49,12 +49,14 @@ scripts/trivia/library/
 scripts/trivia_images/library/
 scripts/trivia_reaction/library/
 scripts/trivia_quiz/library/
+scripts/social_stats/out/
 
 # Environment & credentials
 .env
 .env.local
 *.env
 .youtube-token.json
+.secrets/
 
 # Stray media downloads (test/scratch clips left in repo root)
 pexels_video_*.mp4

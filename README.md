@@ -193,6 +193,29 @@ VIDEO_GEN_LOCAL_MODEL=wan2.1-1.3b  # or wan2.1-14b, hunyuan-1.5, ltx2-local, cog
 
 </details>
 
+### Sharing secrets across a team (SOPS)
+
+For solo use, keys live in your local `.env`. For a **team**, shared API
+credentials are committed to the repo **encrypted** (SOPS + age) so they're
+versioned with the code and never sit in plaintext. You install `sops` + `age`,
+get the team's age key into your password manager, and run tools through a
+wrapper that decrypts at runtime:
+
+```bash
+brew install sops age
+# put the shared age key at ~/Library/Application Support/sops/age/keys.txt
+secrets/with-secrets.sh .venv/bin/python -m scripts.social_stats.tiktok_api fetch --account dailytrivia
+```
+
+Full bootstrap, onboarding, and rotation steps: [`secrets/README.md`](secrets/README.md).
+
+### Social analytics (`scripts/social_stats/`)
+
+Pull your own published-post stats via the **official TikTok Display API**
+(`tiktok_api.py`) — profile totals plus per-video views/likes/comments/shares,
+no scraping. Requires a TikTok Desktop app (`TIKTOK_CLIENT_KEY` /
+`TIKTOK_CLIENT_SECRET`); see [`scripts/social_stats/tiktok_api.py`](scripts/social_stats/tiktok_api.py) for the one-time setup walkthrough.
+
 ---
 
 ## What You Get With Zero API Keys

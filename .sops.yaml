@@ -1,0 +1,17 @@
+# SOPS configuration — how shared secrets are encrypted in this repo.
+#
+# Files matching the path_regex below are encrypted to the age recipient(s)
+# listed under `age:`. The age PUBLIC key is safe to commit (it's a recipient,
+# not a credential). The matching PRIVATE key is the ONE thing shared with the
+# team out-of-band (password manager / secure channel) and is NEVER committed.
+#
+# Setup: run `age-keygen -o ~/.config/sops/age/keys.txt`, copy the line it
+# prints ("Public key: age1...."), and paste that age1... value below,
+# replacing the placeholder. Then commit this file.
+#
+# To add teammates without sharing a private key, give each their own age key
+# and list every public key under `age:` (comma-separated), then run:
+#     sops updatekeys secrets/secrets.sops.env
+creation_rules:
+  - path_regex: secrets/.*\.sops\.env$
+    age: age13kyutej8qhas0d83xvzm3ujlqxfvwyakhyvtpc0zdum42f5q338s3lhh6h
