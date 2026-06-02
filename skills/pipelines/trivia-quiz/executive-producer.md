@@ -15,17 +15,25 @@ score CTA, ~30s vertical, faceless.
 
 ## Philosophy
 
-Trivia-quiz is **fixture-authoritative in v0.1** (no Sheets integration yet).
-The source of truth is `projects/trivia-quiz/<slug>/inputs/quiz_row.yaml` — a hand-authored
-file that mirrors the future `Posts_Quiz` sheet row. The pipeline owns the
-renders + transient artifacts under `projects/trivia-quiz/<slug>/artifacts/`. Once the
-format is validated on ~5 posts, v0.2 will swap the fixture for a Sheets read.
+Trivia-quiz is **Sheets-authoritative.** The source of truth is the
+`Posts_Quiz` tab (see `scripts/trivia_quiz/sheets.py`); the per-row fixture
+`projects/trivia-quiz/<slug>/inputs/quiz_row.yaml` is the hand-authored input
+that gets seeded into the sheet via `python -m scripts.trivia_quiz.seed_sheet
+--slug <slug>`. Build reads from the sheet with `build --from-sheet`. The
+pipeline owns the renders + transient artifacts under
+`projects/trivia-quiz/<slug>/artifacts/`.
+
+To **author a new pack of rounds**, follow the "Authoring a New Riddle Pack"
+section in `idea-director.md` — it covers the fixture→seed flow, the
+no-duplicate / no-reused-answer rule across the whole catalog, unique captions
+per post, and the `seed_sheet` idempotency gotcha (it won't update an existing
+row — use `sheets.write_post_field` for edits).
 
 Your job:
 
-1. **Read the fixture first.** `projects/trivia-quiz/<slug>/inputs/quiz_row.yaml` is the
-   contract. If it's missing or schema-invalid, fail at idea and ask the human
-   to populate it. Do not invent questions.
+1. **Read the row first.** The `Posts_Quiz` row (or its `quiz_row.yaml` source)
+   is the contract. If it's missing or schema-invalid, fail at idea and ask the
+   human to populate it. Do not invent questions.
 2. **Treat `styles/trivia-quiz.yaml` as the show identity.** Title, default
    hook, score CTA, lockup, segment durations, brand tokens — all live there.
    Don't re-litigate them per row.
@@ -63,11 +71,9 @@ Extract these 7 frames from `renders/final_quiz.mp4`:
 Any defect → auto-fix in the same turn (re-patch `meta.json`, re-render).
 Don't list defects and ask. See `feedback_review_autofix` user memory.
 
-## What This Pipeline Doesn't Do (v0.1)
+## What This Pipeline Doesn't Do
 
-- No Google Sheets read/write — fixture YAML instead
-- No OpenArt backdrop generation — stills + Ken Burns instead
 - No per-row smart link — `styles/trivia-quiz.yaml` placeholder URL on the lockup
 - No reward-loop comment bot — separate feature
-
-All four land in v0.2 once the format is proven.
+- No auto-publish — render + frame-review, then stop for local approval
+  (see `feedback_trivia_local_approval` user memory)

@@ -95,3 +95,72 @@ name, version, timestamp, fixture hash (for staleness detection later).
 `human_approval_default: true`. Present the resolved 3 questions + the
 no-leak guardrail result + the answer ladder, and wait for approval before
 the script stage runs.
+
+## Authoring a New Riddle Pack (Batch)
+
+When the user asks for "the next pack" / "N more riddles" / "enough to post
+twice a day for a week", you are authoring multiple rounds at once. One
+**post = one round = one `quiz_row.yaml` = one `Posts_Quiz` row** with three
+riddles (q1 Easy, q2 Medium, q3 Hard). "Post twice a day for a week" = 14
+posts = 14 rounds, not 14 individual riddles. Confirm the count math in your
+reply.
+
+### The sheet is the source of truth
+
+`Posts_Quiz` is authoritative, not the YAML. For each new round: write
+`projects/trivia-quiz/<slug>/inputs/quiz_row.yaml` **and** seed it:
+
+```bash
+python -m scripts.trivia_quiz.seed_sheet --slug riddles-round-<n>
+```
+
+`seed_sheet` is **idempotent — it appends and SKIPS any slug already on the
+sheet.** It will *not* update an already-seeded row. To change a row that's
+already on the sheet (fix a riddle, vary a caption), edit the fixture and push
+the changed cells with `scripts.trivia_quiz.sheets.write_post_field(sheets,
+slug, field, value)` (field names = `POST_FIELDS`, e.g. `q1_answer`,
+`q2_question`, `caption`, `pinned_comment`). Re-running `seed_sheet` won't do it.
+
+### Before authoring: read what already exists
+
+Pull every existing round from the sheet and avoid repeats:
+
+```bash
+python -c "from scripts.trivia_quiz.sheets import build_sheets, read_posts_bulk; \
+[print(p['slug'], p['post_date'], p['q1_answer'], p['q2_answer'], p['q3_answer']) \
+for p in read_posts_bulk(build_sheets(write=False))]"
+```
+
+(Run with the repo venv: `.venv/bin/python`.)
+
+### Quality bar for a batch
+
+- **No duplicate riddles AND no reused answers across the *entire* catalog**,
+  not just within the new batch. A riddle is defined by its answer, so two
+  riddles sharing an answer is effectively a duplicate — check both the
+  question text and the answer against every existing row. Also watch
+  **paraphrased near-duplicates** that share a gimmick with a different answer
+  (e.g. "many rings but no finger"→tree vs "a ring but no finger"→telephone);
+  a quick `difflib.SequenceMatcher` pass over normalized questions (flag ≥0.80)
+  catches these. Vary the wordplay templates across the pack.
+- **Difficulty ladder** Easy → Medium → Hard, and **q3 `game_themed: true`**
+  with a `game_hook_line` carrying a brand token (`Travel Crush`). Make q3's
+  riddle travel/journey-flavored so the game pivot lands naturally.
+- **No-leak guardrail** (see §3): no answer text in `game_hook_line`,
+  `bottom_cta`, or any caption/pinned field. ⚠️ The coded guard in
+  `scripts/trivia_quiz/build.py` only scans `captions.tiktok` /
+  `captions.instagram` / `captions.pinned_comment` — but current fixtures use
+  the single shared `captions.caption` field, which that guard does **not**
+  check. So **manually verify the answer doesn't appear in `captions.caption`**
+  (watch substrings hiding in hashtags, e.g. "rain" inside `#b`​`rain`​`teaser`).
+- **Unique captions per post.** Do not clone one caption across the batch —
+  each round gets its own caption + pinned comment (vary the hook, the score
+  ask, emoji, and hashtag mix). Identical captions across a pack read as
+  spam and is a common batch mistake.
+- **Dates:** schedule `post_date` per the cadence the user asked for; two posts
+  sharing a date is fine (`order` disambiguates).
+
+Author the fixtures, run the validation checks above, seed, then present a
+summary table (date · slug · the three answers) for review. Seeding leaves rows
+as `final_status: Draft` — building/rendering is a separate, explicitly-
+requested step.
