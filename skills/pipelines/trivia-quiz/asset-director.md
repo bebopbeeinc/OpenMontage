@@ -21,6 +21,15 @@ surprise fact. The prompt should produce a topical PHOTOREAL still — never
 people-portraits (that's ellie's lane), never on-screen text (Remotion draws
 the UI). Example template:
 
+**Never depict the answer object.** The backdrop is on screen through the
+pre-reveal countdown, so showing the answer (a compass, a teapot, a
+lighthouse…) confirms it before the viewer guesses. Evoke the *setting/mood*
+instead and negate the answer object explicitly — e.g. for answer "A compass":
+"weathered nautical chart, brass dividers, **no compass**". This is enforced at
+build time by the negation-aware backdrop spoiler guardrail in
+`scripts/trivia_quiz/build.py::validate_fixture` — a bare mention of the
+answer noun fails the build; "no <answer>" passes.
+
 ```
 photorealistic {scene}, cinematic, golden hour lighting, no people no text,
 shot on Sony A7, depth of field, 9:16 vertical, magazine-quality

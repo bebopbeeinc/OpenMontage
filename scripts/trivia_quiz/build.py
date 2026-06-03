@@ -95,6 +95,44 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
     return yaml.safe_load(path.read_text())
 
 
+# Backdrop spoiler guardrail — the backdrop plays through the pre-reveal
+# countdown, so depicting the answer object confirms the answer before the
+# viewer guesses. Convention (rounds 1–6): evoke the SETTING and negate the
+# answer object ("...no compass, no people..."). This check is negation-aware
+# so the correct "no <answer>" phrasing passes while a bare mention fails.
+_ARTICLES = {"a", "an", "the", "your", "my", "his", "her", "their", "its", "our"}
+_NEGATIONS = {"no", "not", "without", "zero", "never", "sans", "minus", "absent"}
+
+
+def _answer_core_noun(answer: str) -> str:
+    """'B) The North Star' -> 'north star'. Strips the choice label and any
+    leading article/possessive so we match the bare object name."""
+    core = answer.split(")", 1)[-1].strip().lower()
+    toks = core.split()
+    while toks and toks[0] in _ARTICLES:
+        toks = toks[1:]
+    return " ".join(toks)
+
+
+def _backdrop_spoils_answer(answer: str, backdrop: str) -> bool:
+    """True if the answer's core noun appears in the backdrop prompt WITHOUT a
+    preceding negation. Matches the full noun phrase (allowing a trailing
+    plural 's' on the final word) so 'tennis court' never trips 'tennis ball'."""
+    core_toks = _answer_core_noun(answer).split()
+    if not core_toks:
+        return False
+    btoks = re.findall(r"[a-z']+", backdrop.lower())
+    n = len(core_toks)
+    for i in range(len(btoks) - n + 1):
+        window = btoks[i:i + n]
+        last_ok = window[-1] == core_toks[-1] or window[-1] == core_toks[-1] + "s"
+        if window[:-1] == core_toks[:-1] and last_ok:
+            preceding = btoks[max(0, i - 2):i]  # negation cue within 2 tokens
+            if not any(t in _NEGATIONS for t in preceding):
+                return True
+    return False
+
+
 def validate_fixture(row: Dict[str, Any]) -> None:
     """Apply idea-director guardrails to the fixture before doing any work."""
     slug = row.get("slug")
@@ -163,6 +201,20 @@ def validate_fixture(row: Dict[str, Any]) -> None:
                     "Reword to avoid spoiling the reveal in TikTok/IG captions or "
                     "the score card."
                 )
+
+    # Backdrop spoiler guardrail — the backdrop is on screen during the
+    # pre-reveal countdown, so it must never depict the answer object.
+    for qid in ("q1", "q2", "q3"):
+        q = row.get(qid, {})
+        backdrop = q.get("backdrop_hint") or ""
+        if backdrop and _backdrop_spoils_answer(q["answer"], backdrop):
+            core = _answer_core_noun(q["answer"])
+            _fail(
+                f"backdrop spoiler guardrail: {qid} backdrop_hint names the answer "
+                f"('{core}') without a negation. The backdrop plays during the "
+                f"countdown, so it would spoil the reveal. Either remove it from the "
+                f"scene or negate it explicitly (e.g. 'no {core}')."
+            )
 
 
 # ---------------------------------------------------------------------------
