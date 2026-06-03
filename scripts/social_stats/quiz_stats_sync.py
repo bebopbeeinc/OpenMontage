@@ -47,7 +47,7 @@ CAPTION_IDX = POST_FIELDS.index("caption")    # Y
 # Stats columns appended after the existing schema (AD onward).
 STATS_BASE = len(POST_FIELDS)                 # first free column index → AD
 STATS_HEADERS = [
-    "TikTok Video ID", "TikTok Views", "TikTok Likes",
+    "TikTok Video ID", "TikTok Published", "TikTok Views", "TikTok Likes",
     "TikTok Comments", "TikTok Shares", "Stats Updated",
 ]
 STATS_END_COL = _col_letter(STATS_BASE + len(STATS_HEADERS) - 1)   # AI
@@ -142,6 +142,16 @@ def _vstat(v: dict) -> list:
             v.get("comment_count", 0), v.get("share_count", 0)]
 
 
+def _pubdate(v: dict) -> str:
+    """The video's TikTok go-live timestamp (create_time, Unix seconds) as ISO.
+    Constant per video — written next to the row so the sheet shows when each
+    post actually published, distinct from 'Stats Updated' (last sync time)."""
+    ct = v.get("create_time")
+    if not ct:
+        return ""
+    return datetime.datetime.fromtimestamp(int(ct)).isoformat(timespec="seconds")
+
+
 def _ensure_grid_width(svc) -> None:
     """Posts_Quiz ships with 29 columns (A:AC); our stats cols run to AI (35).
     Sheets won't auto-expand on write, so append the missing columns first."""
@@ -170,7 +180,7 @@ def _write_stats_rows(svc, items: list[tuple[int, dict]], iso: str) -> None:
     ).execute()
     data = [{
         "range": f"{POSTS_TAB}!{STATS_START_COL}{rn}:{STATS_END_COL}{rn}",
-        "values": [[v.get("id"), *_vstat(v), iso]],
+        "values": [[v.get("id"), _pubdate(v), *_vstat(v), iso]],
     } for rn, v in items]
     svc.spreadsheets().values().batchUpdate(
         spreadsheetId=QUIZ_SHEET_ID, body={"valueInputOption": "RAW", "data": data},

@@ -40,6 +40,7 @@ import secrets
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -107,31 +108,47 @@ def _creds() -> tuple[str, str]:
 
 
 # --- low-level HTTP --------------------------------------------------------
+def _send(req: urllib.request.Request) -> dict:
+    """Send a request and return the parsed JSON body.
+
+    TikTok returns useful structured errors (e.g. {"error": "invalid_grant",
+    "error_description": "..."} on OAuth, or {"error": {"code": ...}} on the
+    Display API) in the response BODY even on 4xx/5xx. urlopen raises HTTPError
+    before the caller can read that, so we catch it and parse the body — the
+    real reason is far more actionable than a bare "HTTP Error 500".
+    """
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            raise SystemExit(
+                f"✗ HTTP {e.code} from {req.full_url}\n  response body: {raw or '(empty)'}"
+            ) from e
+
+
 def _post_form(url: str, data: dict) -> dict:
     body = urllib.parse.urlencode(data).encode()
-    req = urllib.request.Request(
+    return _send(urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    ))
 
 
 def _get_json(url: str, token: str, params: dict) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(full, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    return _send(urllib.request.Request(full, headers={"Authorization": f"Bearer {token}"}))
 
 
 def _post_json(url: str, token: str, params: dict, body: dict) -> dict:
     full = url + "?" + urllib.parse.urlencode(params)
-    req = urllib.request.Request(
+    return _send(urllib.request.Request(
         full, data=json.dumps(body).encode(), method="POST",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    ))
 
 
 # --- token storage / refresh ----------------------------------------------

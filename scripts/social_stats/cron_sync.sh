@@ -26,6 +26,15 @@ if [ -z "${SOPS_AGE_KEY_FILE:-}" ]; then
 fi
 
 ACCOUNT="${1:-dailytrivia.tc}"
-echo "=== $(date '+%Y-%m-%d %H:%M:%S') sync start (account=$ACCOUNT) ==="
-secrets/with-secrets.sh ".venv/bin/python -m scripts.social_stats.quiz_stats_sync --account $ACCOUNT --apply"
+
+# Route to the sync wired for this account's sheet. The trivia-reaction account
+# (ellie.travelcrush) writes into TriviaReactionQueue; everything else is the
+# trivia-quiz Posts_Quiz sheet.
+case "$ACCOUNT" in
+  ellie.travelcrush) MODULE="scripts.social_stats.reaction_stats_sync" ;;
+  *)                 MODULE="scripts.social_stats.quiz_stats_sync" ;;
+esac
+
+echo "=== $(date '+%Y-%m-%d %H:%M:%S') sync start (account=$ACCOUNT, module=$MODULE) ==="
+secrets/with-secrets.sh ".venv/bin/python -m $MODULE --account $ACCOUNT --apply"
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') sync done ==="
