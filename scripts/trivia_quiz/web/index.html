@@ -459,12 +459,14 @@ async function refreshActive() {
 
 async function runBuild(slug, isRebuild=false) {
   if (!slug) return;
-  if (isRebuild && !confirm(`Re-build & Render ${slug}? This re-runs OpenArt (spends credits) and overwrites the local bg.mp4 + render.`)) return;
+  if (isRebuild && !confirm(`Re-build & Render ${slug}? This CLEARS the Q1/Q2/Q3 backdrops and regenerates them via OpenArt (spends credits), then overwrites the local bg.mp4 + render.`)) return;
   try {
+    // isRebuild (render already exists) => regenerate fresh question backdrops.
+    // A plain Build & Render reuses any Q1/Q2/Q3 JPGs already on disk.
     const job = await api('api/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({kind: 'build', slug}),
+      body: JSON.stringify({kind: 'build', slug, regen: isRebuild}),
     });
     toast(`build queued (${slug})`);
     attachToJob(job.id);

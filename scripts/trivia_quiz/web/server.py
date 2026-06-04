@@ -63,12 +63,25 @@ QUIZ_SHEET_URL = (
 # user's standing trivia-assembly preference). --no-render still stages
 # bg.mp4 + quiz_meta.json into remotion-composer/public/; we run the actual
 # Remotion render ourselves so we can stream its log.
+#
+# --reuse-question-assets is ALWAYS on: a Build & Render re-click (e.g. after a
+# partial OpenArt failure) reuses the Q1/Q2/Q3 JPGs already on disk instead of
+# re-rolling them — saves credits and avoids re-hitting transient poll timeouts.
+# To force fresh question backdrops, the "Re-build & Render" path (regen=True)
+# deletes those JPGs first in _run_build; with nothing on disk to reuse, build.py
+# regenerates them.
 BUILD_FLAGS = [
     "--from-sheet",
     "--with-openart", "--openart-headless",
+    "--reuse-question-assets",
     "--with-vo", "--with-music", "--with-sfx",
     "--no-render",
 ]
+
+# Per-question backdrop filenames cleared on a regen (Re-build & Render). The
+# show backdrop (hook_bg/score_bg, copied from the library cache each build) is
+# NOT cleared here — that's governed separately by --regen-show-assets.
+QUESTION_BACKDROPS = ("q1_bg.jpg", "q2_bg.jpg", "q3_bg.jpg")
 REMOTION_ENTRY = "src/index-trivia-quiz.tsx"
 REMOTION_COMP = "TriviaQuiz"
 
@@ -225,6 +238,22 @@ async def _run_build(job: Job) -> None:
     if not job.slug:
         raise RuntimeError("build job missing 'slug'")
     py = sys.executable
+
+    # Regen (Re-build & Render): clear the per-question backdrops so build.py
+    # regenerates them fresh. Without this, --reuse-question-assets reuses the
+    # JPGs already on disk.
+    if job.extra.get("regen"):
+        images_dir = PROJECTS_ROOT / job.slug / "assets" / "images"
+        cleared = []
+        for name in QUESTION_BACKDROPS:
+            jpg = images_dir / name
+            if jpg.exists():
+                jpg.unlink()
+                cleared.append(name)
+        if cleared:
+            _emit(job, f"regen: cleared {', '.join(cleared)} — will regenerate via OpenArt")
+        else:
+            _emit(job, "regen: no question backdrops on disk to clear")
 
     _emit(job, "=== Phase 1/2: build.py (artifacts + OpenArt + audio + stage) ===")
     cmd = [py, "-m", "scripts.trivia_quiz.build", "--slug", job.slug, *BUILD_FLAGS]
@@ -394,6 +423,10 @@ async def api_run(payload: dict):
             )
 
     job = Job(id=uuid.uuid4().hex[:8], kind=kind, slug=slug)
+    if kind == "build":
+        # regen=True (Re-build & Render) clears Q1/Q2/Q3 backdrops before build
+        # so they regenerate; default reuses the on-disk JPGs.
+        job.extra["regen"] = bool(payload.get("regen"))
     jobs[job.id] = job
     recent_job_ids.append(job.id)
     log_subscribers.setdefault(job.id, [])
