@@ -81,11 +81,12 @@ that this is a reference-image submission (not a plain text-to-image call),
 and the reference path.
 
 Like the question image, the answer keeps the full-res original **and** a
-512×384 lossless-PNG copy (`scripts/trivia_images/image_optimize.py`): original
-at `library/q{N}_answer.png` / Drive `WIP/`, resized at `library/resized/` /
-Drive `WIP/Resized/`, both promoted on approval. The reference passed to OpenArt
-is the **full-res original** question image (best fidelity — that's what the
-kept originals are for).
+512×384 lossless-PNG copy (`scripts/trivia_images/image_optimize.py`). In the
+live web flow both land in the row's country folder: original at
+`Question Images/<CODE>/{N}A.png`, resized at `Question Images/<CODE>/Resized/`.
+There is no WIP folder — approval is the per-row `A Image Approved` sheet status.
+The reference passed to OpenArt is the **full-res original** question image
+(best fidelity — that's what the kept originals are for).
 
 ### 5. Produce The asset_manifest
 
@@ -129,7 +130,7 @@ stage 1, append the answer image entry):
     "row": <int>,
     "slug": "q{N}",
     "sheet_id": "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk",
-    "sheet_tab": "<the tab this row came from, e.g. 1-100>"
+    "sheet_tab": "<the tab this row came from, e.g. US>"
   }
 }
 ```

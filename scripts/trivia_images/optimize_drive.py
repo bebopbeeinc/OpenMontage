@@ -2,18 +2,17 @@
 """Backfill 512×384 resized copies on Google Drive from existing originals.
 
 New generations create both a full-res original and a 512×384 resized copy (in
-a `Resized` subfolder). This optional one-time script backfills resized copies
-for images that already existed before that step landed: for each original in
-the staging (`WIP/`) and approved (`Question Images/`) folders, it writes a
-512×384 lossless-PNG copy into that folder's `Resized` subfolder. **Originals
-are never moved or modified.**
+a `Resized` subfolder). This optional script backfills resized copies for
+images missing one: for each original directly under a `Question Images/<CODE>/`
+country folder, it writes a 512×384 lossless-PNG copy into that folder's
+`Resized` subfolder. **Originals are never moved or modified.**
 
 Idempotent: a resized copy already at 512×384 is skipped (no re-download).
 
 Usage:
-    python scripts/trivia_images/optimize_drive.py --dry-run        # preview
-    python scripts/trivia_images/optimize_drive.py                  # both folders
-    python scripts/trivia_images/optimize_drive.py --folder staging
+    python scripts/trivia_images/optimize_drive.py --dry-run        # preview, all countries
+    python scripts/trivia_images/optimize_drive.py                  # all country folders
+    python scripts/trivia_images/optimize_drive.py --country US     # one country
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
 
 from tools.publishers.google_drive import get_client  # noqa: E402
-from drive_config import APPROVED_FOLDER_ID, STAGING_FOLDER_ID  # noqa: E402
+from drive_config import QUESTION_IMAGES_ROOT_ID  # noqa: E402
 from image_optimize import GAME_HEIGHT, GAME_WIDTH, optimize_image_bytes  # noqa: E402
 
 # Canonical asset names produced by drive_name(): "1Q.png", "12A.png", …
@@ -116,18 +115,43 @@ def _backfill_folder(folder_id: str, label: str, dry_run: bool) -> tuple[int, in
     return changed, skipped, failed
 
 
+def _country_folders() -> list[tuple[str, str]]:
+    """[(folder_id, code)] for every country subfolder under the root, sorted
+    by code. Skips the bookkeeping subfolders (Resized, Old, WIP, tutorial)."""
+    drive = get_client()._drive()
+    skip = {"Resized", "Old", "WIP", "tutorial"}
+    out: list[tuple[str, str]] = []
+    page_token = None
+    while True:
+        resp = drive.files().list(
+            q=(f"'{QUESTION_IMAGES_ROOT_ID}' in parents and trashed=false "
+               f"and mimeType='application/vnd.google-apps.folder'"),
+            fields="nextPageToken,files(id,name)",
+            pageSize=200, supportsAllDrives=True, includeItemsFromAllDrives=True,
+            pageToken=page_token,
+        ).execute()
+        for f in resp.get("files", []):
+            if f["name"] not in skip:
+                out.append((f["id"], f["name"]))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return sorted(out, key=lambda t: t[1])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--folder", choices=("staging", "approved", "both"), default="both")
+    ap.add_argument("--country", help="limit to one COUNTRY code (e.g. US); default all")
     ap.add_argument("--dry-run", action="store_true",
                     help="list what would be created without modifying Drive")
     args = ap.parse_args()
 
-    targets: list[tuple[str, str]] = []
-    if args.folder in ("staging", "both"):
-        targets.append((STAGING_FOLDER_ID, "WIP"))
-    if args.folder in ("approved", "both"):
-        targets.append((APPROVED_FOLDER_ID, "Approved"))
+    targets = _country_folders()
+    if args.country:
+        targets = [(fid, code) for fid, code in targets if code == args.country]
+        if not targets:
+            print(f"no country folder named {args.country!r} under the root")
+            return 1
 
     mode = "DRY RUN — " if args.dry_run else ""
     print(f"{mode}backfilling Resized/ copies → {GAME_WIDTH}×{GAME_HEIGHT} lossless PNG "

@@ -30,9 +30,16 @@
   header .spacer { flex: 1; }
   header button { margin-left: 0; }
 
-  .tab-strip { display: inline-flex; border: 1px solid var(--border); border-radius: 5px;
-               overflow: hidden; }
+  /* Horizontally scrollable so 100+ country tabs don't widen the page. The
+     strip is capped and scrolls inside itself; a thin scrollbar appears only
+     when the tabs overflow. flex-shrink lets it yield space in the header. */
+  .tab-strip { display: flex; flex-wrap: nowrap; border: 1px solid var(--border);
+               border-radius: 5px; overflow-x: auto; overflow-y: hidden;
+               max-width: 52vw; flex: 0 1 auto; scrollbar-width: thin; }
+  .tab-strip::-webkit-scrollbar { height: 6px; }
+  .tab-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .tab-strip button { background: transparent; color: var(--muted); border: none;
+                      flex: 0 0 auto; white-space: nowrap;
                       border-right: 1px solid var(--border); border-radius: 0;
                       padding: 6px 12px; font: inherit; font-size: 12px;
                       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -93,10 +100,7 @@
                            border-top: 1px dashed var(--border); padding-top: 6px; }
   .answers-ref .meta-row b { color: var(--text); font-weight: 500; }
 
-  /* Mid-iteration rows render two thumbs side by side, so allow the cell
-     to grow up to 196px (2 * 96 + 4px gap). */
   .thumb-cell { width: 96px; }
-  .thumb-cell.pair { width: 196px; }
   .thumb { width: 96px; height: 72px; border-radius: 4px;
            background: #0a0e14; border: 1px solid var(--border);
            display: flex; align-items: center; justify-content: center;
@@ -114,23 +118,20 @@
                 font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                 text-decoration: none; }
   .drive-pill.approved { background: #0c3a1f; color: var(--accent); }
-  .drive-pill.staging  { background: #3a2e0c; color: var(--warn); }
+  .drive-pill.wip      { background: #3a2e0c; color: var(--warn); }
   .drive-pill.none     { background: #21262d; color: var(--muted); }
   a.drive-pill:hover { filter: brightness(1.25); }
   a.drive-pill::after { content: " ↗"; opacity: 0.6; }
 
-  /* When a row is mid-iteration (approved + staging coexist for the same
-     name), thumbCell renders two thumbnails side by side so the user can
-     see what they're replacing as they iterate. .thumb-tag is a corner
-     badge identifying each thumbnail. */
-  .thumb-pair { display: flex; gap: 4px; }
+  /* .thumb-tag is a corner badge on each thumbnail identifying its sheet
+     status (APPROVED / WIP). */
   .thumb-tag { position: absolute; top: 2px; left: 2px;
                background: rgba(0,0,0,0.72); padding: 1px 5px;
                border-radius: 3px; font-size: 9px; font-weight: 600;
                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                pointer-events: none; }
   .thumb-tag.approved { color: var(--accent); }
-  .thumb-tag.staging  { color: var(--warn); }
+  .thumb-tag.wip      { color: var(--warn); }
 
   .drive-links { display: inline-flex; gap: 12px; margin-left: 12px;
                  font-size: 12px; }
@@ -295,8 +296,7 @@
   <div class="meta" id="meta">loading…</div>
   <div class="drive-links">
     <a id="sheet-link" href="https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=516450971#gid=516450971" target="_blank" rel="noopener">Sheet ↗</a>
-    <a href="https://drive.google.com/drive/folders/1wENmER7aQ6wk23jP6wOggc7mviLAB_pw" target="_blank" rel="noopener">Approved ↗</a>
-    <a href="https://drive.google.com/drive/folders/1NMb2WeJp7HVsO-gzvOA-B0wK83uFta9k" target="_blank" rel="noopener">Staging ↗</a>
+    <a href="https://drive.google.com/drive/folders/1wENmER7aQ6wk23jP6wOggc7mviLAB_pw" target="_blank" rel="noopener">Question Images ↗</a>
   </div>
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
@@ -404,7 +404,7 @@ let activePollTimer = null;
 // same approved/staging Drive folders; row numbers don't overlap
 // across tabs so Drive filenames stay unique.
 let availableTabs = [];                  // [{name, gid, index}, ...]
-let currentTab = '1-100';   // overridden by /api/tabs default on load
+let currentTab = '';   // set from /api/tabs default (first country tab) on load
 // True while /api/rows is in flight — suppresses renderRows() so the
 // background active-poll doesn't repaint the loading placeholder.
 let loadingRows = false;
@@ -440,49 +440,26 @@ function hasImg(r, kind) {
   return !!(d && d.state !== 'none');
 }
 
-// True when a WIP sits on top of a prior approval (iteration-after-
-// approval). The table cell uses this to grow wide enough for two
-// thumbnails side-by-side.
-function hasPair(drive) {
-  return !!(drive && drive.state === 'staging' && drive.approved_file_id);
-}
-
 function thumbCell(r, kind) {
-  // Renders the thumbnail(s) for one Drive image. All images route
-  // through /api/image (server-side resize + cache); the proxy hits
-  // Drive's CDN with the SA token instead of letting the browser get
-  // throttled by anon CDN requests. Mid-iteration rows — where a WIP
-  // sits on top of a prior approval — render both thumbnails so the
-  // user can see what they're replacing while they tune the WIP.
+  // Renders the thumbnail for one Drive image. All images route through
+  // /api/image (server-side resize + cache); the proxy hits Drive's CDN with
+  // the SA token instead of letting the browser get throttled by anon CDN
+  // requests. The image lives in exactly one country folder; "approved" vs
+  // "WIP" is the sheet status, surfaced as the corner tag.
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   if (!drive || drive.state === 'none') {
     return '<div class="thumb"><span class="thumb-missing">none</span></div>';
   }
   const short = kind === 'question_image' ? 'Q' : 'A';
-  const pair = drive.state === 'staging' && !!drive.approved_file_id;
-  // Single-thumb path: tag the thumbnail by its actual state so the
-  // user always sees whether they're looking at the canonical version
-  // or a work-in-progress. The dual-thumb path below tags each one
-  // explicitly since the state field reflects only the primary.
-  const primaryThumb = renderThumb({
+  return renderThumb({
     slug: r.slug, short,
     thumbnailLink: drive.thumbnail_link,
     cacheKey: drive.modified_time || drive.file_id || '',
-    fullSrcQuery: '',
-    tag: pair ? 'staging' : drive.state,   // 'approved' or 'staging'
+    tag: drive.state,   // 'approved' or 'wip'
   });
-  if (!pair) return primaryThumb;
-  const approvedThumb = renderThumb({
-    slug: r.slug, short,
-    thumbnailLink: drive.approved_thumbnail_link,
-    cacheKey: drive.approved_modified_time || drive.approved_file_id || '',
-    fullSrcQuery: '&variant=approved',
-    tag: 'approved',
-  });
-  return `<div class="thumb-pair">${approvedThumb}${primaryThumb}</div>`;
 }
 
-function renderThumb({slug, short, thumbnailLink, cacheKey, fullSrcQuery, tag}) {
+function renderThumb({slug, short, thumbnailLink, cacheKey, tag}) {
   const v = encodeURIComponent(cacheKey);
   // Two URLs: the small server-resized JPEG for the row thumbnail
   // (thumb=1, ~30 KB), and the full-resolution version for the
@@ -497,7 +474,8 @@ function renderThumb({slug, short, thumbnailLink, cacheKey, fullSrcQuery, tag}) 
   // ~480, leaving plenty of connection budget for /api/active polls.
   // thumbnailLink is accepted for forward-compat but ignored.
   void thumbnailLink;
-  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}${fullSrcQuery}`;
+  // tab= resolves to the country folder server-side.
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}`;
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagHtml = tag ? `<span class="thumb-tag ${tag}">${tag === 'approved' ? 'APPROVED' : 'WIP'}</span>` : '';
@@ -532,7 +510,7 @@ function observeThumbs() {
 function drivePill(drive) {
   const state = (drive && drive.state) || 'none';
   const label = state === 'approved' ? 'approved'
-              : state === 'staging'  ? 'staging'
+              : state === 'wip'      ? 'WIP'
               : 'no drive';
   const title = drive && drive.drive_name ? escapeHtml(drive.drive_name) : '';
   // When we have a file_id, the pill is a click-through to the Drive page
@@ -547,7 +525,7 @@ function drivePill(drive) {
 function approveBtn(r, kind) {
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   const state = drive && drive.state;
-  if (state !== 'staging') return '';   // only stageable images get a button
+  if (state !== 'wip') return '';   // only un-approved (WIP) images get an Approve button
   const label = `Approve ${kind === 'question_image' ? 'Q' : 'A'}`;
   return `<button class="primary small" onclick="approveImage(${r.row}, '${r.slug}', '${kind}')">${label}</button>`;
 }
@@ -555,7 +533,7 @@ function approveBtn(r, kind) {
 function discardBtn(r, kind) {
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   const state = drive && drive.state;
-  if (state !== 'staging') return '';   // approved files must be discarded via Drive directly
+  if (!state || state === 'none') return '';   // nothing to discard
   return `<button class="danger small" onclick="discardImage(${r.row}, '${r.slug}', '${kind}')">Discard</button>`;
 }
 
@@ -657,7 +635,7 @@ function renderRows() {
           <div class="mode">${escapeHtml(r.mode || '')}</div>
           ${choicesInline(r)}
         </td>
-        <td class="thumb-cell ${hasPair(r.question_drive) ? 'pair' : ''}">
+        <td class="thumb-cell">
           <div style="display:flex; gap:6px; align-items:flex-start;">
             ${kindCheckboxCell(r, 'question_image')}
             ${thumbCell(r, 'question_image')}
@@ -665,7 +643,7 @@ function renderRows() {
           <div style="margin-top:4px;">${promptPill(hasQ)}${drivePill(r.question_drive)}${stateBadge(r.slug, 'question_image')}</div>
           <div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap;">${approveBtn(r, 'question_image')}${discardBtn(r, 'question_image')}</div>
         </td>
-        <td class="thumb-cell ${hasPair(r.answer_drive) ? 'pair' : ''}">
+        <td class="thumb-cell">
           <div style="display:flex; gap:6px; align-items:flex-start;">
             ${kindCheckboxCell(r, 'answer_image')}
             ${thumbCell(r, 'answer_image')}
@@ -837,7 +815,7 @@ async function loadTabs(refresh = false) {
     const data = await api(refresh ? 'api/tabs?refresh=1' : 'api/tabs');
     availableTabs = data.tabs || [];
     if (!tabNames().includes(currentTab)) {
-      currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || '1-100';
+      currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || '';
     }
   } catch (e) {
     // Server down or unreachable — leave availableTabs empty so the
@@ -1261,13 +1239,13 @@ function answersRefBlock(r) {
   `;
 }
 
-function modalPreviewFrame({slug, short, cacheKey, variantQuery, tag}) {
+function modalPreviewFrame({slug, short, cacheKey, tag}) {
   // Single 4:3 frame with a corner state tag. `src` is used directly (no lazy
-  // data-src/IntersectionObserver) since the modal opens deliberately and at
-  // most renders 4 frames (two pairs). Click-to-zoom opens in a new tab
-  // because showModal() clobbers #modal-root and would close the editor.
+  // data-src/IntersectionObserver) since the modal opens deliberately.
+  // Click-to-zoom opens in a new tab because showModal() clobbers #modal-root
+  // and would close the editor.
   const v = encodeURIComponent(cacheKey);
-  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}${variantQuery}`;
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}`;
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagLabel = tag === 'approved' ? 'APPROVED' : 'WIP';
@@ -1282,11 +1260,8 @@ function modalPreviewFrame({slug, short, cacheKey, variantQuery, tag}) {
 }
 
 function modalPreviewBlock(r, kind) {
-  // Renders the current Drive image next to the prompt textarea. Mirrors
-  // thumbCell's pair behavior: when a WIP sits on top of a prior approval
-  // (drive.state === 'staging' && drive.approved_file_id), show both the
-  // approved baseline AND the WIP so the author can see what they're
-  // replacing while tuning the prompt.
+  // Renders the current Drive image next to the prompt textarea. One image per
+  // (row, kind) — tagged APPROVED or WIP per the sheet status.
   const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
   const labelLeft = kind === 'question_image' ? 'current Q image' : 'current A image';
   if (!drive || drive.state === 'none') {
@@ -1296,28 +1271,14 @@ function modalPreviewBlock(r, kind) {
     `;
   }
   const short = kind === 'question_image' ? 'Q' : 'A';
-  const pair = drive.state === 'staging' && !!drive.approved_file_id;
-  const primaryFrame = modalPreviewFrame({
+  const frame = modalPreviewFrame({
     slug: r.slug, short,
     cacheKey: drive.modified_time || drive.file_id || '',
-    variantQuery: '',
-    tag: pair ? 'staging' : drive.state,
-  });
-  if (!pair) {
-    return `
-      ${primaryFrame}
-      <div class="preview-caption"><span>${labelLeft}</span><span>click to zoom</span></div>
-    `;
-  }
-  const approvedFrame = modalPreviewFrame({
-    slug: r.slug, short,
-    cacheKey: drive.approved_modified_time || drive.approved_file_id || '',
-    variantQuery: '&variant=approved',
-    tag: 'approved',
+    tag: drive.state,
   });
   return `
-    <div class="preview-pair">${approvedFrame}${primaryFrame}</div>
-    <div class="preview-caption"><span>${labelLeft} — approved vs WIP</span><span>click to zoom</span></div>
+    ${frame}
+    <div class="preview-caption"><span>${labelLeft}</span><span>click to zoom</span></div>
   `;
 }
 
@@ -1401,12 +1362,12 @@ async function savePrompts(row, slug) {
 
 async function approveImage(row, slug, kind) {
   const shortKind = kind === 'question_image' ? 'Q' : 'A';
-  if (!confirm(`Approve ${slug}/${shortKind}? Moves it from staging to the approved folder.`)) return;
+  if (!confirm(`Approve ${slug}/${shortKind}? Marks it approved in the sheet.`)) return;
   try {
     const data = await api('api/approve', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({row, slug, kind}),
+      body: JSON.stringify({row, slug, kind, tab: currentTab}),
     });
     toast(`${data.drive_name} approved`, 'ok');
     await loadRows();
@@ -1419,13 +1380,13 @@ async function discardImage(row, slug, kind) {
   const shortKind = kind === 'question_image' ? 'Q' : 'A';
   if (!confirm(
     `Discard ${slug}/${shortKind}? The file is moved to the Shared Drive trash ` +
-    `(recoverable for ~30 days from Drive's UI).`
+    `(recoverable for ~30 days from Drive's UI) and its approval is cleared.`
   )) return;
   try {
     const data = await api('api/discard', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({row, slug, kind}),
+      body: JSON.stringify({row, slug, kind, tab: currentTab}),
     });
     toast(`${data.drive_name} discarded`, 'ok');
     await loadRows();

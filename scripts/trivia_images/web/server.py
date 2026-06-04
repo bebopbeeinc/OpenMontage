@@ -50,7 +50,7 @@ SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
 from tools.publishers.google_drive import FileMeta, get_client  # noqa: E402
-from drive_config import APPROVED_FOLDER_ID, STAGING_FOLDER_ID  # noqa: E402
+from drive_config import QUESTION_IMAGES_ROOT_ID  # noqa: E402
 from image_optimize import (  # noqa: E402
     GAME_HEIGHT,
     GAME_WIDTH,
@@ -58,10 +58,12 @@ from image_optimize import (  # noqa: E402
 )
 from sheet_schema import (  # noqa: E402
     DATA_START_ROW,
+    FIELD_TO_HEADER,
     SHEET_ID,
     SHEET_TAB,
     SheetSchema,
     a1_tab,
+    index_to_letter,
 )
 
 
@@ -79,31 +81,53 @@ def _validate_tab(tab: str | None) -> str:
         raise HTTPException(400, f"unknown tab {tab!r}; allowed: {names}")
     return tab
 
-# Trivia-images Drive layout (folder IDs in drive_config.py — shared with
-# the batch optimizer). Approved is the visible root ("Question Images");
-# staging is the "WIP" subfolder underneath where freshly-generated images
-# land before the human approves them. The full-res original lives in those
-# two folders; a 512×384 game-optimized copy lives in a "Resized" subfolder
-# of each (created on first use). Both move in lockstep on approval.
+# Trivia-images Drive layout (root ID in drive_config.py — shared with the
+# batch optimizer + migration). One folder per COUNTRY code lives directly
+# under the "Question Images" root; each country folder has a "Resized"
+# subfolder for the 512×384 game copies (created on first use). There is no
+# WIP/staging folder anymore: an image lives in exactly ONE country folder,
+# and "approved vs WIP" is a STATUS in the sheet (the `Q/A Image Approved`
+# columns), NOT a folder location.
 _RESIZED_SUBFOLDER = "Resized"
-_resized_folder_ids: dict[str, str] = {}
-_resized_folder_lock = threading.Lock()
+_country_folder_ids: dict[str, str] = {}     # code -> folder id
+_resized_folder_ids: dict[str, str] = {}     # parent folder id -> Resized folder id
+_folder_lock = threading.Lock()
 # Listing-cache lifetime for state resolution. Safe to keep long because every
-# mutation (upload_or_replace / move / trash) invalidates the folder's listing.
+# mutation (upload_or_replace / trash) invalidates the folder's listing.
 _STATE_LIST_TTL_S = 120.0
 
 
-def resized_folder_id(parent_id: str) -> str:
-    """Resolve (find-or-create + cache) the "Resized" subfolder under `parent_id`.
+def country_folder_id(code: str) -> str:
+    """Resolve (find-or-create + cache) the per-country folder under the
+    "Question Images" root. `code` is the COUNTRY column value (US, IN, FR…).
 
-    The Resized folders are made anyone-with-link readable so the files inside
-    inherit public access — that's what lets /api/image redirect straight to
-    Google's CDN without flipping sharing on each file. Idempotent (no-op if a
-    folder is already public)."""
+    Made anyone-with-link readable so files inside inherit public access (lets
+    /api/image redirect straight to Google's CDN). Idempotent."""
+    code = (code or "").strip()
+    if not code:
+        raise ValueError("country_folder_id: empty country code")
+    cached = _country_folder_ids.get(code)
+    if cached:
+        return cached
+    with _folder_lock:
+        cached = _country_folder_ids.get(code)
+        if cached:
+            return cached
+        client = get_client()
+        meta = client.find_or_create_folder(QUESTION_IMAGES_ROOT_ID, code)
+        client.ensure_anyone_reader(meta.id)
+        _country_folder_ids[code] = meta.id
+        return meta.id
+
+
+def resized_folder_id(parent_id: str) -> str:
+    """Resolve (find-or-create + cache) the "Resized" subfolder under `parent_id`
+    (a country folder). Made anyone-with-link readable so the files inside
+    inherit public access. Idempotent."""
     cached = _resized_folder_ids.get(parent_id)
     if cached:
         return cached
-    with _resized_folder_lock:
+    with _folder_lock:
         cached = _resized_folder_ids.get(parent_id)
         if cached:
             return cached
@@ -112,6 +136,11 @@ def resized_folder_id(parent_id: str) -> str:
         client.ensure_anyone_reader(meta.id)
         _resized_folder_ids[parent_id] = meta.id
         return meta.id
+
+
+def country_resized_folder_id(code: str) -> str:
+    """Resized subfolder for a country code: Question Images/<CODE>/Resized."""
+    return resized_folder_id(country_folder_id(code))
 
 
 def drive_name(number: str, kind: str) -> str:
@@ -133,67 +162,30 @@ def drive_name(number: str, kind: str) -> str:
     return f"{number}{suffix}.png"
 
 
-def _resolve_state(
-    name: str, staging_id: str, approved_id: str
-) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
-    """Resolve a filename across a (staging, approved) folder pair.
-
-    Returns (state, primary_meta, approved_coexists_meta).
-
-    Staging wins over approved when both exist: after a user approves an
-    image and then re-generates, the new WIP lands in staging while the
-    previous approval still sits in approved. Surfacing the WIP keeps the
-    iteration loop visible in the UI — the user can see their latest
-    take and re-approve when happy. The third element exposes the
-    coexisting approved meta so /api/approve can trash the stale
-    approved before promoting the WIP (otherwise Drive ends up with two
-    files of the same name under approved).
-
-    Approved is computed as "directly under approved but NOT under
-    staging" because the original staging folder (WIP) is a subfolder of
-    approved (the root) in Drive's tree — without that exclusion, every
-    WIP would also read as approved via parent transitivity. (The Resized
-    subfolders aren't nested in each other, so the exclusion is a no-op
-    there, but it's harmless.)
-    """
-    client = get_client()
-    # Longer-lived listing cache than the Drive client's 8s default: these
-    # folders only change via this app's own upload/move/trash calls, which
-    # invalidate the cache, so a stale read can't outlast a mutation. Cuts the
-    # repeated multi-second folder listings that made /api/image slow.
-    staging = client.list_folder(staging_id, ttl_s=_STATE_LIST_TTL_S).get(name)
-    approved = client.list_folder(approved_id, ttl_s=_STATE_LIST_TTL_S).get(name)
-    approved_is_real = bool(
-        approved
-        and approved_id in approved.parent_ids
-        and staging_id not in approved.parent_ids
-    )
-    if staging:
-        return "staging", staging, (approved if approved_is_real else None)
-    if approved_is_real:
-        return "approved", approved, None
-    return "none", None, None
+def find_original(code: str, name: str) -> Optional[FileMeta]:
+    """The full-res original `name` inside the country folder, or None."""
+    # Longer-lived listing cache than the Drive client's 8s default: a country
+    # folder only changes via this app's own upload/trash calls (which
+    # invalidate the cache), so a stale read can't outlast a mutation.
+    return get_client().list_folder(
+        country_folder_id(code), ttl_s=_STATE_LIST_TTL_S
+    ).get(name)
 
 
-def state_for(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
-    """State of the full-res original (WIP vs Question Images root)."""
-    return _resolve_state(name, STAGING_FOLDER_ID, APPROVED_FOLDER_ID)
+def find_resized(code: str, name: str) -> Optional[FileMeta]:
+    """The 512×384 resized copy `name` inside the country Resized folder, or None."""
+    return get_client().list_folder(
+        country_resized_folder_id(code), ttl_s=_STATE_LIST_TTL_S
+    ).get(name)
 
 
-def state_for_resized(name: str) -> tuple[str, Optional[FileMeta], Optional[FileMeta]]:
-    """State of the 512×384 resized copy (WIP/Resized vs Question Images/Resized)."""
-    return _resolve_state(name, resized_folder_id(STAGING_FOLDER_ID),
-                          resized_folder_id(APPROVED_FOLDER_ID))
-
-
-def migrate_resized(name: str, original_meta: FileMeta, original_state: str) -> FileMeta:
+def migrate_resized(code: str, name: str, original_meta: FileMeta) -> FileMeta:
     """Create the 512×384 resized copy for `name` from its full-res original
-    and upload it to the Resized subfolder matching the original's location
-    (WIP/Resized for staging, Question Images/Resized for approved).
+    and upload it to the country's Resized subfolder.
 
-    On-demand backfill for images generated before the resize step existed:
+    On-demand backfill for images that don't have a resized copy yet:
     /api/image calls this when a resized copy is missing but the original is
-    present, so legacy images migrate themselves the first time they're viewed.
+    present, so such images migrate themselves the first time they're viewed.
     The bulk equivalent is scripts/trivia_images/optimize_drive.py.
     """
     import tempfile
@@ -201,13 +193,12 @@ def migrate_resized(name: str, original_meta: FileMeta, original_state: str) -> 
     client = get_client()
     data, _mime, _ = client.download_bytes(original_meta.id, original_meta.modified_time)
     png = optimize_image_bytes(data)
-    parent = APPROVED_FOLDER_ID if original_state == "approved" else STAGING_FOLDER_ID
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
         tf.write(png)
         tmp = Path(tf.name)
     try:
         meta = client.upload_or_replace(
-            resized_folder_id(parent), name, tmp, mime_type="image/png",
+            country_resized_folder_id(code), name, tmp, mime_type="image/png",
         )
     finally:
         tmp.unlink(missing_ok=True)
@@ -259,28 +250,28 @@ _migrating: set[str] = set()
 _migrating_lock = threading.Lock()
 
 
-def _schedule_resized_migration(name: str, original_meta: FileMeta,
-                                original_state: str) -> None:
+def _schedule_resized_migration(code: str, name: str, original_meta: FileMeta) -> None:
     """Fire-and-forget backfill of the resized copy.
 
     Lets /api/image return immediately (serving the original's already-generated
     CDN thumbnail) instead of blocking on a 2–5 MB download + optimize + upload.
-    Deduped per name so a grid full of legacy images doesn't migrate the same
-    one twice at once.
+    Deduped per (code, name) so a grid full of un-resized images doesn't migrate
+    the same one twice at once.
     """
+    key = f"{code}/{name}"
     with _migrating_lock:
-        if name in _migrating:
+        if key in _migrating:
             return
-        _migrating.add(name)
+        _migrating.add(key)
 
     async def _run() -> None:
         try:
-            await asyncio.to_thread(migrate_resized, name, original_meta, original_state)
+            await asyncio.to_thread(migrate_resized, code, name, original_meta)
         except Exception:
             pass
         finally:
             with _migrating_lock:
-                _migrating.discard(name)
+                _migrating.discard(key)
 
     asyncio.create_task(_run())
 
@@ -290,10 +281,10 @@ def _schedule_resized_migration(name: str, original_meta: FileMeta,
 # break this app. The fields we read/write are listed below; see
 # FIELD_TO_HEADER in sheet_schema for the accepted labels per field.
 ROW_FIELDS = [
-    "number", "complete", "category", "mode", "question",
+    "number", "complete", "country", "category", "mode", "question",
     "answer_correct", "answer_2", "answer_3", "answer_4",
     "response_correct", "response_incorrect", "hint",
-    "prompt_q", "prompt_r",
+    "prompt_q", "prompt_r", "approved_q", "approved_r",
 ]
 
 # Defaults for OpenArt — match scripts/trivia_images/generate.py.
@@ -597,50 +588,39 @@ def _get_schema(tab: str, refresh: bool = False) -> SheetSchema:
     return cached
 
 
-def _drive_state_for(number: str, kind: str) -> dict:
-    """Resolve Drive state for one (number, kind) pair.
+def _drive_state_for(code: str, number: str, kind: str, approved: bool) -> dict:
+    """Resolve Drive state for one (country, number, kind) image.
 
-    Returns {state, drive_name, file_id, modified_time, thumbnail_link,
-    approved_file_id, approved_modified_time, approved_thumbnail_link}.
+    Returns {state, drive_name, file_id, modified_time, thumbnail_link}.
 
-    `state` is one of 'approved' | 'staging' | 'none'. file_id +
-    modified_time, when present, let the frontend bust its image cache
+    `state` is one of:
+      - 'none'     — no file in the country folder
+      - 'wip'      — file exists in the country folder but is NOT approved in the sheet
+      - 'approved' — file exists AND the row's `Q/A Image Approved` column is ✓
+
+    "WIP" is now a sheet status, not a folder: the file always lives in the one
+    country folder. `approved` is the sheet flag for this (row, kind), read by
+    the caller. file_id + modified_time let the frontend bust its image cache
     when the underlying file changes.
-
-    Staging wins over approved when both coexist (see state_for). The
-    approved_* fields are set only when state == "staging" AND an
-    approved version coexists — the frontend uses them to render the
-    approved thumbnail alongside the WIP so the user can see what they
-    are replacing while iterating.
     """
     name = drive_name(number, kind)
     try:
-        state, meta, approved_meta = state_for(name)
+        meta = find_original(code, name) if code else None
     except Exception:
         # Drive transient — surface 'none' rather than crash the row list.
-        state, meta, approved_meta = "none", None, None
+        meta = None
+    state = "none" if meta is None else ("approved" if approved else "wip")
     out = {
         "state": state, "drive_name": name,
         "file_id": None, "modified_time": None, "thumbnail_link": None,
-        "approved_file_id": None, "approved_modified_time": None,
-        "approved_thumbnail_link": None,
     }
     if meta is not None:
         out["file_id"] = meta.id
         out["modified_time"] = meta.modified_time
         # Bump =s220 (Drive's default) to =s256 — enough for 2x retina at the
-        # 96x72 css render size, ~1/4 the bytes of =s512. The earlier =s512
-        # was sharper on 3x retina but caused Drive's CDN to 429 on first-
-        # paint bursts of ~480 thumbnails, which cascaded into /api/image
-        # fallbacks that saturated the proxy. Bandwidth wins over absolute
-        # sharpness for this density of thumbnails.
+        # 96x72 css render size, ~1/4 the bytes of =s512.
         if meta.thumbnail_link:
             out["thumbnail_link"] = meta.thumbnail_link.replace("=s220", "=s256")
-    if approved_meta is not None:
-        out["approved_file_id"] = approved_meta.id
-        out["approved_modified_time"] = approved_meta.modified_time
-        if approved_meta.thumbnail_link:
-            out["approved_thumbnail_link"] = approved_meta.thumbnail_link.replace("=s220", "=s256")
     return out
 
 
@@ -655,27 +635,40 @@ def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int 
         lambda sheets: sheets.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=rng)
     )
     raw = resp.get("values", [])
-    # Warm the Drive listing once per /api/rows call — state_for goes through
-    # the per-folder cache so 241 rows = 2 Drive API calls, not 482.
+    # Tab-level country fallback for rows whose own COUNTRY cell is blank (common
+    # mid-authoring). Without this the read path (per-row code) would render the
+    # row as 'none' while the write/image paths (which use the tab's code) would
+    # still target the country folder — a silent divergence. Best-effort: a
+    # genuinely country-less tab leaves tab_code empty and rows fall back to ''.
+    try:
+        tab_code = _tab_country_code(tab)
+    except Exception:
+        tab_code = ""
+    # Warm the Drive listing once per /api/rows call — find_original goes
+    # through the per-folder cache so all rows of a country = a couple Drive
+    # API calls, not two per row.
     rows: list[dict] = []
     for i, v in enumerate(raw):
         sheet_row = min_row + i
         f = schema.extract(v, ROW_FIELDS)
         if not f["number"]:
             continue
+        code = f["country"] or tab_code
         slug = f"q{f['number']}"
-        q_drive = _drive_state_for(f["number"], "question_image")
-        a_drive = _drive_state_for(f["number"], "answer_image")
+        q_approved = f["approved_q"] == "✓"
+        a_approved = f["approved_r"] == "✓"
+        q_drive = _drive_state_for(code, f["number"], "question_image", q_approved)
+        a_drive = _drive_state_for(code, f["number"], "answer_image", a_approved)
         rows.append({
             "row": sheet_row,
             "number": f["number"],
             "slug": slug,
+            "country": code,
             "category": f["category"],
             "mode": f["mode"],
             "question": f["question"],
-            # Answer columns (H-N) — surfaced for context so the UI can
-            # show the user what their image is supposed to depict
-            # without leaving the tool.
+            # Answer columns — surfaced for context so the UI can show the user
+            # what their image is supposed to depict without leaving the tool.
             "answer_correct": f["answer_correct"],
             "answer_2": f["answer_2"],
             "answer_3": f["answer_3"],
@@ -692,30 +685,110 @@ def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int 
     return rows
 
 
+# Tab -> COUNTRY code, cached. A country tab carries one code across all its
+# rows, so we read it once from the first numbered data row. Used by endpoints
+# (approve/discard/image) that know the tab but want the Drive folder code.
+_tab_country_cache: dict[str, str] = {}
+_tab_country_lock = threading.Lock()
+
+
+def _tab_country_code(tab: str) -> str:
+    """The COUNTRY code for a tab (e.g. 'US'), read from its first data row."""
+    cached = _tab_country_cache.get(tab)
+    if cached:
+        return cached
+    schema = _get_schema(tab)
+    try:
+        col = schema.letter("country")
+    except KeyError:
+        raise HTTPException(400, f"tab {tab!r} has no COUNTRY column")
+    resp = _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().get(
+            spreadsheetId=SHEET_ID,
+            range=f"{a1_tab(tab)}!{col}{DATA_START_ROW}:{col}1000",
+        )
+    )
+    for row in resp.get("values", []):
+        code = (row[0] if row else "").strip()
+        if code:
+            with _tab_country_lock:
+                _tab_country_cache[tab] = code
+            return code
+    raise HTTPException(400, f"tab {tab!r} has no COUNTRY value in any data row")
+
+
+# Serializes the read-width → append-header → refresh sequence in
+# _ensure_approval_column. Without it, approving Q and A on a tab that has
+# never had approval columns can race: both reads see the same row-2 width and
+# both write their header into the SAME column. Process-wide because the
+# endpoints run on a thread pool (asyncio.to_thread).
+_approval_col_lock = threading.Lock()
+
+
+def _ensure_approval_column(tab: str, field: str) -> str:
+    """Column letter for an approval field, creating the column if absent.
+
+    The `Q/A Image Approved` columns don't exist on a tab until its first
+    approve. When missing, we append the header label into row 2 at the first
+    free column, refresh the schema, and return the new letter. Resolving by
+    header label (not fixed index) keeps inserts/reorders safe, same as every
+    other column.
+    """
+    schema = _get_schema(tab)
+    try:
+        return schema.letter(field)
+    except KeyError:
+        pass
+    label = FIELD_TO_HEADER[field]
+    with _approval_col_lock:
+        # Re-check under the lock: another approve (e.g. the sibling Q/A field)
+        # may have created this column — or shifted row-2 width — while we waited.
+        try:
+            return _get_schema(tab).letter(field)
+        except KeyError:
+            pass
+        # First free column = current width of row 2 (Sheets trims trailing empties).
+        resp = _sheets_execute(
+            lambda sheets: sheets.spreadsheets().values().get(
+                spreadsheetId=SHEET_ID, range=f"{a1_tab(tab)}!2:2",
+            )
+        )
+        row2 = (resp.get("values") or [[]])
+        width = len(row2[0]) if row2 else 0
+        letter = index_to_letter(width)
+        _sheets_execute(
+            lambda sheets: sheets.spreadsheets().values().update(
+                spreadsheetId=SHEET_ID,
+                range=f"{a1_tab(tab)}!{letter}2",
+                valueInputOption="RAW",
+                body={"values": [[label]]},
+            )
+        )
+        # Re-resolve so the new column is known, then return its letter.
+        return _get_schema(tab, refresh=True).letter(field)
+
+
+def _set_approval(tab: str, row: int, field: str, value: str) -> str:
+    """Write `value` ('✓' to approve, '' to clear) into the approval column.
+
+    Returns the column letter written. Creates the column on first use.
+    """
+    letter = _ensure_approval_column(tab, field)
+    _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().update(
+            spreadsheetId=SHEET_ID,
+            range=f"{a1_tab(tab)}!{letter}{row}",
+            valueInputOption="RAW",
+            body={"values": [[value]]},
+        )
+    )
+    return letter
+
+
 def _last_letter(idx: int) -> str:
     """Spreadsheet A1 column letter for the rightmost column we want to read."""
     from sheet_schema import index_to_letter
     return index_to_letter(idx)
-
-
-def _mark_question_complete(tab: str, row: int) -> bool:
-    """Write ✓ to the row's `image complete` column. Returns False (without
-    raising) when the tab doesn't carry that column — the rebuilt tabs
-    (1-250 etc.) dropped it and the worker tolerates the gap."""
-    schema = _get_schema(tab)
-    try:
-        col = schema.letter("complete")
-    except KeyError:
-        return False
-    _sheets_execute(
-        lambda sheets: sheets.spreadsheets().values().update(
-            spreadsheetId=SHEET_ID,
-            range=f"{a1_tab(tab)}!{col}{row}",
-            valueInputOption="USER_ENTERED",
-            body={"values": [["✓"]]},
-        )
-    )
-    return True
 
 
 def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | None) -> dict[str, str]:
@@ -829,20 +902,22 @@ def _run_generation_sync(job: Job, prompt: str,
         saved_path = Path(saved[0])
         _emit(job, f"  ✓ generated ({result.duration_seconds:.1f}s)")
 
+        code = (job.extra.get("country") or "").strip()
+        if not code:
+            raise RuntimeError("no country code on job — cannot resolve Drive folder")
         dest_name = drive_name(job.slug.lstrip("q"), job.kind)
         client = get_client()
 
-        # 1) Full-res original → staging (WIP). Kept "just in case" and used as
-        #    the answer-remix reference (best fidelity).
-        meta = client.upload_or_replace(STAGING_FOLDER_ID, dest_name, saved_path)
+        # 1) Full-res original → the country folder. Kept "just in case" and
+        #    used as the answer-remix reference (best fidelity).
+        meta = client.upload_or_replace(country_folder_id(code), dest_name, saved_path)
         job.extra["drive_file_id"] = meta.id
         job.extra["drive_name"] = meta.name
-        job.output_path = f"drive://{meta.name}"
-        _emit(job, f"  ✓ original uploaded to WIP: {meta.name} (id={meta.id})")
+        job.output_path = f"drive://{code}/{meta.name}"
+        _emit(job, f"  ✓ original uploaded to {code}/: {meta.name} (id={meta.id})")
 
-        # 2) 512×384 lossless-PNG copy → WIP/Resized. This is what the UI shows
-        #    and the game consumes; on approval it moves to the approved
-        #    Resized subfolder in lockstep with the original.
+        # 2) 512×384 lossless-PNG copy → the country's Resized subfolder. This is
+        #    what the UI shows and the game consumes.
         resized_bytes = optimize_image_bytes(saved_path.read_bytes())
         import tempfile as _tf
         fd, rstr = _tf.mkstemp(prefix=f"trivia-{job.slug}-{job.kind}-resized-", suffix=".png")
@@ -850,12 +925,12 @@ def _run_generation_sync(job: Job, prompt: str,
         resized_path = Path(rstr)
         resized_path.write_bytes(resized_bytes)
         rmeta = client.upload_or_replace(
-            resized_folder_id(STAGING_FOLDER_ID), dest_name, resized_path,
+            country_resized_folder_id(code), dest_name, resized_path,
             mime_type="image/png",
         )
         job.extra["resized_file_id"] = rmeta.id
         _emit(job, f"  ✓ resized → {GAME_WIDTH}×{GAME_HEIGHT} PNG "
-                   f"({len(resized_bytes) // 1024} KB) uploaded to WIP/Resized")
+                   f"({len(resized_bytes) // 1024} KB) uploaded to {code}/Resized")
     finally:
         # Always unlink the tempfile(s): the path we allocated, the path the
         # driver actually wrote (it may have rewritten the extension from .jpg
@@ -874,22 +949,21 @@ async def _worker(job: Job) -> None:
         await _run_job(job)
 
 
-def _stage_reference_from_drive(slug: str) -> Path:
-    """Download the question image for `slug` from Drive to a tempfile.
+def _stage_reference_from_drive(code: str, slug: str) -> Path:
+    """Download the question image for `slug` from the country folder to a tempfile.
 
     The OpenArt driver needs a real local path for Playwright's
-    set_input_files. We pull bytes from Drive (approved or staging — either
-    is fine as a reference) and write them to a tempfile that the caller
-    is responsible for deleting.
+    set_input_files. We pull bytes from Drive and write them to a tempfile that
+    the caller is responsible for deleting.
 
-    Raises if the question image isn't on Drive in either folder.
+    Raises if the question image isn't in the country folder.
     """
     import tempfile
     name = drive_name(slug.lstrip("q"), "question_image")
-    state, meta, _approved = state_for(name)
-    if state == "none" or meta is None:
+    meta = find_original(code, name) if code else None
+    if meta is None:
         raise RuntimeError(
-            f"question image {name} not found on Drive — generate it first"
+            f"question image {code}/{name} not found on Drive — generate it first"
         )
     data, mime, _ = get_client().download_bytes(meta.id, meta.modified_time)
     suffix = ".png" if "png" in mime else ".jpg"
@@ -911,27 +985,27 @@ async def _run_job(job: Job) -> None:
             if not prompt:
                 raise RuntimeError("question-image prompt is empty for this row")
             await asyncio.to_thread(_run_generation_sync, job, prompt, None)
-            # Mark the completion column ✓ after the file lands (matches generate.py default).
-            if not job.extra.get("no_mark"):
-                try:
-                    marked = await asyncio.to_thread(_mark_question_complete, job.tab, job.row)
-                    if marked:
-                        _emit(job, f"  ✓ marked {job.tab}!complete row {job.row}")
-                    else:
-                        _emit(job, f"  · skipped complete-mark (no 'image complete' col on {job.tab})")
-                except Exception as e:
-                    _emit(job, f"  ⚠ sheet update failed: {e}")
+            field = "approved_q"
         elif job.kind == "answer_image":
             prompt = job.extra.get("prompt", "").strip()
             if not prompt:
                 raise RuntimeError("answer-image prompt is empty for this row")
             _emit(job, "  → downloading reference (question image) from Drive…")
-            ref_tempfile = await asyncio.to_thread(_stage_reference_from_drive, job.slug)
+            code = (job.extra.get("country") or "").strip()
+            ref_tempfile = await asyncio.to_thread(_stage_reference_from_drive, code, job.slug)
             await asyncio.to_thread(
                 _run_generation_sync, job, prompt, ref_tempfile,
             )
+            field = "approved_r"
         else:
             raise RuntimeError(f"unknown job kind: {job.kind}")
+        # A freshly (re)generated image is unapproved by definition — clear the
+        # row's approval flag so a changed image isn't left marked approved.
+        try:
+            await asyncio.to_thread(_set_approval, job.tab, job.row, field, "")
+            _emit(job, f"  · approval reset (regenerate clears approval) on {job.tab} row {job.row}")
+        except Exception as e:
+            _emit(job, f"  ⚠ approval reset failed: {e}")
         job.status = "success"
     except Exception as e:
         job.status = "error"
@@ -977,10 +1051,10 @@ def _rows_sync(tab: str | None, refresh: bool):
     the frontend polls every 3s. Wrap this in asyncio.to_thread so
     in-memory endpoints can slip through while Sheets is responding.
 
-    refresh=True also drops the cached Drive folder listings (staging,
-    approved, and both Resized subfolders) so manual Drive edits — the
-    user copying/moving/deleting a file via Drive's UI rather than this
-    app — show up on the next poll instead of sitting stale for the rest
+    refresh=True also drops the cached Drive folder listings for the country
+    folders we've resolved (and their Resized subfolders) so manual Drive
+    edits — the user copying/moving/deleting a file via Drive's UI rather than
+    this app — show up on the next poll instead of sitting stale for the rest
     of the 120s TTL.
     """
     if refresh:
@@ -990,17 +1064,19 @@ def _rows_sync(tab: str | None, refresh: bool):
             pass
         try:
             client = get_client()
-            client.invalidate_listing(STAGING_FOLDER_ID)
-            client.invalidate_listing(APPROVED_FOLDER_ID)
-            # Resized subfolders are lazy — only invalidate if already resolved,
-            # otherwise we'd force a Drive round-trip for folders we may never
-            # touch this session.
-            for parent in (STAGING_FOLDER_ID, APPROVED_FOLDER_ID):
-                resized = _resized_folder_ids.get(parent)
-                if resized:
-                    client.invalidate_listing(resized)
+            # Country + Resized folders are lazy — only invalidate the ones
+            # already resolved this session (don't force round-trips for
+            # folders we may never touch).
+            for fid in list(_country_folder_ids.values()):
+                client.invalidate_listing(fid)
+            for fid in list(_resized_folder_ids.values()):
+                client.invalidate_listing(fid)
         except Exception:
             pass
+        # Drop the tab→COUNTRY cache so a corrected COUNTRY code in the sheet
+        # takes effect on the next approve/discard/image without a restart.
+        with _tab_country_lock:
+            _tab_country_cache.clear()
     validated = _validate_tab(tab)
     return validated, read_rows(tab=validated, refresh_schema=refresh)
 
@@ -1017,8 +1093,7 @@ async def api_health():
         "sheet_id": SHEET_ID,
         "sheet_tab": SHEET_TAB,
         "available_tabs": tabs,
-        "approved_folder_id": APPROVED_FOLDER_ID,
-        "staging_folder_id": STAGING_FOLDER_ID,
+        "question_images_root_id": QUESTION_IMAGES_ROOT_ID,
         "sa_path": str(SA_PATH),
         "sa_present": SA_PATH.exists(),
         "python": sys.executable,
@@ -1109,9 +1184,11 @@ async def api_run(payload: dict):
     if not prompt:
         raise HTTPException(400, "prompt required")
 
-    extra: dict = {"prompt": prompt}
-    if kind == "question_image":
-        extra["no_mark"] = bool(payload.get("no_mark", False))
+    # Country code names the Drive folder the image is written to. Prefer the
+    # payload's value (the UI has it per row); fall back to the tab's code.
+    code = str(payload.get("country", "")).strip() or _tab_country_code(tab)
+
+    extra: dict = {"prompt": prompt, "country": code}
 
     job = Job(id=uuid.uuid4().hex[:8], kind=kind, row=row, slug=slug, tab=tab, extra=extra)
     jobs[job.id] = job
@@ -1209,24 +1286,20 @@ def _kind_alias(kind: str) -> str:
 
 
 @app.get("/api/image/{slug}/{kind}")
-async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int = 0,
+async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0,
                     v: str | None = None):
     """Stream an image for one (row slug, kind) pair, sourced from Drive.
 
     Serves the **512×384 resized** copy (what the game uses), so the UI shows
-    exactly what ships. Falls back to the full-res original for legacy images
-    that predate resized copies.
+    exactly what ships. Falls back to the full-res original when a resized copy
+    doesn't exist yet (and kicks off a background migration so it does next time).
 
-    Default routing: staging wins over approved so the iteration loop is
-    visible (see _resolve_state). Pass `?variant=approved` to fetch the
-    coexisting approved file explicitly — the UI uses this when both
-    thumbnails are rendered side-by-side and the user clicks the
-    approved one. 404 when neither folder has it (or, for
-    variant=approved, when only a staging file exists).
+    The image lives in the country folder; `tab` (the query param the UI sends)
+    resolves to the COUNTRY code. 404 when the country folder has no such file.
 
-    Pass `?thumb=1` to get a downsized JPEG (~256 px on longest edge,
-    ~30 KB) suitable for the row thumbnails. The full-resolution path
-    is used for the click-to-zoom modal.
+    Pass `?thumb=1` to get a downsized JPEG (~256 px on longest edge, ~30 KB)
+    suitable for the row thumbnails. The full-resolution path is used for the
+    click-to-zoom modal.
     """
     if "/" in slug or ".." in slug or not slug.startswith("q"):
         raise HTTPException(400, "bad slug")
@@ -1235,42 +1308,29 @@ async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int
     if not number.isdigit():
         raise HTTPException(400, "bad slug")
     name = drive_name(number, kind)
+    # `tab` is required: it resolves the country folder. Defaulting it would
+    # mis-route — a bare number like 250 exists under several countries, so a
+    # missing tab could serve the wrong country's image. The UI always sends it.
+    if not tab:
+        raise HTTPException(400, "tab query param required")
+    code = await asyncio.to_thread(_tab_country_code, _validate_tab(tab))
 
-    # Resolve which Drive file to serve. Prefer the 512×384 resized copy; fall
-    # back to the full-res original (and kick off a background migration so the
-    # resized exists next time). This fallback must also cover variant=approved:
-    # the row data marks "has approved copy" from the *original* folders, so the
-    # UI may ask for an approved variant whose resized copy doesn't exist yet —
-    # without the original fallback that 404s and the thumbnail breaks.
-    rstate, rmeta, rapproved = await asyncio.to_thread(state_for_resized, name)
-    if variant == "approved":
-        target = rapproved or (rmeta if rstate == "approved" else None)
-    else:
-        target = rmeta   # primary (staging wins over approved; see _resolve_state)
-    state = "approved" if variant == "approved" else rstate
+    # Prefer the 512×384 resized copy; fall back to the full-res original and
+    # kick off a background migration so the resized exists next time.
+    target = await asyncio.to_thread(find_resized, code, name)
     from_resized = target is not None   # resized files inherit public from the folder
-
     if target is None:
-        # No suitable resized — fall back to the original folders.
-        ostate, ometa, oapproved = await asyncio.to_thread(state_for, name)
-        if variant == "approved":
-            target = oapproved or (ometa if ostate == "approved" else None)
-            if target is None:
-                raise HTTPException(404, f"no approved variant for {slug}/{kind}")
-            state = "approved"
-        else:
-            if ometa is None:
-                raise HTTPException(404, f"no image for {slug}/{kind}")
-            target, state = ometa, ostate
-        # Serving an original means its resized copy is missing — create it in
-        # the background so subsequent views come from Resized.
-        _schedule_resized_migration(name, target, state)
+        ometa = await asyncio.to_thread(find_original, code, name)
+        if ometa is None:
+            raise HTTPException(404, f"no image for {code}/{slug}/{kind}")
+        target = ometa
+        _schedule_resized_migration(code, name, target)
 
     # Serve straight from Google's CDN: 302 to the Drive CDN URL so the browser
     # fetches the image directly (the CDN does any downscaling via `?sz=`) and
     # this server stays out of the byte path. Resized files inherit public
-    # access from the Resized folder, so no per-file sharing call is needed;
-    # only an original served via fallback needs to be made public itself.
+    # access from the Resized folder; an original served via fallback needs to
+    # be made public itself.
     if not from_resized:
         await asyncio.to_thread(ensure_public, target.id)
     return RedirectResponse(
@@ -1278,7 +1338,6 @@ async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int
         status_code=302,
         headers={
             "Cache-Control": "private, max-age=600",
-            "X-Drive-State": state,
             "X-Drive-File-Id": target.id,
         },
     )
@@ -1286,16 +1345,16 @@ async def api_image(slug: str, kind: str, variant: str | None = None, thumb: int
 
 @app.post("/api/approve")
 async def api_approve(payload: dict):
-    """Move a staged image from STAGING to APPROVED.
+    """Approve an image by writing ✓ to the row's `Q/A Image Approved` column.
 
-    Payload: {row, kind} where kind ∈ {"question_image","answer_image"} (or
-    "Q"/"A" aliases). Looks up `{N}{Q|A}.png` in the staging folder and
-    re-parents it to approved.
+    Payload: {tab, row, slug, kind} where kind ∈ {"question_image",
+    "answer_image"} (or "Q"/"A" aliases). No Drive mutation — the file stays in
+    its country folder; approval is purely a sheet status now.
 
-    409 if already approved (nothing to do but worth flagging to the UI).
-    404 if neither folder has it (the image doesn't exist yet or Drive is
-    out of sync; refresh /api/rows).
+    404 if the file isn't in the country folder (generate it first).
+    409 if it's already approved.
     """
+    tab = _validate_tab(payload.get("tab"))
     try:
         row = int(payload["row"])
     except (KeyError, ValueError, TypeError):
@@ -1307,75 +1366,38 @@ async def api_approve(payload: dict):
     if not number.isdigit():
         raise HTTPException(400, "bad slug")
     kind = _kind_alias(str(payload.get("kind", "")).strip())
+    field = "approved_q" if kind == "question_image" else "approved_r"
     name = drive_name(number, kind)
 
-    state, meta, approved_coexists = await asyncio.to_thread(state_for, name)
-    if state == "approved":
-        raise HTTPException(409, f"{name} is already approved")
-    if state == "none" or meta is None:
-        raise HTTPException(404, f"{name} not found in staging — generate it first")
+    code = await asyncio.to_thread(_tab_country_code, tab)
+    meta = await asyncio.to_thread(find_original, code, name)
+    if meta is None:
+        raise HTTPException(404, f"{code}/{name} not on Drive — generate it first")
 
-    # Iteration-after-approval case: a previously-approved file still
-    # lives in APPROVED with the same name. Trash it so the WIP can be
-    # promoted without Drive ending up with two same-named files in the
-    # canonical folder (Drive allows duplicates, but the rest of this
-    # service assumes one canonical {N}{Q|A}.png per name).
-    #
-    # If trash() succeeds but move() below fails, we're left with no
-    # approved + the WIP still staged — retrying /api/approve picks up
-    # cleanly from there. The trashed file is recoverable for ~30 days
-    # from the Shared Drive's trash UI if we ever need it back.
-    if approved_coexists is not None:
-        await asyncio.to_thread(get_client().trash, approved_coexists.id)
-
-    new_meta = await asyncio.to_thread(
-        get_client().move, meta.id,
-        add_parents=[APPROVED_FOLDER_ID],
-        remove_parents=[STAGING_FOLDER_ID],
-    )
-
-    # Lockstep: promote the 512×384 resized copy from WIP/Resized to the
-    # approved Resized subfolder so the game's approved-Resized view tracks the
-    # approved originals. Same stale-approved trash as the original. Best-effort
-    # — a missing resized (e.g. a legacy image generated before resized copies
-    # existed) just means there's nothing to promote.
-    resized_promoted = False
-    rstate, rmeta, rapproved_coexists = await asyncio.to_thread(state_for_resized, name)
-    if rmeta is not None and rstate != "approved":
-        if rapproved_coexists is not None:
-            await asyncio.to_thread(get_client().trash, rapproved_coexists.id)
-        await asyncio.to_thread(
-            get_client().move, rmeta.id,
-            add_parents=[resized_folder_id(APPROVED_FOLDER_ID)],
-            remove_parents=[resized_folder_id(STAGING_FOLDER_ID)],
-        )
-        resized_promoted = True
-
+    letter = await asyncio.to_thread(_set_approval, tab, row, field, "✓")
     return {
         "ok": True,
+        "tab": tab,
         "row": row,
         "slug": slug,
         "kind": kind,
-        "drive_name": new_meta.name,
-        "file_id": new_meta.id,
-        "modified_time": new_meta.modified_time,
+        "drive_name": name,
+        "approved_column": letter,
         "state": "approved",
-        "replaced_prior_approval": approved_coexists is not None,
-        "resized_promoted": resized_promoted,
     }
 
 
 @app.post("/api/discard")
 async def api_discard(payload: dict):
-    """Trash a STAGING image (recoverable via Drive trash for ~30 days).
+    """Trash an image and clear its approval status.
 
-    Payload: {row, slug, kind}. Refuses to discard an approved file — that
-    would be a destructive operation on canonical content and should be
-    done explicitly through Drive's UI if intended.
+    Payload: {tab, row, slug, kind}. Trashes the file (and its resized copy) in
+    the country folder — recoverable via Drive trash for ~30 days — and clears
+    the row's approval flag.
 
-    Returns 404 if the file isn't on Drive (nothing to discard), 409 if
-    it's approved (refused).
+    Returns 404 if the file isn't on Drive (nothing to discard).
     """
+    tab = _validate_tab(payload.get("tab"))
     try:
         row = int(payload["row"])
     except (KeyError, ValueError, TypeError):
@@ -1387,20 +1409,29 @@ async def api_discard(payload: dict):
     if not number.isdigit():
         raise HTTPException(400, "bad slug")
     kind = _kind_alias(str(payload.get("kind", "")).strip())
+    field = "approved_q" if kind == "question_image" else "approved_r"
     name = drive_name(number, kind)
 
-    state, meta, _approved = await asyncio.to_thread(state_for, name)
-    if state == "none" or meta is None:
-        raise HTTPException(404, f"{name} not on Drive — nothing to discard")
-    if state == "approved":
-        raise HTTPException(
-            409,
-            f"{name} is already approved — discard from Drive directly if intended",
-        )
+    code = await asyncio.to_thread(_tab_country_code, tab)
+    meta = await asyncio.to_thread(find_original, code, name)
+    if meta is None:
+        raise HTTPException(404, f"{code}/{name} not on Drive — nothing to discard")
 
     trashed = await asyncio.to_thread(get_client().trash, meta.id)
+    # Best-effort: trash the resized copy too, and clear the approval flag.
+    rmeta = await asyncio.to_thread(find_resized, code, name)
+    if rmeta is not None:
+        try:
+            await asyncio.to_thread(get_client().trash, rmeta.id)
+        except Exception:
+            pass
+    try:
+        await asyncio.to_thread(_set_approval, tab, row, field, "")
+    except Exception:
+        pass
     return {
         "ok": True,
+        "tab": tab,
         "row": row,
         "slug": slug,
         "kind": kind,

@@ -95,11 +95,12 @@ render is kept too. OpenArt returns a ~2400×1792 2K image; the tooling
 (`scripts/trivia_images/image_optimize.py`) writes a 512×384 **lossless
 optimized PNG** copy alongside the original — it never discards the original.
 
-- **CLI** (`generate.py`): original at `library/q{N}.png`, resized copy at
-  `library/resized/q{N}.png`.
-- **Web server**: original (full-res) → `WIP/`; resized → `WIP/Resized/`.
-  Approving moves both to `Question Images/` and `Question Images/Resized/` in
-  lockstep. The UI shows the resized; the game reads `Question Images/Resized/`.
+- **CLI** (`generate.py`): legacy/unused local-library path (nothing reads it).
+- **Web server** (the live flow): original (full-res) → `Question Images/<CODE>/`;
+  resized → `Question Images/<CODE>/Resized/`, where `<CODE>` is the row's
+  `COUNTRY` value. There is no WIP folder — the file lives in one country folder
+  and "approved vs WIP" is the per-row `Q/A Image Approved` sheet status. The UI
+  shows the resized; the game reads the country Resized folders.
 
 The full-res original is what the answer-remix references (best fidelity —
 "kept just in case" is exactly this use).
@@ -143,7 +144,7 @@ Write `projects/trivia-q-{N}/artifacts/asset_manifest.json`:
     "row": <int>,
     "slug": "q{N}",
     "sheet_id": "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk",
-    "sheet_tab": "<the tab this row came from, e.g. 1-100>"
+    "sheet_tab": "<the tab this row came from, e.g. US>"
   }
 }
 ```

@@ -57,7 +57,8 @@ SCOPES_RO = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 # created in the 1-100 format is picked up automatically.
 FIELD_TO_HEADER: dict[str, str] = {
     "number":            "#",
-    "complete":          "image complete",   # not present on 1-100; kept optional
+    "complete":          "image complete",   # not present on country tabs; kept optional
+    "country":           "COUNTRY",          # ISO-ish code (US, IN, FR, ...) — names the Drive/library folder
     "category":          "Category",
     "mode":              "MODE",
     "question":          "Question text",
@@ -70,6 +71,11 @@ FIELD_TO_HEADER: dict[str, str] = {
     "hint":              "HINT",
     "prompt_q":          "Question IMAGE Prompt",
     "prompt_r":          "Answer IMAGE (CORRECT) Prompt",
+    # Approval status lives in the sheet (no more WIP folder). These columns
+    # are created on first approve, so they're OPTIONAL: a tab that has never
+    # had an image approved simply won't carry them yet.
+    "approved_q":        "Q Image Approved",
+    "approved_r":        "A Image Approved",
 }
 
 # Optional fields — resolver returns None for these if the header label
@@ -85,6 +91,8 @@ OPTIONAL_FIELDS: frozenset[str] = frozenset({
     "complete",
     "response_correct", "response_incorrect", "hint",
     "answer_2", "answer_3", "answer_4",
+    # Created lazily on first approve — absent on tabs not yet touched.
+    "approved_q", "approved_r",
 })
 
 

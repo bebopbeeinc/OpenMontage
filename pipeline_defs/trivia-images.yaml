@@ -1,14 +1,16 @@
 name: trivia-images
 version: "0.1"
 description: >
-  Per-row trivia image pipeline. For one row of a 1-100-format question tab of
-  the trivia-questions sheet (default `1-100`), generates the **question image**
-  from the question-image prompt and the **answer image** from the answer-image
-  prompt — where the answer image is created in OpenArt's "same scene" remix
-  mode, taking the freshly generated question image as a reference so both
-  share the same environment. Columns resolve by header label
+  Per-row trivia image pipeline. For one row of a per-COUNTRY question tab of
+  the trivia-questions sheet (US, India, France, …), generates the **question
+  image** from the question-image prompt and the **answer image** from the
+  answer-image prompt — where the answer image is created in OpenArt's "same
+  scene" remix mode, taking the freshly generated question image as a reference
+  so both share the same environment. Columns resolve by header label
   (scripts/trivia_images/sheet_schema.py), which tolerates column
-  inserts/reorders within the 1-100 layout and skips tabs in other layouts.
+  inserts/reorders within the schema and skips tabs in other layouts. Each
+  country's images live in their own Drive folder (Question Images/<CODE>/);
+  approval is a per-row sheet status, not a folder.
 
   Each row is its own project (slug `trivia-q-{N}`). Generated PNGs land in
   the shared image library at `scripts/trivia_images/library/` so the
@@ -43,14 +45,19 @@ required_skills:
 external_state:
   - kind: google_sheet
     id: 1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk
-    tab: "1-100"   # default; the web UI lists every tab matching the 1-100 header layout
+    tab: "US"   # default-ish; the web UI lists every COUNTRY tab matching the schema
     role: source_of_truth
     auth: service_account
     auth_path: ~/.google/claude-sheets-sa.json
     notes: >
       Row 1 = section-header labels, row 2 = column names, row 3+ = data.
-      `1-100` is the canonical layout. The pipeline resolves every field
-      to its live column by HEADER LABEL at runtime — see
+      The selectable tabs are one-per-COUNTRY (US, India, France, Canada,
+      Brazil, Cuba, Egypt, Spain, Argentina, …); each carries a `COUNTRY`
+      code (US/IN/FR/…) that names its Drive folder, and a `#` column used as
+      the image slug `q{N}`. Approval status lives in the sheet via the
+      per-row `Q Image Approved` / `A Image Approved` columns (created on first
+      approve). The pipeline resolves every field to its live column by HEADER
+      LABEL at runtime — see
       scripts/trivia_images/sheet_schema.py (FIELD_TO_HEADER holds the
       1-100 labels; SheetSchema does the lookup). Only tabs carrying all
       of 1-100's required labels resolve, so tabs in other layouts are
@@ -69,8 +76,12 @@ external_state:
       truth for that.
   - kind: local_directory
     path: scripts/trivia_images/library/
-    role: deliverable_drop
+    role: legacy_unused
     notes: >
+      LEGACY/UNUSED. Only the CLI `generate.py` ever wrote here and nothing in
+      the repo reads it — the web UI is Drive-only and downstream pipelines read
+      image URLs from the sheet. Kept for reference; not part of the live
+      country-folder workflow. (Historical description follows.)
       Gitignored library. The full-res original is kept at `q{N}.png` /
       `q{N}_answer.png`, and a 512×384 lossless-PNG game copy is written
       to the `resized/` subdir (`resized/q{N}.png`, …) — see
@@ -83,13 +94,21 @@ external_state:
   - kind: google_drive
     role: deliverable_drop
     notes: >
-      Web-UI generations go to Drive (folder IDs in
-      scripts/trivia_images/drive_config.py). Full-res originals: `WIP/`
-      (staging) → `Question Images/` root (approved). 512×384 resized
-      copies: `WIP/Resized/` → `Question Images/Resized/`. Approving an
-      image moves BOTH the original and its resized copy to their approved
-      folders in lockstep. The game reads `Question Images/Resized/`;
-      the web UI points at the resized copies.
+      Web-UI generations go to Drive (root ID in
+      scripts/trivia_images/drive_config.py). One folder per COUNTRY code lives
+      under the `Question Images/` root: full-res originals at
+      `Question Images/<CODE>/{N}{Q|A}.png` and 512×384 resized game copies at
+      `Question Images/<CODE>/Resized/{N}{Q|A}.png`. The game reads the country
+      Resized folders; the web UI points at the resized copies.
+
+      There is NO WIP/staging folder. An image lives in exactly one country
+      folder, and "approved vs WIP" is a STATUS in the sheet: the per-row
+      `Q Image Approved` / `A Image Approved` columns (created on first approve).
+      Approving writes `✓`; discarding trashes the file + clears the flag;
+      re-generating overwrites the file in place and clears the flag. Existing
+      images were sorted into country folders by
+      scripts/trivia_images/migrate_to_country_folders.py (the country tabs' `#`
+      column is the global image number).
 
       Serving: all image files are made `anyone-with-link: reader` (on upload
       and lazily on first serve — see server.ensure_public). /api/image does
