@@ -35,7 +35,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts" / "common"))
 
-from openart_driver import generate_clip  # noqa: E402
+from openart_driver import download_resource, generate_clip  # noqa: E402
 from scripts.trivia_reaction import queue_row  # noqa: E402
 from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 
@@ -131,6 +131,39 @@ def _update_canonical_symlink(slug: str, latest: Path) -> None:
     canonical.symlink_to(latest.name)  # relative — works wherever the library moves
 
 
+def _install_from_asset_id(args) -> int:
+    """Download a pre-generated OpenArt resource and install it as the slug's
+    current clip — a fresh takeNN file, canonical symlink swap, same tail-fade
+    masking as the generate path. Spends no OpenArt credit.
+    """
+    slug = args.slug
+    LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _variant_paths(slug, 1)[0]
+
+    print(f"→ OpenArt download (asset_id={args.asset_id}) → {dest.relative_to(REPO)}")
+    saved = download_resource(
+        resource_id=args.asset_id,
+        output_path=dest,
+        headless=args.headless,
+        audio_on=True,  # trivia-reaction keeps Seedance native audio
+    )
+    print(f"✓ saved {Path(saved).relative_to(REPO)}")
+
+    # Same end-of-clip audio-artifact masking as the generate path.
+    _apply_tail_fade(Path(saved))
+    print(f"  · audio tail-silenced ({_TAIL_SILENCE_S * 1000:.0f}ms, "
+          f"fade={_FADE_DURATION_S * 1000:.0f}ms)")
+
+    canonical = LIBRARY_DIR / f"{slug}.mp4"
+    canonical_exists_before = canonical.exists() or canonical.is_symlink()
+    if not canonical_exists_before or args.force:
+        _update_canonical_symlink(slug, Path(saved))
+        print(f"✓ canonical symlink → {Path(saved).name}")
+    else:
+        print(f"  · canonical {canonical.name} unchanged (use --force to swap)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("slug", type=str, help="project slug (matches projects/trivia-reaction/<slug>/)")
@@ -142,7 +175,13 @@ def main() -> int:
                     help="run Playwright headless (default: visible window)")
     ap.add_argument("--model-override", type=str, default=None,
                     help="override the OpenArt model name (default: Seedance 2.0)")
+    ap.add_argument("--asset-id", type=str, default=None,
+                    help="download an already-generated OpenArt resource by id "
+                         "instead of generating (spends no credit)")
     args = ap.parse_args()
+
+    if args.asset_id:
+        return _install_from_asset_id(args)
 
     # Source of truth for the prompt is now the sheet (Queue!J, written
     # by the script director). Older rows / dev machines may still have

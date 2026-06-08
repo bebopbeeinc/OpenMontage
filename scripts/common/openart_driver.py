@@ -725,6 +725,48 @@ def _browser(p: Playwright, headless: bool):
         browser.close()
 
 
+def download_resource(
+    resource_id: str,
+    output_path: Path,
+    headless: bool = False,
+    audio_on: bool = False,
+) -> Path:
+    """Download an already-generated OpenArt resource by its id.
+
+    Unlike `generate_clip`, this spends no credits — it resolves an existing
+    resource (e.g. one the user picked in the OpenArt gallery) via
+    `/suite/api/resources/{id}` and downloads its full-res CDN file using the
+    authenticated browser context (the CDN URLs are session-signed, so a bare
+    GET 403s — see `_download_via_context`).
+
+    Args:
+        resource_id: the OpenArt resource id (the `rid` in the resources API).
+        output_path: destination file.
+        headless: open a visible window when False.
+        audio_on: leave audio when True; strip it after download when False
+            (matches the trivia-reaction default — VO is added in post).
+
+    Returns the saved path. Raises if the resource never resolves to a URL.
+    """
+    output_path = Path(output_path).expanduser().resolve()
+    with sync_playwright() as p, _browser(p, headless=headless) as ctx:
+        page = ctx.new_page()
+        _ensure_logged_in(page, OPENART_SUITE_BASE)
+        print(f"  → resolving resource {resource_id}…", file=sys.stderr)
+        (rid, info), = _poll_resources(page, [resource_id], GENERATION_TIMEOUT_S)
+        if info.get("status") != "ok":
+            raise RuntimeError(
+                f"resource {rid} did not resolve to a URL: "
+                f"{info.get('status')} ({info.get('error')})"
+            )
+        url = info["url"]
+        print(f"  → {rid} URL: {url}", file=sys.stderr)
+        _download_via_context(page, url, output_path)
+        if not audio_on:
+            _strip_audio_in_place(output_path)
+    return output_path
+
+
 def generate_clip(
     prompt: str,
     model: str,
