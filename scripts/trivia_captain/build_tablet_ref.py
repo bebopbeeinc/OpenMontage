@@ -186,8 +186,9 @@ def main() -> None:
     ap.add_argument("slug", help="project slug (matches projects/trivia-captain/<slug>/)")
     ap.add_argument("--fact", required=True, type=Path,
                     help="repo-relative or absolute path to the generated fact image")
-    ap.add_argument("--logo", type=Path, default=Path.home() / "Downloads" / "tc_logo.png",
-                    help="game logo PNG (default ~/Downloads/tc_logo.png)")
+    ap.add_argument("--logo", type=Path,
+                    default=REPO / "scripts" / "trivia_captain" / "assets" / "tc_logo.png",
+                    help="game logo PNG (default: scripts/trivia_captain/assets/tc_logo.png)")
     ap.add_argument("--layout", choices=("video", "split"), default="video",
                     help="video (default): full-bleed fact + logo watermark; "
                          "split (legacy): 50/50 logo-over-fact")

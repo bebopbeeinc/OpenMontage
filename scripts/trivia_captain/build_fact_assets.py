@@ -114,7 +114,7 @@ def main() -> int:
     # 2. Composite the full-bleed tablet reference (fact + logo watermark).
     logo = (args.logo if args.logo and args.logo.is_absolute()
             else (REPO / args.logo) if args.logo
-            else Path.home() / "Downloads" / "tc_logo.png")
+            else REPO / "scripts" / "trivia_captain" / "assets" / "tc_logo.png")
     if not logo.is_file():
         sys.exit(f"logo not found: {logo} (pass --logo)")
     build_tablet_ref.build_video(fact_path, logo, tablet_ref)
