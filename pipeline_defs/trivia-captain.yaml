@@ -1,0 +1,287 @@
+name: trivia-captain
+version: "0.1"
+description: >
+  "And you're telling me this NOW?" late-discovery 15s vertical reaction
+  reels fronted by "Captain" Archibald — a 70-year-old lifelong world
+  traveler (NOT a sea captain; the nickname is affectionate) who keeps
+  finding out absurd facts about places he's been from a mobile game on
+  his tablet. Sister pipeline of trivia-reaction: same daily-trivia
+  content sources, same Seedance 2.0 avatar mechanics, same Remotion
+  compose path — different persona, different emotional register (amused
+  disbelief, never anger), rotating hook library instead of one locked
+  hook, and the game's splash key art rendered in-camera on the tablet
+  via an OpenArt reference-image upload.
+
+  For one Day N, the pipeline resolves the trivia Question / CorrectAnswer /
+  CorrectExplanation via the LocalizedTextConfig Uid lookup, drafts VO copy
+  in the hook-first Archibald voice (hook → credentials → fact attributed
+  to the game → beat → kicker, 40-46 words), drives OpenArt to render the
+  avatar clip with the locked `Captain Archibald` character reference plus
+  the per-row splash reference image, then composes the final reel with
+  word-by-word warm-red-pill captions via Remotion's TriviaWithBg
+  composition (highlightColor=#D63B2F, showFactsOverlay=false).
+
+  Orchestration mirrors trivia-reaction: the TriviaCaptainQueue sheet is
+  the human-facing review surface; in-repo execution state lives under
+  projects/trivia-captain/<slug>/artifacts/ as standard canonical
+  artifacts. Format proven 2026-06-03 on la-tomatina-tomato-fight take04
+  (exploratory workspace projects/trivia-archibald/, pre-rename).
+category: short_form
+stability: alpha
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+  notes: >
+    Format-locked to the Archibald persona spec in styles/trivia-captain.yaml.
+    New creative directions update the style playbook, not the pipeline.
+
+production_modes:
+  - name: manual_openart
+    description: >
+      Human generates the avatar clip in the OpenArt web UI (Seedance 2.0,
+      Text with Reference: upload the splash image AND select the saved
+      `Captain Archibald` character, paste the Queue!J prompt), drops the
+      mp4 into scripts/trivia_captain/library/clips/, and writes the
+      filename into the queue. Pipeline waits between script and assets.
+    required_tools: []
+    best_for:
+      - First-time renders where prompt iteration is hands-on
+      - Anything the automated driver can't express (it cannot attach
+        video references — OpenArt 400s on those even manually staged)
+  - name: automated_openart
+    description: >
+      scripts/trivia_captain/openart_generate.py drives the OpenArt UI via
+      scripts/common/openart_driver.py (Playwright): uploads the splash
+      reference image (metadata.openart.reference_image), selects
+      character=`Captain Archibald`, generates, saves the mp4 to
+      scripts/trivia_captain/library/clips/, and writes the filename back
+      to the queue row.
+    required_tools: []
+    best_for:
+      - Repeated rows and batch runs
+      - When the human is not at the keyboard
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/trivia-captain/executive-producer
+  budget_default_usd: 0.40
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 25
+
+extensions:
+  custom_scripts: true        # scripts/trivia_captain/*.py
+  custom_playbooks: true      # styles/trivia-captain.yaml
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/trivia-captain/executive-producer
+  - pipelines/trivia-captain/select-director
+  - pipelines/trivia-captain/script-director
+  - pipelines/trivia-captain/asset-director
+  - pipelines/trivia-captain/edit-director
+  - pipelines/trivia-captain/compose-director
+  - pipelines/trivia-captain/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  default: trivia-captain
+  custom_allowed: false
+
+# External state. Three sheets + one Drive folder.
+#
+# - DailyTriviaConfig (DEV) is READ-ONLY content, shared with trivia-reaction.
+# - LocalizedTextConfig (DEV) is READ-ONLY text dictionary, shared too.
+# - TriviaCaptainQueue is the workflow-state SoT for THIS pipeline.
+# - The Drive folder is where renders land before publishing to social.
+external_state:
+  - kind: google_sheet
+    id: 1G1iffAILfxvfF_JZx7CWNTi9IF1y_LyKmi9hrgWGGfk
+    tab: "DailyTriviaConfig (DEV)"
+    role: trivia_source
+    auth: service_account
+    auth_path: ~/.google/claude-sheets-sa.json
+    notes: >
+      Shared with trivia-reaction — see that manifest for the full column
+      contract. Row 1 = banner, row 2 = type row, row 3 = header; data
+      starts at row 4. Pipeline reads Uid/Day/Question/FirstAnswer/
+      CorrectExplanation per Day N; column letters resolved at runtime via
+      daily_trivia.cell_for.
+  - kind: google_sheet
+    id: 1y-REopUmAtoirAp-8rOMNz7LlqLe2mjVAlkdhmGKgtY
+    tab: "LocalizedTextConfig (DEV)"
+    role: text_dictionary
+    auth: service_account
+    notes: >
+      Shared with trivia-reaction. Rows 1-3 banner/type/locale, row 4 =
+      header, data starts row 5. Col A = Uid, col B = EN. EN-only for ship-1.
+  - kind: google_sheet
+    id: 1bUvGLcSJr-YCwBxanCQ_7QT5YK8ZFgjgZbT32u2550w
+    tab: Queue
+    role: source_of_truth
+    auth: service_account
+    notes: >
+      TriviaCaptainQueue (captain.archibald). Row 1 = banner, row 2 =
+      header. Data starts at row 3. Columns:
+        A Day | B Slug | C Status | D Question (EN) | E Correct Answer (EN) |
+        F Hook VO | G Fact VO | H Kicker VO | I Drive Link (captioned final) |
+        J OpenArt Prompt | K Caption | L Drive Clip (raw Seedance output) |
+        M Reference Image (repo-relative path of the splash uploaded to OpenArt)
+      Status enum: Draft / Ready to review / Ready to publish / Published.
+      The pipeline owns C/F/G/H/I/J/K/L/M; humans own A/B (and may override
+      anything). Per-row feedback flows through the chat, not the sheet.
+  - kind: google_drive_folder
+    id: 1sGmMTm0pI8rXCxi8sZjgXyQ2d2PJrl-h
+    role: deliverable_drop
+    auth: service_account
+    notes: >
+      @captain.archibald folder under "1. Social Media Accounts - 2026".
+      publish.py uploads renders here. First upload is a new file;
+      re-renders replace the same Drive file in place so the Queue!I link
+      stays stable.
+
+stages:
+  - name: select
+    skill: pipelines/trivia-captain/select-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Queue row found for the given Day; slug present and kebab-case
+      - DailyTriviaConfig row exists for that Day with resolvable Uids
+      - All three Uids resolve to non-empty EN strings in LocalizedTextConfig
+      - "Persona fit check: does the fact give Archibald a plausible
+        late-discovery angle (place/experience proximity)? Flag weak fits."
+      - Sheet revision hash stamped into the brief
+    success_criteria:
+      - Schema-valid brief artifact
+      - metadata.trivia_captain.day is an int >= 1
+      - metadata.trivia_captain.slug matches /^[a-z0-9-]+$/
+      - metadata.trivia_captain.question_en, correct_answer_en,
+        correct_explanation_en all non-empty
+
+  - name: script
+    skill: pipelines/trivia-captain/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "HOOK FIRST: the reel opens cold on an incredulity line from the
+        hook library — no setup before it"
+      - "Hook rotation: not the same hook key as the previous row"
+      - "Beats: hook → credentials → fact attributed to the game → short
+        beat → kicker; fact says 'this game tells me' or equivalent"
+      - "Register: amused disbelief, never anger (see persona register in
+        styles/trivia-captain.yaml — anchor line present in VOICE)"
+      - "Total VO 40-46 words (15s Seedance cap; calibrated on take04)"
+      - "Backdrop from the travel-archive family, varied vs previous row"
+      - "Reference image path set (Queue!M + metadata.openart.reference_image)"
+      - "Prompt uses the CAPS-section format (ACTING/SETTING/PROPS/DIALOGUE/
+        VOICE/SHOT/EXCLUSIONS); no beat labels or timing markers in the body"
+    success_criteria:
+      - Schema-valid script artifact
+      - script.metadata.beats has exactly 3 entries keyed hook/fact/kicker
+      - script.metadata.vo_words estimated 38..48
+      - script.metadata.openart.character == "Captain Archibald"
+      - script.metadata.openart.reference_image is a non-empty repo-relative path to an existing file
+      - script.metadata.openart.prompt is non-empty
+      - script.metadata.openart.duration_s == 15
+
+  - name: assets
+    skill: pipelines/trivia-captain/asset-director
+    required_artifacts_in:
+      - script
+      - brief
+    produces:
+      - asset_manifest
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Avatar mp4 exists at scripts/trivia_captain/library/clips/<slug>.mp4
+      - Clip has an audio track (Seedance native synced voice — audio_on=true)
+      - "Reference image was uploaded (driver log shows '→ uploading
+        reference image'); tablet shows the splash — verify in frames"
+      - Asset provenance recorded (model, prompt, character, duration,
+        reference image)
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - asset_manifest has exactly one video asset (the avatar clip, audio inline)
+      - All referenced files exist on disk
+
+  - name: edit
+    skill: pipelines/trivia-captain/edit-director
+    required_artifacts_in:
+      - asset_manifest
+      - script
+      - brief
+    produces:
+      - edit_decisions
+    tools_available: []          # assemble.py is a custom_script
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - bg.mp4 written to projects/trivia-captain/<slug>/assets/video/bg.mp4 with audio preserved
+      - No separate VO file — Seedance's native voice rides inside bg.mp4
+      - No music bed
+      - render_runtime locked to remotion
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - edit_decisions.render_runtime == "remotion"
+      - projects/trivia-captain/<slug>/assets/video/bg.mp4 exists and passes ffprobe with a:0 audio stream
+
+  - name: compose
+    skill: pipelines/trivia-captain/compose-director
+    required_artifacts_in:
+      - edit_decisions
+    produces:
+      - render_report
+    required_tools:
+      - transcriber
+    tools_available:
+      - transcriber
+    checkpoint_required: true
+    human_approval_default: true   # per user memory: review every render
+    review_focus:
+      - words.json transcribed and aligned to bg.mp4
+      - "Remotion TriviaWithBg comp rendered with: highlightColor=#D63B2F,
+        showFactsOverlay=false, mode=Facts"
+      - Final mp4 exists at projects/trivia-captain/<slug>/renders/<slug>.mp4
+      - "MANDATORY: extract frames at hook / tablet-reveal / kicker beats;
+        verify captions render with the warm-red pill, no caption drift >
+        200ms, and the splash is legible on the tablet"
+      - "MANDATORY auto-fix: defects found during frame review are fixed
+        in-turn (patch words.json, re-render) before signaling done"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - render_report.frame_review_passed == true
+      - render_report.output_path ends with /renders/<slug>.mp4
+
+  - name: publish
+    skill: pipelines/trivia-captain/publish-director
+    required_artifacts_in:
+      - render_report
+      - brief
+    produces:
+      - publish_log
+    tools_available: []          # publish.py is a custom_script
+    checkpoint_required: true
+    human_approval_default: true   # per user memory: never auto-publish
+    review_focus:
+      - Human explicitly approved publication in the current turn
+      - Drive file uploaded OR replaced in place (Queue!I stays stable)
+      - "Queue row updated: C=Ready to publish, I=<drive link>"
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - publish_log.sheet_updates includes Queue!C and Queue!I for the row
+      - publish_log.drive_link is a non-empty https URL

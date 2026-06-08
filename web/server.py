@@ -35,6 +35,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 # Pipeline sub-apps. Each must be a self-contained FastAPI app.
 from scripts.trivia.web import server as trivia
+from scripts.trivia_captain.web import server as trivia_captain
 from scripts.trivia_images.web import server as trivia_images
 from scripts.trivia_quiz.web import server as trivia_quiz
 from scripts.trivia_reaction.web import server as trivia_reaction
@@ -94,6 +95,20 @@ PIPELINES = [
         ),
         "stability": "alpha",
     },
+    {
+        "id": "trivia-captain",
+        "path": "/trivia-captain/",
+        "name": "Trivia Captain",
+        "description": (
+            "\"And you're telling me this NOW?\" 15s vertical reaction reels "
+            "fronted by \"Captain\" Archibald, driven by the TriviaCaptainQueue "
+            "sheet. Sister of Trivia Reaction: same daily-trivia source and "
+            "Seedance/Remotion path, but a rotating hook library and the game "
+            "splash rendered in-camera on his tablet via an OpenArt reference "
+            "image."
+        ),
+        "stability": "alpha",
+    },
 ]
 
 
@@ -108,6 +123,7 @@ PIPELINE_MODULES: dict[str, object] = {
     "trivia-images": trivia_images,
     "trivia-quiz": trivia_quiz,
     "trivia-reaction": trivia_reaction,
+    "trivia-captain": trivia_captain,
 }
 
 # Mount each sub-app at "/<id>". Sub-apps have their own routes rooted at "/",

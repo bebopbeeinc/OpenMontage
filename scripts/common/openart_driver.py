@@ -395,6 +395,72 @@ def _select_character(page: Page, character_name: str) -> None:
         pass
 
 
+def _upload_reference_image(page: Page, image_path: Path) -> None:
+    """Attach a local image as a visual reference ("Upload Media" pill).
+
+    Used to put real content (e.g. a game splash screen) into the scene so
+    the model renders it in-camera instead of compositing in post.
+    Diagnoses failures with screenshots like _select_character.
+    """
+    out_dir = REPO / ".playwright"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def step(label: str, action) -> None:
+        try:
+            action()
+        except Exception as e:
+            try:
+                page.screenshot(path=str(out_dir / f"upload_fail_{label}.png"), full_page=True)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"_upload_reference_image failed at step {label!r}: {e}. "
+                f"See .playwright/upload_fail_{label}.png",
+            ) from e
+
+    # 1. Activate the "Upload Media" pill (sibling of "Characters").
+    def click_upload_pill():
+        pill = page.locator("button").filter(
+            has_text=re.compile(r"^Upload Media$")).first
+        pill.wait_for(timeout=10_000)
+        pill.click(force=True)
+        time.sleep(0.8)
+    step("1_upload_pill", click_upload_pill)
+
+    # 2. Hand the file over. Prefer a hidden <input type=file>; fall back
+    #    to a file-chooser triggered by the references chip.
+    def set_file():
+        inputs = page.locator("input[type='file']")
+        if inputs.count() > 0:
+            inputs.first.set_input_files(str(image_path))
+        else:
+            with page.expect_file_chooser(timeout=10_000) as fc:
+                page.locator(SEL.add_references_trigger).first.click(force=True)
+            fc.value.set_files(str(image_path))
+        # Video references need server-side metadata extraction before the
+        # form is submittable ("Video metadata is required" 400 otherwise).
+        # Wait long for videos, short for images, then snapshot the form
+        # state for diagnosis.
+        is_video = image_path.suffix.lower() in (".mp4", ".mov", ".webm", ".m4v")
+        time.sleep(20.0 if is_video else 4.0)
+        # If a confirm/trim dialog appeared for the video, accept it.
+        if is_video:
+            for label in ("Confirm", "Done", "Apply", "Save", "Add"):
+                try:
+                    btn = page.locator(f"[role='dialog'] button:has-text('{label}')")
+                    if btn.count() > 0 and btn.first.is_visible():
+                        btn.first.click(force=True, timeout=2_000)
+                        time.sleep(2.0)
+                        break
+                except Exception:
+                    pass
+        try:
+            page.screenshot(path=str(out_dir / "upload_state.png"))
+        except Exception:
+            pass
+    step("2_set_file", set_file)
+
+
 def _find_audio_switch(page: Page):
     """Return the Audio toggle, or None if this model has no audio control.
 
@@ -668,6 +734,7 @@ def generate_clip(
     audio_on: bool = False,
     character: str | None = None,
     resolution: str = "480p",
+    reference_image: Path | str | None = None,
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` variants and download each.
 
@@ -680,6 +747,8 @@ def generate_clip(
         headless: open a visible window when False (recommended for debug).
         audio_on: leave audio enabled when True (default off — captions and
             VO are added in post for the trivia pipeline).
+        reference_image: optional local image uploaded as a visual
+            reference ("Upload Media") alongside any saved character.
 
     Returns the list of saved paths in newest-first gallery order, aligned
     with `output_paths` (i.e. output_paths[0] = newest variant).
@@ -705,6 +774,13 @@ def generate_clip(
             pass
 
         _select_model_in_picker(page, model)
+
+        if reference_image:
+            ref = Path(reference_image).expanduser().resolve()
+            if not ref.exists():
+                raise FileNotFoundError(f"reference image not found: {ref}")
+            print(f"  → uploading reference image: {ref.name}", file=sys.stderr)
+            _upload_reference_image(page, ref)
 
         if character:
             print(f"  → selecting character: {character}", file=sys.stderr)

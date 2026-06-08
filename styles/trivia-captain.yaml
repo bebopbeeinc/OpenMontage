@@ -1,0 +1,385 @@
+identity:
+  name: "Trivia Captain"
+  category: short-form
+  mood: amused disbelief, warm, self-deprecating, grandfatherly, in-on-the-joke
+  # Format proven 2026-06-03 on la-tomatina-tomato-fight take04 (exploratory
+  # run under projects/trivia-archibald/, pre-rename). The arc is:
+  # cold-open incredulity hook → credentials → fact attributed to the game
+  # (tablet show-and-tell, splash rendered in-camera via reference image) →
+  # short smiling beat → kicker with the joke on himself.
+  pace: hook 0-3s (cold open, already mid-reaction), credentials+fact 3-12s, beat ~1s, kicker 13-15s
+  best_for: >
+    Single-fact viral shorts in the "and you're telling me this NOW?" late-
+    discovery format. Reuses the same daily-trivia rows as trivia-reaction:
+    any fact that a 70-year-old lifelong world traveler could plausibly be
+    offended-delighted to have missed. Strongest when the fact has a place
+    he could claim proximity to ("I was THERE in '87").
+  not_for: >
+    Vocabulary / language quizzes — no kicker beat, reads flat. Facts with
+    no plausible "he should have known" angle (pure science trivia with no
+    travel/place/experience hook) lose the persona's comedic engine.
+  sister_pipeline: trivia-reaction   # same trivia sources, same compose path
+
+persona:
+  name: '"Captain" Archibald'
+  nickname_note: >
+    "Captain" is an affectionate nickname only — he is NOT a sea captain
+    and has no maritime backstory (user-corrected 2026-06-03). He is a
+    70-year-old man who has spent his life traveling the world: passport
+    full, stories for every continent, living room a museum of souvenirs.
+  emotional_register: >
+    AMUSED DISBELIEF, NEVER ANGER. Unbelievable-but-funny that he didn't
+    know; warm, self-deprecating, grandfatherly. "Betrayed prosecutor"
+    energy was tried (take01) and rejected as too angry. Anchor line for
+    every VOICE section: "Never angry, never shouting, never deadpan —
+    unbelievable but funny, and he loves it."
+  comedy_engine: >
+    The character's biography does the work: every fact is funnier because
+    he was RIGHT THERE and nobody told him — and the final twist of the
+    knife is that a mobile game out-traveled him.
+
+hook_library:
+  # The hook is ALWAYS the first line of the reel — cold open, zero setup,
+  # first frame already mid-reaction. Rotate entries; never use the same
+  # hook two rows in a row. All entries are cold-open incredulity lines.
+  position: first   # HARD RULE — grab attention before anything else
+  entries:
+    - key: now
+      line: "And I'm only hearing about this NOW?"
+      note: "The signature. Default for high-stakes facts."
+    - key: count
+      line: "Fifty years of travel. Six trips to {place}. And nobody said a word?"
+      note: "Credentials-as-hook variant; merge with the credentials beat."
+    - key: age
+      line: "Seventy years on this Earth and not one person mentioned this?"
+    - key: accusation
+      line: "Who was hiding this from me? I want names."
+      note: "Keep the delivery delighted, not genuinely accusatory."
+    - key: credentials
+      line: "I've crossed {region} four times. I thought I'd seen everything."
+    - key: direct_address
+      line: "And YOU. You knew about this. You all knew."
+      note: "Fourth-wall variant; use sparingly."
+    - key: source_first
+      line: "After six trips to {place}... And I'm hearing this now from a GAME?"
+      note: >
+        Source-indignity-first variant (added 2026-06-04). Front-loads the
+        "a mobile game out-traveled me" payload that the kicker normally
+        saves for last — strongest grab in the first 3s. HARD CONSTRAINT:
+        when this hook is used, the kicker must NOT reuse the
+        "a game had to tell me" shape (it's already spent up front) —
+        pivot the kicker to proximity instead ("I was there in '87. Walked
+        right past the whole thing."). "GAME" lands on the warm-red
+        emphasis pill. Merges with the credentials beat; keep ~15 words.
+  rotation_rules:
+    - "No two consecutive rows reuse the same hook key"
+    - "The 'now' hook may repeat at most every third row (it's the brand line)"
+    - "Hook + credentials together stay under ~18 words to protect the fact's runway"
+    - "'source_first' spends the game-reveal in the hook: pair it ONLY with a proximity kicker, never a source-indignity kicker (no double-dipping the 'a game' joke)"
+
+visual_language:
+  color_palette:
+    primary:    ["#D63B2F"]              # caption emphasis pill — warm red (beret family)
+    accent:     ["#FFFFFF"]              # caption base text — white
+    text_stroke: "#0A061E"
+    text_active: "#FFFFFF"               # white text reads better on warm red than dark
+    background: "varies per row (study / travel-archive family)"
+    music:      "none"
+  composition: >
+    9:16 vertical. Subject centered-left, head-and-shoulders medium close-up,
+    slightly low angle — the "older man holds the phone a bit too close and
+    a bit unsteady" video-call framing is part of the character.
+  texture: photoreal, phone-camera-style, slight handheld micro-wobble
+
+avatar:
+  character_ref: "Captain Archibald"     # OpenArt saved character; the user maintains this
+  description: >
+    Locked look (from the saved reference): red beret, blue glasses, full
+    white beard, red scarf, cream cable-knit sweater with colorful buttons.
+    NEVER describe his face/clothes from text in per-row prompts — the
+    character reference owns his appearance; competing descriptions cause
+    drift.
+  acting_beats:
+    arc: |
+      ONE emotional arc. Tell Seedance the story of a man bursting to
+      share the most ridiculous thing he's ever heard:
+
+      1. OPENS ALREADY MID-REACTION — no ramp-up; first frame is leaning
+         into the lens, eyebrows high, eyes bright, a disbelieving
+         half-smile already breaking through. The hook line explodes out
+         with amused astonishment — wonder, not anger. FROM THIS FIRST
+         FRAME the tablet is already partly in shot: its top edge and a
+         sliver of the glowing screen peek up from the lower frame
+         (resting in his lap / propped against his chest), catching the
+         lamp light — present but not yet raised, so the viewer is curious
+         about it and wants to wait for the full reveal.
+      2. CREDENTIALS WITH A CHUCKLE — counts off his travel history with
+         a self-deprecating little head shake, enjoying how bad this
+         makes him look.
+      3. TABLET SHOW-AND-TELL — on "and this game" he raises the tablet
+         beside his face, screen to camera, like a grandfather showing
+         off a grandkid's drawing. Holds it steady-ish, glances at it
+         once or twice while reading out the fact, grinning wider at
+         each detail.
+      4. THE BEAT — as the fact ends he lowers the tablet back to the
+         resting position (top edge + screen sliver still visible in the
+         lower frame — never fully out of shot); a short beat of smiling
+         head-shake and a soft breathy chuckle. (NOT a betrayed stare —
+         that read angry.)
+      5. KICKER ON HIMSELF — warm and amused at his own expense. A slow,
+         subtle shake of the head — saying "no" to himself, the warm
+         grandfatherly "how did I not know this?" self-disbelief (amused,
+         NEVER frustrated, NO broad slapstick / no hands-to-face) — sells
+         the proximity joke, then a small smile and eyes drifting
+         off-camera like he's already planning the trip. (When a
+         source_first hook already spent the tablet-as-culprit beat up
+         top, do NOT re-raise the tablet here — the kicker is a quiet
+         head-shake, not show-and-tell — but its top edge still stays
+         visible in the lower frame, as it has the whole clip.)
+    pose: >
+      Armchair, holding the phone himself at slightly-below-eye-level —
+      the older-man video-call hold: a bit too close, a bit unsteady.
+      The tablet is partly in frame for the ENTIRE clip — never fully
+      hidden: it rests in his lap / against his chest with its top edge
+      and a sliver of the lit screen peeking into the lower frame from the
+      first frame, he raises it fully only on the reveal, then lowers it
+      back to that partially-visible resting position (not out of shot).
+  audio_on_openart: true
+  voice_direction: >
+    Warm, weathered, a born storyteller — a grandfather sharing the best
+    piece of gossip he's heard in years. First words carry amused
+    astonishment with a laugh hiding underneath. Credentials land with
+    self-deprecating humor, gentle chuckle leaking between phrases.
+    "And this game" carries affectionate disbelief. Each fact detail is
+    delivered like a delicious twist in a story, smile audible in every
+    word. The kicker is quiet and amused, the joke entirely on himself.
+    Male, 70s, slight gravel, warm educated diction. Never angry, never
+    shouting, never deadpan — unbelievable but funny, and he loves it.
+
+tablet_reference:
+  # The format's signature prop: the game is the SOURCE of the fact, shown
+  # on a tablet whose screen content is rendered IN-CAMERA from an uploaded
+  # reference image (openart_driver.generate_clip(reference_image=...)).
+  strategy: in_camera_reference_image
+  decision_history: >
+    2026-06-03 exploration on la-tomatina: (a) generated game screen — fine
+    but generic; (b) chroma-green screen + post corner-pin compositing —
+    rejected by user as looking fake despite full tracking
+    (projects/trivia-archibald/.../review/track_composite.py kept for
+    reference); (c) image reference rendered in-camera — WINNER (take04):
+    lighting/motion/gloss coherent by construction. (d) video references
+    DO NOT work — OpenArt submit 400s with "Video metadata is required";
+    branch closed by user decision.
+  rules:
+    - "ALWAYS-VISIBLE RULE (user feedback 2026-06-08): the tablet is NEVER fully out of frame. From the very first frame a part of it — top edge plus a sliver of the lit screen — is visible in the lower frame, building curiosity before the full raise. The reveal RAISES it; lowering after the reveal returns it to this partially-visible resting position, it does not remove it from shot. State this in the ACTING arc (beats 1 + 4) and the PROPS section of every prompt; verify on the FIRST frame of every take, not just the reveal frame."
+    - "Reference image: the Travel Crush splash (canonical source in post_caption.hashtags.note), portrait, <= ~1536px JPG (resize before upload)"
+    - "The tablet is ALWAYS held in portrait orientation (upright, tall edge vertical) — never landscape/sideways. State this in BOTH the ACTING raise beat and PROPS, and forbid landscape in EXCLUSIONS; Seedance defaults to landscape tablets if unpinned."
+    - "Orientation is non-deterministic even when pinned: ~1 in 3 takes still rolls landscape. It's a re-roll, not a prompt bug — verify the reveal frame every take and regenerate if landscape (proven 2026-06-04: takes 01/02/05 portrait, 04 landscape, same prompt)."
+    - "Pacing: ~36 VO words with the punched 'Every. August.' beat fits the 15s cap and is the approved register (take03). The dramatic full-stops + the hook's trailing '...' DO make Seedance linger, so if a given take crams or clips the kicker, trim the fact (drop 'at each other', soften 'Every. August.' -> 'every August') to buy ~2s. Treat that as a per-take rescue, not a default — the punched beat is wanted."
+    - "Record the repo-relative path in Queue!M and script.json metadata.openart.reference_image"
+    - "FULL-BLEED-STILL RULE (user feedback 2026-06-08): the tablet shows the fact as a full-bleed STILL that fills the whole screen, with the Travel Crush logo as a top-band watermark (built by build_tablet_ref.py --layout video, the default). The fact must FILL the screen and read clearly — the old 50/50 split made it too small (the legacy --layout split is kept only for rollback)."
+    - "DO NOT direct the screen as a 'playing video': a video reference 400s on upload, and an in-camera 'playing' direction makes Seedance re-hallucinate the screen each frame — it reads as drift/inconsistency, not playback (proven on la-tomatina take08, 2026-06-08; both the chroma-green composite and the in-camera video direction failed). PROPS must instead demand the EXACT image stay FROZEN/unchanged for the entire clip. A real moving screen would require post-composite screen-replacement in edit — out of scope unless the user asks."
+    - "Generate the fact image PORTRAIT (3:4) for the video layout so it fills the tablet screen without heavy side-cropping"
+    - "EXCLUSIONS: only the referenced content on screen (fact still + TC logo watermark) — no other invented UI/text, no fingers covering the screen, and no animation/morph of the screen image"
+    - "Expect a living impression of the art, not a pixel copy; verify logo legibility in the frame review"
+
+backdrops:
+  strategy: varied_per_row_within_family
+  rotation: >
+    Stay in the "lifetime travel archive" family so the persona's world
+    stays coherent, but vary the room and dressing per row, ideally nodding
+    to the fact's region. Avoid repeating the same setting two days in a row.
+  prompt_palette:
+    - "lived-in study, shelves of souvenirs from every continent, pinned world map, warm lamp light, late evening"
+    - "sunroom with rattan chair, stacked travel journals, plants, soft morning light"
+    - "kitchen corner with souvenir plates on the wall, espresso pot, warm daylight"
+    - "leather armchair by a fireplace, globe on the side table, framed expedition photos"
+    - "balcony with a view of terracotta rooftops, faded postcards pinned to the doorframe"
+    - "hallway gallery wall of old travel photographs, brass wall lamp"
+    - "winter cabin den, wool blanket, carved wooden masks on the shelf"
+    - "garden shed turned map room, charts and compasses, afternoon sun through dusty glass"
+  rules:
+    - "Always include a light direction; warm tungsten/lamp light is the persona's default"
+    - "Backdrop quiet — souvenirs are dressing, not story"
+    - "No readable text in the backdrop; the warm-red captions own the text layer"
+
+typography:
+  captions:
+    font: "Montserrat"
+    weight: 900
+    case: UPPERCASE
+    size_px: 78
+    line_height: 1.15
+    letter_spacing: "-0.5px"
+    text_stroke_px: 2.5
+    text_stroke_color: "#0A061E"
+    paint_order: "stroke fill"
+  emphasis_pill:
+    fill: "#D63B2F"
+    text_when_active: "#FFFFFF"
+    radius_px: 18
+    padding_px: "6 22 10"
+    activation: per-word
+
+motion:
+  transitions: []                        # single-take avatar clip; no cuts
+  caption_entrance: "spring(damping=12, stiffness=180, mass=0.7) — 20px translate up + opacity 0->1"
+  caption_pop: "spring(damping=11, stiffness=260, mass=0.5) — scale 1.0->1.06 on active word"
+  pacing_rules:
+    target_duration_seconds: 15
+    duration_min_seconds: 13
+    duration_max_seconds: 15             # Seedance 2.0 slider hard cap is 15s
+    words_per_page_max: 3
+    page_break_pause_ms: 350
+  transcribe_recommendation:
+    model: "small.en"
+    vad_filter: false
+    beam_size: 5
+    expected_silent_gap_ms_min: 500      # Archibald's beat is shorter than ellie's laugh break
+    expected_silent_gap_ms_max: 2000
+
+audio:
+  source: "seedance_native"
+  music_mood: "none"
+  music_volume: 0.0
+  sfx_style: "none"
+  loudness_target_lufs: null
+
+asset_generation:
+  openart:
+    model: "Seedance 2.0"
+    aspect: "9:16"
+    resolution: "480p"                   # global default per user memory; bump for final-cut takes only
+    duration_s: 15                       # slider hard cap
+    variant_count: 1                     # single take per row
+    audio_on: true
+    character: "Captain Archibald"
+    reference_image: required            # tablet-screen splash; path in Queue!M
+    # Word budget calibrated on la-tomatina take04: 44 words ≈ 14.7s spoken
+    # + a short beat fits the 15s cap with nothing truncated.
+    word_target: [40, 46]
+    # Prompt structure: labeled CAPS sections. NOTE this deliberately
+    # diverges from trivia-reaction's label-free v9 rule — four takes
+    # (2026-06-03) prove Seedance does NOT read these section headers
+    # aloud. What it DOES read aloud is beat names inside the dialogue
+    # area ("the kicker:") and timing markers — those stay forbidden.
+    prompt_template: |
+      ACTING
+      {acting_arc_prose — armchair video-call hold, cold-open mid-reaction
+       with the tablet's top edge + a sliver of its lit screen ALREADY
+       peeking into the lower frame from the first frame, credentials
+       chuckle, tablet show-and-tell raise on "and this game", lower back
+       to the partially-visible resting position for the smiling-head-shake
+       beat (never fully out of shot), kicker with the can-you-believe-it
+       waggle}
+
+      SETTING
+      {backdrop_description}
+
+      PROPS
+      The tablet screen displays the fact image provided in the reference —
+      {one-line fact-scene description} filling the whole screen, with the
+      Travel Crush logo as a small branded watermark across the top. It
+      appears exactly as in the reference, shown on the tablet display:
+      bright, slightly glossy like a real backlit screen, with the room's
+      warm lamp light reflecting faintly off the glass. The fact image
+      fills the whole screen so it reads clearly. CRITICAL: the EXACT SAME
+      image stays frozen on the screen for the entire clip — it must not
+      change, drift, morph, or re-arrange; the logo watermark and the fact
+      stay identical from the first frame to the last. The tablet is partly
+      visible in frame at all times — even before the raise, its top edge
+      and a sliver of the glowing screen show in the lower frame — and
+      never leaves the shot.
+
+      DIALOGUE
+      He says:
+      "{hook} {credentials}. {fact_attributed_to_game}.
+      (short beat — smiling head shake, soft chuckle)
+      {kicker}"
+
+      VOICE
+      {voice_direction with per-detail notes} Never angry, never shouting,
+      never deadpan — unbelievable but funny, and he loves it.
+
+      SHOT
+      Medium close-up, handheld selfie framing, slightly low angle
+      (older-man video-call hold), warm lamp light, photoreal, subtle
+      camera micro-wobble.
+
+      EXCLUSIONS
+      No reel captions, no graphics overlaid on the room — those are added
+      in post. The tablet screen shows only the referenced fact image (the
+      fact scene with the Travel Crush logo watermark) — no other UI, no
+      invented text beyond that logo, no fingers covering the screen. The
+      screen image must NOT animate, change, or morph between frames.
+    prompt_authoring_rules:
+      - "NEVER use beat names as labels near dialogue ('hook:', 'kicker:') — Seedance reads them aloud"
+      - "NEVER use timing markers ('0-2s') anywhere in the prompt body"
+      - "Mention the spoken brand name 'Travel Crush' ONLY inside the DIALOGUE block (said exactly once). In ACTING/VOICE refer to it as 'the game' / 'the game's name' / 'as he names the game' — Seedance reads quoted phrases in ACTING/VOICE aloud, doubling the brand AND cramming/accelerating the VO (proven Iceland Day 101, 2026-06-08). Same caution for any other exact spoken phrase: don't quote it outside DIALOGUE."
+      - "If a take sounds rushed/accelerated: the usual cause is a phrase double-said from ACTING/VOICE, OR too many words. Fix the double-say first, then trim toward ~38-40 words, and add 'UNHURRIED — savour it, let the pauses breathe' to VOICE."
+      - "CAPS section headers (ACTING/SETTING/PROPS/DIALOGUE/VOICE/SHOT/EXCLUSIONS) are proven safe — keep them"
+      - "Stage directions inside the quoted dialogue go in (parentheses) on their own line — proven not spoken"
+      - "The fact must be attributed to the game in the dialogue ('and this game tells me…')"
+      - "Kicker default shape: proximity + 'a game had to tell me' — vary the second half across rows so it doesn't wear out"
+      - "PROPS must direct the screen as a FULL-BLEED STILL of the fact with the TC logo as a watermark over it — the fact must fill the screen and read clearly (the old half-screen fact was too small, user feedback 2026-06-08). Do NOT ask for a 'playing video': Seedance can't hold a stable in-camera video — it re-hallucinates the screen each frame, so motion reads as drift/inconsistency (proven on la-tomatina take08, 2026-06-08). Instead demand the EXACT image stay FROZEN and unchanged for the whole clip."
+  consistency_anchors:
+    - "Always use OpenArt character reference `Captain Archibald` — never describe his look from text"
+    - "Always upload the fact reference image (full-bleed fact scene + TC logo watermark, video layout) — the tablet shows the real fact as a frozen full-bleed still that stays identical the whole clip"
+    - "Always 9:16 / slightly-low-angle selfie framing"
+    - "Audio ON; VO is native Seedance"
+    - "Backdrop varies per row within the travel-archive family; subject does not"
+
+overlays:
+  word_caption:
+    bg_active: "#D63B2F"
+    text_active: "#FFFFFF"
+    text_inactive: "#FFFFFF"
+    stroke: "#0A061E"
+    radius: 18
+
+post_caption:
+  structure: |
+    Two paragraphs separated by a blank line:
+      1. Reel-voice body (1-2 short sentences, wounded-dignity dry)
+      2. Hashtag block — 2 brand tags first, then 3 niche tags (5 total)
+  body:
+    voice: |
+      Dry, wounded dignity played for laughs — the persona's offense at
+      having been kept in the dark, never a recap of the fact. References
+      his credentials backfiring ("Six trips to Spain. Six.") or the
+      indignity of the source ("a puzzle game knew before I did").
+      Conversational, one or two short sentences max.
+    length_chars: [60, 120]
+    emojis: false
+    forbidden:
+      - "Recap of the fact verbatim"
+      - "Marketing-speak / 'wait, what??' SEO hooks"
+      - "Recapping the kicker"
+      - "Genuine anger — the wound is always cozy"
+    patterns:
+      - "[Credential count]. [Repeat the number alone]. [The thing] was [proximity] the entire time."
+      - "[N] trips to [place] and a puzzle game knew about [thing] before I did."
+      - "Apparently everyone knew about [thing]. Everyone except the man who's been there [N] times."
+  hashtags:
+    brand: ["#CaptainArchibald", "#TravelCrush"]   # fixed, always first
+    niche_count: 3
+    note: >
+      The account fronts Travel Crush (locked 2026-06-03; the Animal Crush
+      splash used in take04 was a placeholder). Canonical splash source:
+      ../redlion_Android/unity/WanderingNarwhal/Assets/GameAssets/Generic/
+      Images/IndependentGenericImages/ipad_pro_landing_screen.jpg — resize
+      to <=1536px JPG per row (or reuse a prepared copy).
+
+remotion:
+  composition_id: "TriviaWithBg"
+  props:
+    highlightColor: "#D63B2F"
+    baseColor: "#FFFFFF"
+    fontSize: 78
+    showFactsOverlay: false
+    mode: "Facts"
+  notes: >
+    Identical compose path to trivia-reaction (which itself reuses the
+    trivia-short TriviaWithBg composition): showFactsOverlay=false, no
+    progress bar, word-by-word pop animation inherited as-is. Only the
+    pill color differs — warm red #D63B2F instead of orange #FF6A2C.
