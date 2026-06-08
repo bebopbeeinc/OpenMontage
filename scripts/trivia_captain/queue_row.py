@@ -40,7 +40,7 @@ READWRITE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 # this against the row's values in source-order, so the order MUST match
 # the sheet's left-to-right column order.
 ROW_KEYS: tuple[str, ...] = (
-    "day",                  # A — int, matches DailyTriviaConfig.B
+    "day",                  # A — sequence index (sheet header "#"); a free running number, NOT tied to a DailyTriviaConfig Day (captain content is curated). Field kept named "day" for back-compat.
     "slug",                 # B — kebab-case identifier, used as project dir name
     "status",               # C — Draft / Ready to review / Ready to publish / Published
     "question_en",          # D — resolved EN question (denormalized for human review)
@@ -60,7 +60,7 @@ QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:N{{row}}"
 QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:N{{max_row}}"
 
 FIELD_TO_HEADER: dict[str, str] = {
-    "day":               "Day",
+    "day":               "#",
     "slug":              "Slug",
     "status":            "Status",
     "question_en":       "Question (EN)",
