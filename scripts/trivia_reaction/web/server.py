@@ -46,7 +46,7 @@ SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
-from scripts.trivia_reaction import daily_trivia, queue_row  # noqa: E402
+from scripts.trivia_reaction import queue_row  # noqa: E402
 from scripts.trivia_reaction.paths import project_dir  # noqa: E402
 
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
@@ -117,38 +117,6 @@ def _ro_sheets():
     return queue_row.build_sheets(write=False)
 
 
-def _explanation_cache() -> dict[int, str]:
-    """Day -> CorrectExplanation EN. One DailyTriviaConfig pass per /api/rows
-    call. Cached for the duration of the request via the simple dict return —
-    callers that want stale-tolerant data should hold the reference instead of
-    refetching."""
-    sheets = daily_trivia.build_sheets()
-    # We don't know which Days are in the Queue without reading it first, so
-    # bulk-read DailyTriviaConfig columns A-L for a generous row range and
-    # pluck out the rows we need. This is one Sheets call instead of N.
-    tab = daily_trivia.DAILY_TRIVIA_TAB_DEV
-    start = daily_trivia.DAILY_TRIVIA_DATA_START_ROW
-    end = start + 400
-    rng = f"'{tab}'!A{start}:L{end}"
-    r = sheets.spreadsheets().values().get(
-        spreadsheetId=daily_trivia.DAILY_TRIVIA_SHEET, range=rng,
-    ).execute()
-    out: dict[int, str] = {}
-    # Resolve Uids lazily — only call resolve_uid once we know the row's day.
-    for raw in r.get("values", []):
-        row = list(raw) + [""] * (12 - len(raw))
-        try:
-            day = int((row[1] or "").strip())
-        except ValueError:
-            continue
-        uid_expl = (row[11] or "").strip()
-        if not uid_expl:
-            out[day] = ""
-            continue
-        out[day] = daily_trivia.resolve_uid(sheets, uid_expl)
-    return out
-
-
 def _project_state(slug: str) -> dict:
     """File-state snapshot for one project. Cheap — just os.path.exists checks."""
     if not slug:
@@ -178,10 +146,9 @@ def _project_state(slug: str) -> dict:
 
 
 def read_rows() -> list[dict]:
-    """Read Queue rows; enrich each with the CorrectExplanation and local file state."""
+    """Read Queue rows; enrich each with local file state."""
     sheets = _ro_sheets()
     rows = queue_row.read_queue_bulk(sheets)
-    explanations = _explanation_cache()
     out: list[dict] = []
     for r in rows:
         try:
@@ -192,7 +159,6 @@ def read_rows() -> list[dict]:
         d = {
             **r,
             "day_int": day,
-            "correct_explanation_en": explanations.get(day, "") if day is not None else "",
             "files": _project_state(slug),
         }
         out.append(d)

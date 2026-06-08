@@ -128,6 +128,18 @@ one continuous English sentence. No bracketing labels, no pauses encoded.
 **`{punchline_sentence}`**: the kicker alone. End with `!` for an
 inflection cue.
 
+**Phonetic respelling for rare words.** Seedance reads the spoken line
+literally to generate native VO, and stumbles on unfamiliar proper nouns
+/ loanwords (animal names, place names, foods). Respell them
+phonetically **in the spoken line / prompt ONLY**. Use a **lowercase,
+natural-looking** respelling that anchors the vowel — e.g. `quokka` →
+`kwocka` (the `-ocka` forces the short-o, like "rock"). **Do not use
+ALL-CAPS hyphenated forms** — Seedance reads those as letters: `KWOK-uh`
+came out as "cougar", `kwocka` came out clean (verified on quokka-selfies
+take01 vs take02, 2026-06-05). Keep `beats` spelled correctly: the
+burned-in captions come from `beats`, so the viewer still sees the real
+word while Seedance hears something it can pronounce.
+
 **`{acting_arc_prose}`**: a single prose paragraph telling Seedance the
 emotional arc as a story — relaxed start → smile builds → real audible
 laugh break → recover and deliver punchline through laughter. Pull the
@@ -296,6 +308,10 @@ Wait for "go" before advancing to assets.
   or timing markers ("0-2s", "12-15s") as labels in the OpenArt prompt
   body. Seedance reads them aloud (verified — take10 said "The kicker?"
   out loud). The playbook's `prompt_authoring_rules` makes this binding.
+- Do not leave rare proper nouns / loanwords (animals, place names,
+  foods) spelled normally in the spoken line if Seedance mispronounces
+  them. Respell phonetically in the spoken line / prompt only; keep
+  `beats` correct for the captions.
 - Do not lock a specific hand position in the pose prose ("one hand
   behind her head" etc). Describe the energy, let the character ref
   handle physical specifics.

@@ -215,6 +215,7 @@ asset_generation:
       - "Use [laughs] x4 between setup and punchline — stronger anchor than 1-2 cues."
       - "Voice direction explains that [laughs] cues represent an audible break (not a silent gap), with exhale-giggles."
       - "Punchline ends with '.' or '!' — '!' gives Seedance a stronger inflection cue."
+      - "Phonetically respell rare proper nouns / loanwords (animals, place names, foods) inside the SPOKEN line only — Seedance reads spoken_lines literally for native VO and stumbles on unfamiliar words. Use a LOWERCASE, natural-looking respelling that anchors the vowel (e.g. quokka -> 'kwocka' where '-ocka' forces the short-o). Do NOT use ALL-CAPS hyphenated forms — Seedance reads those as letters: 'KWOK-uh' came out as 'cougar', 'kwocka' came out clean. Keep beats spelled correctly so the burned-in captions stay right."
   image_negative_prompt: "captions, subtitles, on-screen text, watermark, low quality"
   consistency_anchors:
     - "Always use OpenArt character reference `ellie.travelcrush` — never describe her face from text"

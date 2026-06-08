@@ -55,11 +55,22 @@
   td.slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             color: var(--orange); max-width: 160px; word-break: break-word; }
   td.status { width: 130px; }
-  td.facts { max-width: 360px; }
-  td.facts .q { color: var(--text); font-weight: 500; margin-bottom: 4px; }
-  td.facts .a { color: var(--accent); font-weight: 500; font-size: 12px;
-                margin-bottom: 4px; }
-  td.facts .x { color: var(--muted); font-size: 11px; line-height: 1.5; }
+  td.facts { max-width: 360px; position: relative; padding-right: 30px; }
+  td.facts .beat { margin-bottom: 5px; line-height: 1.45; }
+  td.facts .beat .lbl { display: inline-block; color: var(--muted); font-size: 9px;
+                        text-transform: uppercase; letter-spacing: 0.05em;
+                        margin-right: 5px; }
+  td.facts .beat.hook   { color: var(--text); font-weight: 500; }
+  td.facts .beat.fact   { color: var(--text); }
+  td.facts .beat.kicker { color: var(--accent); font-weight: 500; }
+  td.facts .wc { color: var(--muted); font-size: 10px; margin-top: 4px; }
+  td.facts .copy-btn {
+    position: absolute; top: 8px; right: 6px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); padding: 2px 6px; border-radius: 4px;
+    font-size: 10px; cursor: pointer;
+  }
+  td.facts .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
   td.files { width: 110px; }
   td.caption { width: 260px; font-size: 12px; color: var(--text); line-height: 1.4;
                position: relative; padding-right: 30px; vertical-align: top; }
@@ -218,7 +229,7 @@
           <th>Day</th>
           <th>Slug</th>
           <th>Status</th>
-          <th>Question / Answer / Explanation</th>
+          <th>Script (VO)</th>
           <th>Caption</th>
           <th>Drive</th>
           <th></th>
@@ -378,15 +389,28 @@ function filesCell(r) {
   return parts.join('<br>');
 }
 
-function factsCell(r) {
-  const q = r.question_en || '';
-  const a = r.correct_answer_en || '';
-  const x = r.correct_explanation_en || '';
-  return `
-    <div class="q">${escapeHtml(q)}</div>
-    ${a ? `<div class="a">→ ${escapeHtml(a)}</div>` : ''}
-    ${x ? `<div class="x">${escapeHtml(x)}</div>` : ''}
-  `;
+function scriptCell(r) {
+  // The actual spoken script — the three VO beats the script director writes
+  // to Queue!F/G/H (hook → fact → kicker). This is what Ellie says in the
+  // reel. Draft rows show a placeholder until the script director writes the VO.
+  const beats = [
+    ['Hook',   (r.hook_vo   || '').trim(), 'hook'],
+    ['Fact',   (r.fact_vo   || '').trim(), 'fact'],
+    ['Kicker', (r.kicker_vo || '').trim(), 'kicker'],
+  ].filter(([, t]) => t);
+
+  if (!beats.length) {
+    return '<span class="caption-empty">— no script yet —</span>';
+  }
+
+  const full = beats.map(([, t]) => t).join(' ');
+  const words = full.split(/\s+/).filter(Boolean).length;
+  const body = beats.map(([lbl, t, k]) =>
+    `<div class="beat ${k}"><span class="lbl">${lbl}</span>${escapeHtml(t)}</div>`
+  ).join('');
+  return `${body}<div class="wc">${words} words</div>
+    <button class="copy-btn" data-copy="${escapeHtml(full)}"
+            onclick="copyText(this)" title="copy full VO">copy</button>`;
 }
 
 function captionCell(r) {
@@ -456,7 +480,7 @@ function renderRows() {
         <td class="day">${r.day || '—'}</td>
         <td class="slug">${escapeHtml(r.slug || '')}</td>
         <td class="status"><span class="pill ${klass}">${escapeHtml(status || 'Draft')}</span></td>
-        <td class="facts">${factsCell(r)}</td>
+        <td class="facts">${scriptCell(r)}</td>
         <td class="caption">${captionCell(r)}</td>
         <td class="files">${filesCell(r)}</td>
         <td class="actions">${actionsCell(r)}</td>
