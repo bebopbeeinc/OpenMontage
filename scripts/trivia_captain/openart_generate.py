@@ -183,6 +183,9 @@ def main() -> int:
     pb = _playbook_openart_defaults()
     duration_s = int(pb.get("duration_s") or 15)
     character = pb.get("character", "Captain Archibald")
+    # Captain Archibald's saved character lives in the personal "R N" workspace,
+    # not "BebopBee Art Team"; the driver re-asserts this before picking him.
+    workspace = pb.get("workspace", "R N")
     model = args.model_override or pb.get("model") or "Seedance 2.0"
     audio_on = bool(pb.get("audio_on", True))
     resolution = (str(pb.get("resolution") or "480p")).strip()
@@ -222,6 +225,7 @@ def main() -> int:
         character=character,
         resolution=resolution,
         reference_image=reference_image,
+        workspace=workspace,
     )
     print(f"✓ saved {len(saved)} variant(s):")
     for p in saved:

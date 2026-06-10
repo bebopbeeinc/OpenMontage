@@ -298,76 +298,97 @@ def _click_generate(page: Page) -> None:
     btn.click()
 
 
+def _resolve_project_id(page: Page) -> str:
+    """Return the active workspace's default project id.
+
+    Resources are scoped per project: the list endpoint requires a
+    `projectId` query param (see `_poll_resources`). We pick the workspace's
+    default project ("Personal Project"), which is where the suite lands new
+    creations when no project is explicitly chosen.
+    """
+    import json
+    resp = page.context.request.get(
+        "https://openart.ai/suite/api/projects?pageSize=50", timeout=15_000,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"could not list projects: HTTP {resp.status}")
+    rows = json.loads(resp.text()).get("data") or []
+    for r in rows:
+        if isinstance(r, dict) and r.get("isDefault"):
+            return r["id"]
+    if rows and isinstance(rows[0], dict) and rows[0].get("id"):
+        return rows[0]["id"]
+    raise RuntimeError("no projects found for the active workspace")
+
+
 def _poll_resources(
     page: Page,
     resource_ids: list[str],
     timeout_s: int,
 ) -> list[tuple[str, dict]]:
-    """Poll `/suite/api/resources/{id}` for each resourceId until each settles.
+    """Poll the project-scoped resources LIST endpoint until each id settles.
 
     Returns one tuple per id, in the same order as `resource_ids`:
         (resource_id, {"status": "ok", "url": <full-res CDN URL>, "metadata": {...}})
         (resource_id, {"status": "failed", "error": "<reason>"})
         (resource_id, {"status": "timeout"})
 
-    The resource endpoint becomes available shortly after the POST submit
-    response — initially without `url`, then populated once the generation
-    completes (success or fail). We poll until every id has either:
-      - a non-empty `url` (success), or
-      - an error/state field indicating failure.
+    Why the LIST endpoint and not GET `/suite/api/resources/{id}`:
+      OpenArt removed (or locked) the per-id resource route — it now returns
+      `403 {"error":"Forbidden"}` for ids the session itself just created.
+      The suite UI never calls it; it fetches
+      `GET /suite/api/resources?folderIdNull=true&limit=N&projectId=<id>`,
+      a newest-first list. Our just-submitted variants are the newest rows,
+      so we page the list and match by `id`. Each row carries `url`,
+      `status` ("completed"/…), `error`, and `metadata` — a completed row
+      has a non-empty `url`.
     """
     import json
-    pending = set(resource_ids)
+    project_id = _resolve_project_id(page)
+    list_url = (
+        "https://openart.ai/suite/api/resources"
+        f"?folderIdNull=true&limit=50&projectId={project_id}"
+    )
+    wanted = set(resource_ids)
     settled: dict[str, dict] = {}
     deadline = time.time() + timeout_s
     last_progress = -1
 
-    while pending and time.time() < deadline:
+    while len(settled) < len(wanted) and time.time() < deadline:
         progress = len(settled)
         if progress != last_progress:
             print(f"    resolved {progress}/{len(resource_ids)}", file=sys.stderr)
             last_progress = progress
-        for rid in list(pending):
-            try:
-                resp = page.context.request.get(
-                    f"https://openart.ai/suite/api/resources/{rid}",
-                    timeout=15_000,
-                )
-                if not resp.ok:
-                    # 404 right after submit is normal — resource not registered yet.
-                    if resp.status == 404:
-                        continue
-                    settled[rid] = {"status": "failed", "error": f"HTTP {resp.status}"}
-                    pending.discard(rid)
-                    continue
-                data = json.loads(resp.text()).get("data") or {}
-                url = data.get("url")
-                # Some failure states surface as an `error`, `state`, or empty url
-                # with `completed_at` set. Treat presence of `url` as success.
-                if url:
-                    settled[rid] = {
-                        "status": "ok",
-                        "url": url,
-                        "metadata": data.get("metadata") or {},
-                    }
-                    pending.discard(rid)
-                    continue
-                # Detect terminal failure: completedAt populated but no url
-                if data.get("state") in {"failed", "error"} or data.get("error"):
-                    settled[rid] = {
-                        "status": "failed",
-                        "error": data.get("error") or data.get("state") or "unknown",
-                    }
-                    pending.discard(rid)
-            except Exception as e:
-                # Transient — try again next round
-                pass
-        if pending:
+        try:
+            resp = page.context.request.get(list_url, timeout=15_000)
+            if resp.ok:
+                rows = json.loads(resp.text()).get("data") or []
+                by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
+                for rid in list(wanted - set(settled)):
+                    row = by_id.get(rid)
+                    if row is None:
+                        continue  # not yet on the newest page — keep polling
+                    status = (row.get("status") or "").lower()
+                    url = row.get("url")
+                    if url and status not in {"failed", "error"}:
+                        settled[rid] = {
+                            "status": "ok",
+                            "url": url,
+                            "metadata": row.get("metadata") or {},
+                        }
+                    elif status in {"failed", "error"} or row.get("error"):
+                        settled[rid] = {
+                            "status": "failed",
+                            "error": row.get("error") or status or "unknown",
+                        }
+        except Exception:
+            # Transient — try again next round
+            pass
+        if len(settled) < len(wanted):
             time.sleep(POLL_INTERVAL_S)
 
     for rid in resource_ids:
-        if rid not in settled:
-            settled[rid] = {"status": "timeout"}
+        settled.setdefault(rid, {"status": "timeout"})
     return [(rid, settled[rid]) for rid in resource_ids]
 
 

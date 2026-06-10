@@ -253,6 +253,7 @@ asset_generation:
     duration_s: 15                       # slider hard cap
     variant_count: 1                     # single take per row
     audio_on: true
+    workspace: "R N"                     # OpenArt team that owns the saved character; NOT "BebopBee Art Team"
     character: "Captain Archibald"
     reference_image: required            # tablet-screen splash; path in Queue!M
     # Word budget calibrated on la-tomatina take04: 44 words ≈ 14.7s spoken

@@ -214,6 +214,9 @@ def main() -> int:
     # passes through as None (driver skips character selection). Used for
     # models that don't expose OpenArt's saved-character UI (e.g. Kling 3.0 Omni).
     character = openart_cfg.get("character", "ellie.travelcrush")
+    # ellie.travelcrush's saved character lives in the personal "R N" workspace,
+    # not "BebopBee Art Team"; the driver re-asserts this before picking her.
+    workspace = openart_cfg.get("workspace", "R N")
     model = args.model_override or openart_cfg.get("model") or "Seedance 2.0"
     audio_on = bool(openart_cfg.get("audio_on", True))  # trivia-reaction default
     resolution = (openart_cfg.get("resolution") or "480p").strip()
@@ -252,6 +255,7 @@ def main() -> int:
         audio_on=audio_on,
         character=character,
         resolution=resolution,
+        workspace=workspace,
     )
     print(f"✓ saved {len(saved)} variant(s):")
     for p in saved:

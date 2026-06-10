@@ -46,6 +46,14 @@ STATE_FILE = REPO / ".playwright" / "openart-state.json"
 
 OPENART_SUITE_BASE = "https://openart.ai/suite/animate-video"
 
+# The OpenArt account belongs to more than one team. Saved characters
+# (ellie.travelcrush, Captain Archibald, …) live in the personal "R N"
+# workspace, but OpenArt persists the active team per session and it can
+# silently swap to another team (e.g. "BebopBee Art Team"), whose library
+# has different characters — making the intended character invisible and the
+# character picker time out. We re-assert the workspace on every run.
+OPENART_WORKSPACE = "R N"
+
 # Model display name -> URL slug on the Suite. The slug is the source of truth
 # for which generator runs; OpenArt has no in-page model picker on these URLs.
 MODEL_SLUGS: dict[str, str] = {
@@ -303,6 +311,81 @@ def _select_model_in_picker(page: Page, label: str) -> None:
     dlg.locator(f"text=/^{re.escape(label)}/").first.click(force=True)
     # Dialog usually auto-closes after a model pick.
     time.sleep(1.5)
+
+
+def _select_workspace(page: Page, workspace: str) -> None:
+    """Ensure the named OpenArt team/workspace is the active one.
+
+    The workspace switcher is a Radix popover in the header: the trigger is a
+    `button[aria-haspopup='dialog']` showing an avatar + the current workspace
+    name + an ArrowDownBold chevron; clicking it opens a `[role='dialog']`
+    titled "Workspaces" with one `<button>` per workspace.
+
+    Idempotent: if the switcher already shows `workspace`, do nothing. Diagnoses
+    each failure with a screenshot under .playwright/.
+    """
+    out_dir = REPO / ".playwright"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # There are a couple of chevron-dialog buttons in the header (workspace and
+    # project switchers); match them all and disambiguate by behaviour.
+    triggers = page.locator(
+        "button[aria-haspopup='dialog']:has(svg[aria-label='ArrowDownBold'])"
+    )
+    try:
+        triggers.first.wait_for(timeout=15_000)
+    except PWTimeout:
+        page.screenshot(path=str(out_dir / "ws_fail_no_trigger.png"), full_page=True)
+        raise RuntimeError(
+            "workspace switcher not found — OpenArt header may have changed. "
+            "See .playwright/ws_fail_no_trigger.png",
+        )
+
+    # Fast path: the active workspace name is rendered inside its trigger label
+    # (with the avatar initial prepended, e.g. "RR N"), so a containment test
+    # against any switcher trigger tells us we're already there.
+    n = triggers.count()
+    for i in range(n):
+        if workspace in (triggers.nth(i).text_content() or ""):
+            return
+
+    # Open the Workspaces popover. The first chevron trigger is the workspace
+    # one, but fall back to the others if the "Workspaces" dialog doesn't show.
+    dlg = None
+    for i in range(n):
+        triggers.nth(i).click(force=True)
+        time.sleep(0.8)
+        cand = page.get_by_role("dialog").filter(has_text="Workspaces").first
+        if cand.count() > 0:
+            dlg = cand
+            break
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
+        except Exception:
+            pass
+    if dlg is None:
+        page.screenshot(path=str(out_dir / "ws_fail_no_menu.png"), full_page=True)
+        raise RuntimeError(
+            "could not open the Workspaces switcher — "
+            "see .playwright/ws_fail_no_menu.png",
+        )
+
+    item = dlg.get_by_role("button").filter(
+        has=page.get_by_text(workspace, exact=True),
+    ).first
+    try:
+        item.wait_for(timeout=10_000)
+    except PWTimeout:
+        names = dlg.locator("button p").all_text_contents()
+        page.screenshot(path=str(out_dir / "ws_fail_no_item.png"), full_page=True)
+        raise RuntimeError(
+            f"workspace {workspace!r} not offered (saw {names!r}) — check the "
+            f"name. See .playwright/ws_fail_no_item.png",
+        )
+    item.click(force=True)
+    # Switching workspace reloads the suite content + character library.
+    time.sleep(2.5)
 
 
 def _select_character(page: Page, character_name: str) -> None:
@@ -589,78 +672,102 @@ def _click_generate(page: Page) -> None:
     btn.click()
 
 
+def _resolve_project_id(page: Page) -> str:
+    """Return the active workspace's default project id.
+
+    Resources are scoped per project: the list endpoint requires a
+    `projectId` query param (see `_poll_resources`). We pick the workspace's
+    default project ("Personal Project"), which is where the suite lands new
+    creations when no project is explicitly chosen.
+    """
+    import json
+    resp = page.context.request.get(
+        "https://openart.ai/suite/api/projects?pageSize=50", timeout=15_000,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"could not list projects: HTTP {resp.status}")
+    rows = json.loads(resp.text()).get("data") or []
+    for r in rows:
+        if isinstance(r, dict) and r.get("isDefault"):
+            return r["id"]
+    if rows and isinstance(rows[0], dict) and rows[0].get("id"):
+        return rows[0]["id"]
+    raise RuntimeError("no projects found for the active workspace")
+
+
 def _poll_resources(
     page: Page,
     resource_ids: list[str],
     timeout_s: int,
 ) -> list[tuple[str, dict]]:
-    """Poll `/suite/api/resources/{id}` for each id until each settles.
+    """Poll the project-scoped resources LIST endpoint until each id settles.
 
     Returns one tuple per id in the same order as `resource_ids`:
         (resource_id, {"status": "ok", "url": <full-res CDN URL>, "metadata": {...}})
         (resource_id, {"status": "failed", "error": "<reason>"})
         (resource_id, {"status": "timeout"})
 
-    Why this replaced the prior DOM-polling gallery approach:
-      - The old `_wait_for_n_new_top` snapshotted gallery `<video>` URLs at
-        baseline, then assumed any URL appearing above `baseline_top` was a
-        new variant. When the gallery hadn't loaded at baseline-time
-        (baseline_top=None), it treated *every* gallery URL as a result and
-        could mis-attribute pre-existing videos (e.g. an earlier topic's
-        cocoa-bean render) to the current submission.
-      - The form-submission POST returns authoritative `resourceIds`. Polling
-        the resource endpoint per id eliminates the ambiguity entirely.
+    Why the LIST endpoint and not GET `/suite/api/resources/{id}`:
+      OpenArt removed (or locked) the per-id resource route — it now returns
+      `403 {"error":"Forbidden"}` for ids the session itself just created.
+      The suite UI never calls it; it fetches
+      `GET /suite/api/resources?folderIdNull=true&limit=N&projectId=<id>`,
+      a newest-first list. Our just-submitted variants are the newest rows,
+      so we page the list and match by `id`. Each row carries `url`,
+      `status` ("completed"/…), `error`, and `metadata` — a completed row
+      has a non-empty `url`.
+
+    Why the POST submit's authoritative `resourceIds` still matter:
+      The old DOM-polling gallery approach could mis-attribute pre-existing
+      gallery items to the current submission. Matching the list rows by the
+      exact ids the submit returned keeps that disambiguation.
     """
     import json
-    pending = set(resource_ids)
+    project_id = _resolve_project_id(page)
+    list_url = (
+        "https://openart.ai/suite/api/resources"
+        f"?folderIdNull=true&limit=50&projectId={project_id}"
+    )
+    wanted = set(resource_ids)
     settled: dict[str, dict] = {}
     deadline = time.time() + timeout_s
     last_progress = -1
 
-    while pending and time.time() < deadline:
+    while len(settled) < len(wanted) and time.time() < deadline:
         progress = len(settled)
         if progress != last_progress:
             print(f"    resolved {progress}/{len(resource_ids)}", file=sys.stderr)
             last_progress = progress
-        for rid in list(pending):
-            try:
-                resp = page.context.request.get(
-                    f"https://openart.ai/suite/api/resources/{rid}",
-                    timeout=15_000,
-                )
-                if not resp.ok:
-                    # 404 right after submit is normal — resource record
-                    # not registered yet. Anything else is terminal.
-                    if resp.status == 404:
-                        continue
-                    settled[rid] = {"status": "failed", "error": f"HTTP {resp.status}"}
-                    pending.discard(rid)
-                    continue
-                data = json.loads(resp.text()).get("data") or {}
-                url = data.get("url")
-                if url:
-                    settled[rid] = {
-                        "status": "ok",
-                        "url": url,
-                        "metadata": data.get("metadata") or {},
-                    }
-                    pending.discard(rid)
-                    continue
-                if data.get("state") in {"failed", "error"} or data.get("error"):
-                    settled[rid] = {
-                        "status": "failed",
-                        "error": data.get("error") or data.get("state") or "unknown",
-                    }
-                    pending.discard(rid)
-            except Exception:
-                # Transient — try again next round
-                pass
-        if pending:
+        try:
+            resp = page.context.request.get(list_url, timeout=15_000)
+            if resp.ok:
+                rows = json.loads(resp.text()).get("data") or []
+                by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
+                for rid in list(wanted - set(settled)):
+                    row = by_id.get(rid)
+                    if row is None:
+                        continue  # not yet on the newest page — keep polling
+                    status = (row.get("status") or "").lower()
+                    url = row.get("url")
+                    if url and status not in {"failed", "error"}:
+                        settled[rid] = {
+                            "status": "ok",
+                            "url": url,
+                            "metadata": row.get("metadata") or {},
+                        }
+                    elif status in {"failed", "error"} or row.get("error"):
+                        settled[rid] = {
+                            "status": "failed",
+                            "error": row.get("error") or status or "unknown",
+                        }
+        except Exception:
+            # Transient — try again next round
+            pass
+        if len(settled) < len(wanted):
             time.sleep(POLL_INTERVAL_S)
 
     for rid in resource_ids:
-        if rid not in settled:
-            settled[rid] = {"status": "timeout"}
+        settled.setdefault(rid, {"status": "timeout"})
     return [(rid, settled[rid]) for rid in resource_ids]
 
 
@@ -777,6 +884,7 @@ def generate_clip(
     character: str | None = None,
     resolution: str = "480p",
     reference_image: Path | str | None = None,
+    workspace: str | None = OPENART_WORKSPACE,
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` variants and download each.
 
@@ -803,6 +911,12 @@ def generate_clip(
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
         _ensure_logged_in(page, target_url)
+
+        # Re-assert the workspace before anything else — the saved characters
+        # live in a specific team and OpenArt can silently swap the active one.
+        if workspace:
+            print(f"  → ensuring workspace: {workspace}", file=sys.stderr)
+            _select_workspace(page, workspace)
 
         # Switch input mode to "Text with Reference" — references are
         # optional, but on this UI it's the path that exposes saved

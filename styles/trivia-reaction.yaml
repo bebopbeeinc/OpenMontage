@@ -187,6 +187,7 @@ asset_generation:
     duration_s: 15                       # Seedance 2.0 slider hard cap
     variant_count: 1                     # per user memory — single take per row, not a pair
     audio_on: true                       # Seedance generates dialogue + lip-sync
+    workspace: "R N"                     # OpenArt team that owns the saved character; NOT "BebopBee Art Team"
     character: "ellie.travelcrush"
     # v9 word budget — calibrated from the reel (22 setup + 6 punchline = 28 words,
     # ~10.8s setup + ~2.3s break + ~2.3s punchline = 15.4s).
