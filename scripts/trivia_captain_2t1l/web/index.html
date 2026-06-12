@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<!-- Mounted at /trivia-captain-2t1l by web/server.py. base href lets fetch
+     calls use relative paths (api/foo) that resolve under the mount prefix. -->
+<base href="/trivia-captain-2t1l/" />
+<title>Captain 2T1L</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #22e88a;
+    --warn: #f0b429;
+    --err: #f85149;
+    --running: #58a6ff;
+    --captain: #D63B2F;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+               font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  a { color: var(--running); }
+
+  header { padding: 14px 18px; border-bottom: 1px solid var(--border);
+           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0; color: var(--captain); }
+  header .meta { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .links { display: inline-flex; gap: 12px; font-size: 12px; }
+  header .links a { text-decoration: none; }
+  header .links a:hover { text-decoration: underline; }
+
+  main { display: grid; grid-template-columns: 1fr 480px; gap: 0;
+         height: calc(100vh - 53px); }
+  main.panel-hidden { grid-template-columns: 1fr; }
+  main.panel-hidden .panel { display: none; }
+  .rows { overflow: auto; }
+  .panel { background: var(--panel); border-left: 1px solid var(--border);
+           display: flex; flex-direction: column; overflow: hidden; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { position: sticky; top: 0; background: var(--bg); text-align: left;
+             padding: 10px 8px; border-bottom: 1px solid var(--border);
+             color: var(--muted); font-weight: 500; z-index: 1; }
+  tbody td { padding: 10px 8px; border-bottom: 1px solid var(--border);
+             vertical-align: top; }
+  tbody tr:hover { background: #11161d; }
+  tr.row-running { background: #14253a; }
+  tr.row-queued { background: #1a1f2a; }
+
+  td.idx { width: 40px; font-variant-numeric: tabular-nums; color: var(--muted); }
+  td.slug { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--captain); max-width: 170px; word-break: break-word; }
+  td.slug .place { display: block; margin-top: 5px; color: var(--muted);
+                   font-family: -apple-system, system-ui, sans-serif; font-size: 11px; }
+  td.status { width: 130px; }
+  td.claims { max-width: 360px; }
+  td.claims .claim { margin-bottom: 6px; line-height: 1.4; }
+  td.claims .claim .n { display: inline-block; width: 16px; color: var(--muted);
+                        font-variant-numeric: tabular-nums; }
+  td.claims .claim .lbl { color: var(--muted); font-size: 10px; text-transform: uppercase;
+                          letter-spacing: 0.04em; margin-left: 4px; }
+  td.claims .claim.lie .txt { color: var(--captain); }
+  td.claims .claim.lie .tag { color: var(--captain); font-size: 9px; text-transform: uppercase;
+                              letter-spacing: 0.05em; margin-left: 6px; opacity: 0.8; }
+  td.caption { width: 240px; font-size: 12px; color: var(--text); line-height: 1.4;
+               position: relative; padding-right: 30px; }
+  td.caption .copy-btn { position: absolute; top: 8px; right: 6px; background: transparent;
+                         border: 1px solid var(--border); color: var(--muted);
+                         padding: 2px 6px; border-radius: 4px; font-size: 10px; cursor: pointer; }
+  td.caption .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  td.caption .caption-empty { color: var(--muted); font-size: 11px; }
+  td.files { width: 90px; }
+  td.actions { width: 1%; white-space: nowrap; }
+
+  .pill { display: inline-block; padding: 2px 7px; border-radius: 10px;
+          font-size: 10px; font-weight: 500; }
+  .pill.draft             { background: #21262d; color: var(--muted); }
+  .pill.ready-to-review   { background: #2a3d2a; color: var(--accent); }
+  .pill.ready-to-publish  { background: #3a2e0c; color: var(--warn); }
+  .pill.published         { background: #0c3a1f; color: var(--accent); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+  .state-badge { display: inline-block; padding: 2px 7px; border-radius: 10px;
+                 font-size: 10px; font-weight: 500; margin-left: 6px; }
+  .state-badge.queued  { background: #1f3a5f; color: var(--running); }
+  .state-badge.running { background: #14253a; color: var(--running);
+                         animation: pulse 1.4s ease-in-out infinite; }
+
+  button { background: #21262d; color: var(--text); border: 1px solid var(--border);
+           padding: 5px 10px; border-radius: 5px; cursor: pointer; font: inherit;
+           font-size: 12px; }
+  button:hover:not(:disabled) { background: #2d333b; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.captain { background: #6e1c16; border-color: var(--captain); color: #ffd9d4; }
+  button.captain:hover:not(:disabled) { background: #a02a20; }
+  button.warn { background: #6e4a0e; border-color: #b08a2b; }
+  button.warn:hover:not(:disabled) { background: #a07016; }
+  button.small { padding: 3px 8px; font-size: 11px; }
+  .actions .btn-row { display: flex; gap: 6px; flex-direction: column; align-items: stretch; }
+
+  .panel-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .panel-header h2 { margin: 0; font-size: 14px; }
+  .panel-header .panel-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .panel-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
+  .panel-tabs button { flex: 1; border-radius: 0; border: none; border-right: 1px solid var(--border);
+                       background: transparent; color: var(--muted); padding: 8px 12px; }
+  .panel-tabs button:last-child { border-right: none; }
+  .panel-tabs button.active { background: var(--bg); color: var(--text); }
+  .log { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+         padding: 12px 16px; overflow: auto; flex: 1; white-space: pre-wrap; word-break: break-word; }
+  .log .log-empty { color: var(--muted); font-style: italic; }
+  .job-list { padding: 12px 16px; overflow: auto; flex: 1; }
+  .job-list .job { display: grid; grid-template-columns: 80px 1fr 70px; gap: 8px; padding: 6px 0;
+                   border-bottom: 1px solid var(--border); font-size: 12px; cursor: pointer; }
+  .job-list .job:hover { background: #1a2030; }
+  .job-list .job .id { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+  .job-list .job .status { text-align: right; }
+  .status-queued { color: var(--muted); } .status-running { color: var(--running); }
+  .status-success { color: var(--accent); } .status-error { color: var(--err); }
+
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+                    display: flex; align-items: center; justify-content: center;
+                    z-index: 10; cursor: zoom-out; padding: 24px; }
+  .script-modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+                  padding: 20px; width: min(540px, 100%); max-height: 100%; display: flex;
+                  flex-direction: column; gap: 14px; cursor: default; overflow: auto;
+                  box-shadow: 0 12px 48px rgba(0,0,0,0.6); }
+  .script-modal h2 { margin: 0; font-size: 15px; font-weight: 600; }
+  .script-modal .modal-meta { color: var(--muted); font-size: 12px; }
+  .script-modal .actions-row { display: flex; gap: 8px; justify-content: flex-end;
+                               border-top: 1px solid var(--border); padding-top: 12px; }
+  .script-modal .actions-row .grow { flex: 1; }
+  video.review { width: 100%; max-height: 540px; background: black; border-radius: 6px;
+                 border: 1px solid var(--border); }
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 16px; border-radius: 6px;
+           background: var(--panel); border: 1px solid var(--border); color: var(--text);
+           font-size: 13px; z-index: 20; max-width: 380px; }
+  .toast.err { border-color: var(--err); color: var(--err); }
+  .toast.ok { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Captain 2T1L</h1>
+  <div class="meta" id="meta">loading…</div>
+  <div class="links"><a id="link-sheet" href="#" target="_blank" rel="noopener">Queue ↗</a></div>
+  <div class="spacer"></div>
+  <span class="meta" id="queue-status"></span>
+  <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
+  <button onclick="loadRows()">Refresh</button>
+  <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
+</header>
+
+<main id="main">
+  <div class="rows" id="rows-pane">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Slug / Place</th><th>Status</th><th>Claims (lie marked for you)</th>
+          <th>Caption</th><th>Drive</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" style="padding:40px;text-align:center;color:var(--muted);">
+          loading rows from Posts_2T1L…
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2 id="panel-title">Log</h2>
+      <div class="panel-meta" id="panel-meta">no job yet</div>
+    </div>
+    <div class="panel-tabs">
+      <button class="active" data-tab="log" onclick="switchTab('log')">Log</button>
+      <button data-tab="jobs" onclick="switchTab('jobs')">Recent Jobs</button>
+    </div>
+    <div class="log" id="log">
+      <span class="log-empty">No job running. Author rows in the sheet, then click Generate on a row.</span>
+    </div>
+    <div class="job-list" id="job-list" style="display:none;"></div>
+  </div>
+</main>
+
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let allRows = [];
+let active = { by_slug: {} };
+let activeEvt = null;
+
+async function api(path, opts={}) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(()=>'')}`);
+  return r.json();
+}
+function toast(msg, kind='ok') {
+  const div = document.createElement('div');
+  div.className = `toast ${kind}`; div.textContent = msg;
+  $('toast-root').appendChild(div); setTimeout(() => div.remove(), 4500);
+}
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function statusPillClass(s) {
+  return ({'draft':'draft','ready-to-review':'ready-to-review','ready-to-publish':'ready-to-publish','published':'published'})
+    [(s||'').toLowerCase().replace(/\s+/g,'-')] || 'draft';
+}
+function inFlight(slug, kind) { return active.by_slug?.[slug]?.[kind]; }
+function stateBadge(state) { return state ? `<span class="state-badge ${state}">${state}</span>` : ''; }
+
+function claimsCell(r) {
+  const lie = parseInt(r.lie_index || '0');
+  const out = [1,2,3].map(i => {
+    const txt = (r['claim_'+i] || '').trim();
+    const lbl = (r['label_'+i] || '').trim();
+    if (!txt) return '';
+    const isLie = i === lie;
+    return `<div class="claim${isLie?' lie':''}">
+      <span class="n">${i}.</span><span class="txt">${escapeHtml(txt)}</span>
+      ${lbl?`<span class="lbl">${escapeHtml(lbl)}</span>`:''}${isLie?'<span class="tag">lie</span>':''}
+    </div>`;
+  }).join('');
+  return out || '<span class="caption-empty">— no claims yet —</span>';
+}
+
+function captionCell(r) {
+  const caption = (r.caption || '').trim();
+  if (!caption) return '<span class="caption-empty">—</span>';
+  return `${escapeHtml(caption)}<button class="copy-btn" data-copy="${escapeHtml(caption)}"
+            onclick="copyText(this)" title="copy caption">copy</button>`;
+}
+async function copyText(btn) {
+  const text = btn.dataset.copy || '';
+  try {
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    else { const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.top='-9999px';
+           document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); }
+    toast('caption copied'); const o=btn.textContent; btn.textContent='✓'; setTimeout(()=>btn.textContent=o,1200);
+  } catch (e) { toast(`copy failed: ${e.message}`, 'err'); }
+}
+
+function filesCell(r) {
+  const render = (r.drive_link || '').trim(), clip = (r.drive_clip_link || '').trim();
+  if (!render && !clip) return '<span style="color:var(--muted);font-size:11px;">—</span>';
+  const parts = [];
+  if (render) parts.push(`<a href="${escapeHtml(render)}" target="_blank" rel="noopener" style="font-size:11px;">final ↗</a>`);
+  if (clip) parts.push(`<a href="${escapeHtml(clip)}" target="_blank" rel="noopener" style="font-size:11px;color:var(--muted);">clip ↗</a>`);
+  return parts.join('<br>');
+}
+
+function actionsCell(r) {
+  const slug = r.slug || '', f = r.files || {}, status = (r.status || '').trim();
+  const generating = slug && inFlight(slug, 'generate');
+  const publishing = slug && inFlight(slug, 'publish');
+  const marking    = slug && inFlight(slug, 'mark_published');
+  const reviewBtn = f.render_exists
+    ? `<button class="small" onclick="openReview('${escapeHtml(slug)}', ${f.render_mtime||0})">▷ Review</button>` : '';
+  const canGenerate = slug && (status==='Draft'||status==='Ready to review'||status==='Ready to publish');
+  const isRegen = status === 'Ready to publish';
+  const genBtn = canGenerate
+    ? `<button class="${isRegen?'small':'captain small'}" ${generating?'disabled':''}
+         onclick="runGenerate('${escapeHtml(slug)}', ${isRegen?'true':'false'})">
+         ${stateBadge(generating)} ${isRegen?'Re-generate':'Generate'}</button>` : '';
+  const canPublish = slug && status==='Ready to publish' && f.render_exists;
+  const pubBtn = canPublish
+    ? `<button class="warn small" ${publishing?'disabled':''} onclick="runPublish('${escapeHtml(slug)}')">
+         ${stateBadge(publishing)} ${(r.drive_link||'').trim()?'Re-publish':'Publish'}</button>` : '';
+  const canMark = slug && status==='Ready to publish' && (r.drive_link||'').trim();
+  const markBtn = canMark
+    ? `<button class="small" ${marking?'disabled':''} onclick="runMarkPublished('${escapeHtml(slug)}')">
+         ${stateBadge(marking)} ✓ Mark as Published</button>` : '';
+  return `<div class="btn-row">${reviewBtn}${genBtn}${pubBtn}${markBtn}</div>`;
+}
+
+function renderRows() {
+  const tbody = $('tbody');
+  if (!allRows.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--muted);">
+      no rows yet — author a 2T1L set in the <a id="empty-sheet" href="#" target="_blank">Posts_2T1L sheet ↗</a>
+      (or via add_row.py), then Refresh.</td></tr>`;
+    const l = $('empty-sheet'); if (l && window._sheetUrl) l.href = window._sheetUrl;
+    return;
+  }
+  tbody.innerHTML = allRows.map(r => {
+    const klass = statusPillClass((r.status||'').trim());
+    const run = ['generate','publish','mark_published'].some(k => inFlight(r.slug,k)==='running');
+    const qd  = ['generate','publish','mark_published'].some(k => inFlight(r.slug,k)==='queued');
+    return `<tr class="${run?'row-running':qd?'row-queued':''}">
+      <td class="idx">${escapeHtml(r.idx)||'—'}</td>
+      <td class="slug">${escapeHtml(r.slug)}<span class="place">📍 ${escapeHtml(r.place)}</span></td>
+      <td class="status"><span class="pill ${klass}">${escapeHtml((r.status||'Draft'))}</span></td>
+      <td class="claims">${claimsCell(r)}</td>
+      <td class="caption">${captionCell(r)}</td>
+      <td class="files">${filesCell(r)}</td>
+      <td class="actions">${actionsCell(r)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadRows() {
+  $('meta').textContent = 'loading…';
+  try {
+    const [h, data] = await Promise.all([api('api/health'), api('api/rows')]);
+    window._sheetUrl = h.queue_sheet_url;
+    $('link-sheet').href = h.queue_sheet_url;
+    allRows = data;
+    $('meta').textContent = `${allRows.length} row(s) · ${h.queue_tab} · sa=${h.sa_present?'ok':'MISSING'}`;
+    renderRows();
+  } catch (e) {
+    $('meta').textContent = 'load failed';
+    $('tbody').innerHTML = `<tr><td colspan="7" style="padding:40px;text-align:center;color:var(--err);">
+      load failed: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+async function refreshActive() {
+  try {
+    const data = await api('api/active');
+    active = data || { by_slug: {} };
+    const r = data.running_count, q = data.queued_count;
+    $('queue-status').textContent = (r||q) ? `${r} running · ${q} queued` : '';
+    renderRows();
+  } catch (e) {}
+}
+
+async function runGenerate(slug, isRegen=false) {
+  if (!slug) return;
+  if (isRegen && !confirm(`Re-generate ${slug}? Spends a new Seedance credit and overwrites the local clip + render.`)) return;
+  try {
+    const job = await api('api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kind:'generate', slug, force: isRegen})});
+    toast(`${isRegen?'re-generate':'generate'} queued (${slug})`);
+    attachToJob(job.id); switchTab('log'); refreshActive();
+  } catch (e) { toast(`generate failed: ${e.message}`, 'err'); }
+}
+async function runPublish(slug) {
+  if (!slug) return;
+  if (!confirm(`Upload ${slug}'s render to Drive? Make sure you reviewed it first.`)) return;
+  try {
+    const job = await api('api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kind:'publish', slug})});
+    toast(`publish queued (${slug})`); attachToJob(job.id); switchTab('log'); refreshActive();
+  } catch (e) { toast(`publish failed: ${e.message}`, 'err'); }
+}
+async function runMarkPublished(slug) {
+  if (!slug) return;
+  if (!confirm(`Mark ${slug} as Published? Only once the post is live.`)) return;
+  try {
+    const job = await api('api/run', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({kind:'mark_published', slug})});
+    toast(`mark-published queued (${slug})`); attachToJob(job.id); refreshActive();
+  } catch (e) { toast(`mark failed: ${e.message}`, 'err'); }
+}
+
+async function attachToJob(id) {
+  if (activeEvt) { activeEvt.close(); activeEvt = null; }
+  $('panel-title').textContent = `Log — ${id}`;
+  const log = $('log'); log.innerHTML = '';
+  let preStatus = null, seeded = 0;
+  try {
+    const j = await api(`api/jobs/${id}`); preStatus = j.status;
+    $('panel-meta').textContent = `${j.kind} · ${j.slug||''} · ${j.status}`;
+    for (const line of (j.log||[])) { const d=document.createElement('div'); d.textContent=line; log.appendChild(d); seeded++; }
+    log.scrollTop = log.scrollHeight;
+  } catch (e) { $('panel-meta').textContent = `couldn't load: ${e.message}`; }
+  if (preStatus==='success'||preStatus==='error') {
+    if (!seeded) log.innerHTML = '<span class="log-empty">(job finished with no log)</span>'; return;
+  }
+  activeEvt = new EventSource(`api/jobs/${id}/stream`);
+  activeEvt.onmessage = (e) => { const d=document.createElement('div'); d.textContent=JSON.parse(e.data);
+    log.appendChild(d); log.scrollTop = log.scrollHeight; };
+  activeEvt.onerror = () => { if (activeEvt){activeEvt.close();activeEvt=null;} pollUntilDone(id, log); };
+  activeEvt.addEventListener('end', async () => {
+    activeEvt.close(); activeEvt = null;
+    try { const j = await api(`api/jobs/${id}`);
+      $('panel-meta').textContent = `${j.kind} · ${j.slug||''} · ${j.status}`;
+      if (j.status==='success') toast(`job ${id} ✓`,'ok'); else if (j.status==='error') toast(`job ${id} ✗ ${j.error||''}`,'err');
+    } catch (e) {}
+    await loadRows(); await refreshActive();
+  });
+}
+async function pollUntilDone(id, logEl) {
+  let lastLen = logEl.childElementCount;
+  while (true) {
+    let j; try { j = await api(`api/jobs/${id}`); } catch (e) { return; }
+    const lines = j.log||[];
+    for (let i=lastLen;i<lines.length;i++){ const d=document.createElement('div'); d.textContent=lines[i]; logEl.appendChild(d); }
+    lastLen = lines.length; logEl.scrollTop = logEl.scrollHeight;
+    if (j.status==='success'||j.status==='error') {
+      if (j.status==='success') toast(`job ${id} ✓`,'ok'); else toast(`job ${id} ✗ ${j.error||''}`,'err');
+      await loadRows(); await refreshActive(); return;
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+function togglePanel() {
+  const main = $('main'); const hidden = !main.classList.contains('panel-hidden');
+  main.classList.toggle('panel-hidden', hidden);
+  $('toggle-panel-btn').textContent = hidden ? 'Show log' : 'Hide log';
+}
+async function loadJobs() {
+  try {
+    const jobs = await api('api/jobs'); const root = $('job-list');
+    root.innerHTML = jobs.length ? jobs.map(j => `
+      <div class="job" onclick="attachToJob('${j.id}'); switchTab('log');">
+        <div class="id">${j.id}</div><div>${escapeHtml(j.kind)} · ${escapeHtml(j.slug||'')}</div>
+        <div class="status status-${j.status}">${j.status}</div></div>`).join('')
+      : '<div style="color:var(--muted);font-style:italic;">no jobs yet</div>';
+  } catch (e) { $('job-list').innerHTML = `<div style="color:var(--err);">${escapeHtml(e.message)}</div>`; }
+}
+function switchTab(tab) {
+  document.querySelectorAll('.panel-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab===tab));
+  $('log').style.display = tab==='log' ? '' : 'none';
+  $('job-list').style.display = tab==='jobs' ? '' : 'none';
+  if (tab==='jobs') loadJobs();
+}
+function closeModal() { $('modal-root').innerHTML = ''; }
+function openReview(slug, mtime=0) {
+  const src = `api/render/${encodeURIComponent(slug)}?t=${Math.floor(mtime||Date.now()/1000)}`;
+  $('modal-root').innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="script-modal" onclick="event.stopPropagation()">
+        <h2>Review — ${escapeHtml(slug)}</h2>
+        <div class="modal-meta">Check: banners reveal in sync with the count, place banner reads,
+          Captain's face is clear, nothing clipped.</div>
+        <video class="review" controls autoplay src="${src}"></video>
+        <div class="actions-row"><span class="grow"></span>
+          <button onclick="closeModal()">Close</button>
+          <button class="warn" onclick="closeModal(); runPublish('${escapeHtml(slug)}')">Publish…</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+loadRows().then(refreshActive);
+setInterval(refreshActive, 3000);
+</script>
+</body>
+</html>

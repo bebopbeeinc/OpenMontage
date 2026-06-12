@@ -1,0 +1,182 @@
+name: trivia-captain-2t1l
+version: "0.1"
+description: >
+  "Captain's Two Truths & a Lie" — a higher-traction twist on trivia-quiz.
+  Captain Archibald HOSTS a 2-truths-1-lie round about a destination in a SINGLE
+  15s Seedance clip (numbered facts "One/Two/Three" + finger counting, in-prompt
+  game-show music, no in-camera sign). A kinetic full-bleed Remotion overlay
+  (TriviaTwoTruthsK3, goldround theme) adds a full-width top title + place banner
+  and bottom-stacking fact banners that reveal as he counts. The lie is NEVER
+  revealed on screen — the comments are the game; the kicker is a demographic
+  taunt ("most men can't spot it — tag one").
+
+  Sister to trivia-captain (same Seedance 2.0 + OpenArt driver + Drive/Sheet
+  patterns), but content is CURATED 2T1L sets authored directly in the Queue
+  (no DailyTriviaConfig), the clip is a single 15s take (no tablet/reference
+  image), and the compose path is the kinetic full-bleed TriviaTwoTruthsK3
+  composition (NOT TriviaWithBg). See styles/trivia-captain-2t1l.yaml for the
+  locked format contract and the design history.
+category: short_form
+stability: alpha
+default_checkpoint_policy: guided
+
+reference_input:
+  supported: false
+
+production_modes:
+  - name: automated_openart
+    description: >
+      openart_generate.py drives Seedance 2.0 via the shared Playwright driver
+      (single 15s clip, character "Captain Archibald", native audio = VO +
+      in-prompt music, no reference image). The default.
+    required_tools: []
+    best_for:
+      - the standard one-clip 2T1L episode
+  - name: manual_openart
+    description: >
+      Operator generates the clip in the OpenArt web UI from the Queue prompt
+      and drops it at projects/trivia-captain-2t1l/<slug>/assets/video/clip.mp4.
+    required_tools: []
+    best_for:
+      - days when the Playwright driver is flaky
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/trivia-captain-2t1l/executive-producer
+  budget_default_usd: 0.30        # one Seedance clip + one Remotion render (overlay assets reused)
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 20
+
+extensions:
+  custom_scripts: true             # scripts/trivia_captain_2t1l/*.py
+  custom_playbooks: true           # styles/trivia-captain-2t1l.yaml
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/trivia-captain-2t1l/executive-producer
+  - pipelines/trivia-captain-2t1l/idea-director
+  - pipelines/trivia-captain-2t1l/script-director
+  - pipelines/trivia-captain-2t1l/asset-director
+  - pipelines/trivia-captain-2t1l/edit-director
+  - pipelines/trivia-captain-2t1l/compose-director
+  - pipelines/trivia-captain-2t1l/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  default: trivia-captain-2t1l
+  custom_allowed: false
+
+external_state:
+  - kind: google_sheet
+    id: "1EzucrS6yUPfodtt7WVuvW3PjZ1yhWUgfWUowPkMP6Eg"   # @dailytrivia.tc Post Calendar
+    tab: "Posts_2T1L"                                    # dedicated tab alongside Posts / Posts_Quiz
+    role: source_of_truth
+    auth: service_account
+    notes: >
+      Row 1 = banner, row 2 = header, data row 3+. Columns A–R: # · Slug ·
+      Status · Place · Claim 1 · Claim 2 · Claim 3 · Lie # · Lie Model ·
+      Label 1 · Label 2 · Label 3 · Demographic · OpenArt Prompt · Caption ·
+      Drive Link · Drive Clip · Theme. Status enum: Draft / Ready to review /
+      Ready to publish / Published. Content is curated here (no DailyTriviaConfig).
+      Lie # is tracking only — NEVER rendered.
+  - kind: google_drive_folder
+    id: "1930CVitXd4d6BsZ39EleWyxmtsgaXVGY"   # @dailytrivia.tc deliverables (shared with the SA; reused from trivia-short/quiz)
+    role: deliverable_drop
+    auth: service_account
+    notes: publish.py uploads the final render + raw clip here. Override with $TRIVIA_2T1L_DRIVE_FOLDER.
+
+stages:
+  - name: idea
+    skill: pipelines/trivia-captain-2t1l/idea-director
+    produces: [brief, decision_log]
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "Three claims authored: 2 true + 1 lie; the two truths sound fake, the lie sounds plausible"
+      - "lie_index (1/2/3) and lie_model (myth/invented) recorded — TRACKING ONLY, never rendered"
+      - "Place is a real destination with vivid, surprising facts"
+      - "Demographic taunt chosen (rotate; warm not hostile)"
+      - "Row appended to the Queue as Draft via add_row.py; brief.json written"
+    success_criteria:
+      - Queue row exists with Place + Claim 1/2/3 + Lie # + Lie Model + Demographic
+      - Schema-valid brief artifact
+
+  - name: script
+    skill: pipelines/trivia-captain-2t1l/script-director
+    required_artifacts_in: [brief]
+    produces: [script]
+    tools_available: []              # scripts/trivia_captain_2t1l/build_prompt.py
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - "OpenArt prompt assembled (Queue!N): numbered facts One/Two/Three + finger counting + high-energy VOICE + in-prompt game-show music; NO in-camera sign/text"
+      - "Brand 'Travel Crush' NOT spoken (it lives in the Remotion banner)"
+      - "Overlay labels (Queue J/K/L) are 2-3 words each and read clearly"
+      - "Caption written (Queue!O) with demographic bait + brand/niche hashtags"
+      - "Character lock: 'Captain Archibald' (never described from text)"
+    success_criteria:
+      - Queue!N (prompt), Queue!O (caption), Queue J/K/L (labels) non-empty
+      - Status == "Ready to review"
+
+  - name: assets
+    skill: pipelines/trivia-captain-2t1l/asset-director
+    required_artifacts_in: [script]
+    produces: [asset_manifest]
+    tools_available: []              # scripts/trivia_captain_2t1l/openart_generate.py
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "Single 15s Seedance clip at assets/video/clip.mp4 (9:16, audio present)"
+      - "VO matches the script (numbered facts land); finger-count gesture present"
+      - "Captain on-model; bright festive destination set; no sign/text in frame"
+      - "Tail-fade applied to mask Seedance end-of-clip audio artifact"
+    success_criteria:
+      - assets/video/clip.mp4 exists and ffprobe-valid with an audio track
+
+  - name: edit
+    skill: pipelines/trivia-captain-2t1l/edit-director
+    required_artifacts_in: [asset_manifest]
+    produces: [edit_decisions]
+    tools_available: []              # scripts/trivia_captain_2t1l/assemble.py
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - "bg.mp4 normalized to 1080x1920 h264 + AAC, audio preserved"
+      - "Whisper reveal times found for one/two/three (fallback to even spacing if not)"
+      - "props.json written: themeName, place, title, claims[{label, revealAtSec}]"
+    success_criteria:
+      - assets/video/bg.mp4 + assets/props.json exist
+
+  - name: compose
+    skill: pipelines/trivia-captain-2t1l/compose-director
+    required_artifacts_in: [edit_decisions]
+    produces: [render_report]
+    required_tools: []               # scripts/trivia_captain_2t1l/render.py + Remotion
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true     # per user memory: always review renders
+    review_focus:
+      - "TriviaTwoTruthsK3 rendered (NOT TriviaWithBg) at renders/<slug>.mp4"
+      - "MANDATORY frame review: ~3s/6s/9s/13s — banners reveal in sync with the count, place banner reads, Captain's face is clear, nothing clipped, full-width edge-to-edge"
+      - "MANDATORY auto-fix: any sync/legibility/crop issue fixed in-turn before signaling done"
+    success_criteria:
+      - renders/<slug>.mp4 exists and passes ffprobe
+      - frame_review_passed == true
+
+  - name: publish
+    skill: pipelines/trivia-captain-2t1l/publish-director
+    required_artifacts_in: [render_report, brief]
+    produces: [publish_log]
+    tools_available: []              # scripts/trivia_captain_2t1l/publish.py
+    checkpoint_required: true
+    human_approval_default: true     # per user memory: never auto-publish
+    review_focus:
+      - "Human explicitly approved publication in the current turn"
+      - "Render + raw clip uploaded to the Drive folder; links written to Queue P/Q"
+      - "Status flipped to Ready to publish (human flips to Published after posting)"
+    success_criteria:
+      - publish_log.drive_link is a non-empty https URL

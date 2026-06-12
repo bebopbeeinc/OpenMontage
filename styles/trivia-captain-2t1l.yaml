@@ -1,0 +1,355 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# v2 LOCKED DESIGN (2026-06-12) — supersedes the two-clip / diegetic-sign notes
+# below where they conflict. Validated end-to-end on the Bahamas prototype:
+# projects/trivia-captain-2t1l/bahamas-two-truths/renders/bahamas_studio.mp4
+#
+#  • SINGLE 15s Seedance clip (NOT two clips). Kills the seam entirely and makes
+#    in-prompt music continuous. The two-clip last-frame-continuation approach is
+#    retired — it left a visible "two parts" seam.
+#  • IN-PROMPT MUSIC: upbeat game-show bed requested in the clip's AUDIO block —
+#    native OpenArt audio, continuous within the one clip. (Per-clip music only
+#    works because there's one clip.) Voice direction = brisk high-energy host.
+#  • NUMBERED FACTS + FINGER COUNTING: script says "One… Two… Three…" and the
+#    Captain holds up 1/2/3 fingers — syncs to the scoreboard fills. Works well.
+#  • NO in-camera sign. Brand lives ENTIRELY in the Remotion layer now.
+#  • STUDIO-FRAME COMPOSITE (Remotion comp `TriviaTwoTruths`, built 2026-06-12 in
+#    remotion-composer/: TriviaTwoTruths.tsx + RootTriviaTwoTruths.tsx +
+#    index-trivia-2t1l.tsx). Layout on a 1080×1920 branded canvas:
+#      - TOP band: "WHICH ONE'S THE LIE?" + 3 chips that fill per claim
+#        (2-3 word summaries, timed off Whisper word-stamps).
+#      - CENTER: Captain clip center-cropped into a gold-framed window
+#        (objectPosition ~center 16% to keep his face).
+#      - BOTTOM band: animated marquee banner — "2 TRUTHS & A LIE" (LIE in
+#        coral) + tc_logo.png + chasing bulbs.
+#  • KEY FINDING — Seedance does NOT honor framing directions ("slightly right",
+#    "lower-right corner" both ignored; it keeps him centered/full-frame). So we
+#    do NOT rely on AI framing to reserve overlay zones — the studio frame gives
+#    the scoreboard + banner guaranteed space by construction. This is the whole
+#    reason for the windowed layout.
+#  • Render: cd remotion-composer && npx remotion render src/index-trivia-2t1l.tsx
+#    TriviaTwoTruths <out.mp4>  (stage public/2t1l_bg.mp4, public/2t1l_meta.json,
+#    public/tc_logo.png first).
+#  • Open polish: tight crop on the end lean-in; optional word captions; optional
+#    chip-fill SFX dings. See [[feedback-scroll-stopping-assets]].
+# ═══════════════════════════════════════════════════════════════════════════
+
+identity:
+  name: "Captain's Two Truths & a Lie"
+  category: short-form
+  mood: game-show host energy, warm, conspiratorial, grandfatherly, in-on-the-joke
+  # New format, designed 2026-06-11 as a higher-traction twist on trivia-quiz.
+  # Captain Archibald HOSTS a 2-truths-1-lie round about a destination. The
+  # lie is NEVER revealed on screen — the only way to "play" is to argue in
+  # the comments. A demographic-taunt kicker drives tag/comment engagement.
+  pace: >
+    Two-clip continuous arc (~30s), chained by last-frame continuation.
+    CLIP 1 (~15s): "Today: <place>" open in a destination-themed set with the
+    diegetic "2 TRUTHS & A LIE" sign behind him → claim A → claim B, each
+    spoken with showman relish; ends on a HELD, low-motion anticipatory pose
+    (the seam frame). CLIP 2 (~15s, reference = clip 1's last frame):
+    picks up from the frozen pose → claim C → demographic-taunt kicker →
+    "tag a ___" CTA + Travel Crush lockup, all three claim pills still pinned.
+  best_for: >
+    Faceless-adjacent comment-bait shorts where the engagement engine is a
+    demographic dare ("most men can't spot the lie") + an unresolved puzzle
+    (no on-screen reveal). The Captain's amused-disbelief register makes the
+    two TRUE claims land as jaw-droppers and the whole thing read as a warm
+    little island game show.
+  not_for: >
+    Single-fact late-discovery reels — those stay in trivia-captain (tablet
+    show-and-tell, "a game told me"). Destinations with no trio of vivid,
+    surprising claims (one debunkable + two unbelievable-but-true) fall flat.
+  reference_evidence:
+    primary: >
+      Manna Bible app "Most Christians can't answer this…" — demographic
+      can't-do framing, 6.2M views. The kicker_taunt_variants below are the
+      same lever pointed at travel/nationality/gender identity.
+    secondary: >
+      "2 truths, 1 lie" faceless trend (15.5M + 3.6M on top videos) — the
+      unresolved-lie comment loop. Cited in styles/trivia-quiz.yaml.
+
+# ─────────────────────────────────────────────────────────────────────────
+# DIVERGENCES FROM trivia-captain (the parent persona pipeline)
+# Read styles/trivia-captain.yaml for everything NOT overridden here — the
+# character lock, voice register, caption typography, and Seedance authoring
+# gotchas are all INHERITED. This block lists only what 2T1L changes.
+# ─────────────────────────────────────────────────────────────────────────
+diverges_from_trivia_captain:
+  - "NO TABLET. The signature fact-source prop is dropped — he hosts, he does not show-and-tell. Replaced by the diegetic show sign (see signature_sign)."
+  - "NO game-source attribution. Dialogue never says 'a game told me' / 'this game'. He is the host of the round, not a late-discoverer."
+  - "TWO clips, not one. ~30s via last-frame continuation (clip 2 reference_image = clip 1's extracted last frame). trivia-captain is a single 15s take."
+  - "DESTINATION-THEMED environment per row (beach bar, desert camp, spice market…), NOT the lifetime-travel-archive home study."
+  - "NO pinned claim pills, NO new Remotion comp (user decision 2026-06-11). The three claims are carried by the Captain's VO only. Optionally keep the INHERITED word-by-word captions (trivia-captain's TriviaWithBg path) — no new build — or go caption-free."
+  - "NO reveal, NO countdown. The lie is never resolved on screen (user decision 2026-06-11)."
+  - "Kicker is a DEMOGRAPHIC TAUNT + 'tag a ___' CTA (see kicker_taunt_variants), not the proximity/'a game had to tell me' self-deprecation kicker."
+  - "Brand 'Travel Crush' is DIEGETIC — baked into the sign reference image (the sign carries the TC logo). NOT spoken (avoids the brand-cram acceleration bug), NOT a Remotion overlay (user decision 2026-06-11)."
+
+# What IS inherited verbatim from trivia-captain — do not re-derive:
+inherits_from_trivia_captain:
+  - "Character: OpenArt saved character 'Captain Archibald'. NEVER describe his face/clothes from text — the reference owns his look."
+  - "Emotional register: amused disbelief, warm, grandfatherly, self-deprecating. Never angry, never shouting, never deadpan."
+  - "Audio ON, native Seedance VO. 9:16. Slightly-low-angle, photoreal, subtle handheld micro-wobble."
+  - "Prompt structure: labeled CAPS sections (ACTING/SETTING/PROPS/DIALOGUE/VOICE/SHOT/EXCLUSIONS)."
+  - "Seedance authoring gotchas — see asset_generation.prompt_authoring_rules below (copied + extended for this format)."
+  - "Caption typography + warm-red #D63B2F emphasis pill."
+
+show_identity:
+  title: "Two Truths & a Lie"
+  host: '"Captain" Archibald'
+  opening_line_shape: "Today — <place>."   # spoken; place said once, no rules recited
+  # The rules ("two are true, one's a lie") are NEVER spoken — the diegetic
+  # sign carries them. User decision 2026-06-11.
+  game_lockup:
+    brand_label: "TRAVEL CRUSH"
+    render: diegetic_on_sign                 # the TC logo is baked into the sign artwork
+    placeholder_url: "play.travelcrush.com"
+
+signature_sign:
+  # Replaces the tablet as the format's signature prop. A diegetic game-show
+  # sign reading "2 TRUTHS & A LIE" mounted behind the Captain's shoulder,
+  # with the Travel Crush logo baked into the artwork (carries the brand).
+  text: "2 TRUTHS & A LIE"
+  asset_path: "scripts/trivia_captain_2t1l/assets/two_truths_sign_v3b.png"        # LOCKED keeper — vibrant warm game-show marquee, real logo on plaque
+  asset_alt: "scripts/trivia_captain_2t1l/assets/two_truths_sign_v3a.png"         # turquoise-badge variant
+  asset_deprecated: "scripts/trivia_captain_2t1l/assets/two_truths_sign_v2_logo.png (weathered-wood; rejected as too muted/not scroll-stopping 2026-06-11)"
+  visual_direction: "candy-pop game-show marquee matching the Travel Crush logo energy — glossy 3D bubble letters, marquee lightbulbs, saturated tropical palette, LIE in coral-red. Scroll-stopping is the bar; weathered/rustic is rejected."
+  built_with: "openart_image / Nano Banana Pro, 2K 1:1, real tc_logo.png passed as reference_image_path"
+  brand_logo_source: "scripts/trivia_captain/assets/tc_logo.png (real Travel Crush wordmark; mirrors in remotion-composer/public/, trivia-quiz project)"
+  carries_brand: "Travel Crush logo is baked into the sign plaque — this is the only brand surface in the video"
+  reusable: "Destination-NEUTRAL and reused EVERY episode — same sign builds show recognition; only the environment changes per row"
+  placement: "mounted on the wall / structure just behind his shoulder, in-world"
+  strategy: in_camera_reference_image          # the proven tablet trick, repointed
+  rationale: >
+    Seedance garbles free-rendered text. Uploading a clean sign PNG as
+    reference_image and directing it to appear FROZEN on the in-world sign is
+    the same mechanism that made the tablet splash render legibly in
+    trivia-captain take04. Build the PNG with a (to-be-written) build_sign_ref.py.
+  rules:
+    - "FROZEN-IMAGE DISCIPLINE: the EXACT sign graphic stays unchanged the whole clip — must not re-letter, drift, or morph. State in PROPS + EXCLUSIONS; verify on the FIRST frame."
+    - "UNTESTED MAPPING (flag): rendering a reference image onto a WALL SIGN (vs a held tablet) is not yet proven. Expect legibility re-rolls, same as the tablet's ~1-in-3 orientation re-roll."
+    - "FALLBACK: if in-camera sign text is unreliable after a couple of re-rolls, composite the sign as a Remotion element instead (loses 'behind him' occlusion, gains guaranteed legibility) — log the swap."
+    - "The sign carries the rules so the Captain never recites them aloud."
+
+continuation:
+  # The two-clip seam. Both clips share character + set + sign; clip 2 is
+  # generated FROM clip 1's last frame so the cut is invisible.
+  mechanism: last_frame_image_reference
+  steps:
+    - "Render clip 1 (reference_image = sign PNG; character = Captain Archibald)."
+    - "ffmpeg-extract clip 1's FINAL frame to a PNG."
+    - "Render clip 2 with reference_image = that PNG (image-to-video — the SUPPORTED path; NOT a video reference, which 400s on OpenArt)."
+  seam_rules:
+    - "Clip 1 MUST end on a held, near-static pose (settled hands, fixed framing, locked light) — high-motion seam frames produce a visible jump. Direct this in clip 1 ACTING + EXCLUSIONS."
+    - "Clip 2 SETTING/ACTING must re-describe the identical set + sign + held pose and say 'continue the exact same scene, do not reinvent the set'."
+    - "Same aspect / lighting / framing locked across both prompts."
+
+claims_contract:
+  count: 3                                   # exactly: 2 true + 1 lie
+  lie_model: per_row                         # myth | invented  (mix per row — user decision 2026-06-11)
+  authoring_rules:
+    - "The two TRUE claims should sound fake; the lie should sound plausible — that inversion is the whole hook."
+    - "myth lie = a widely-believed travel myth the Captain 'fell for too'. invented lie = one he made up. Pick whichever the destination's facts support."
+    - "Each claim is spoken with a beat of showman relish AND shown as a pinned A/B/C pill. Keep spoken claims short (~10-14 words) so two clips stay under budget."
+    - "Pill text is an abbreviated version of the spoken claim (fits one/two lines)."
+    - "NEVER reveal which is the lie, on screen or in VO."
+
+kicker_taunt_variants:
+  # Paired unit: demographic taunt (spoken, end of clip 2) + CTA pill.
+  # Mirrors trivia-quiz hook_closer_variants. Warm needling, NEVER hostile —
+  # the Captain is delighted a whole group will trip up, grandfather-ribbing
+  # the family, never insulting anyone (stays inside the never-angry guardrail).
+  position: end_of_clip_2
+  rotation_rules:
+    - "No two consecutive rows taunt the same demographic."
+    - "Match the group to the fact when possible (Japan row → 'tourists who've done Japan'; food fact → 'foodies')."
+    - "If a line reads as a genuine putdown, it's wrong — re-write warmer."
+  variants:
+    most_men:
+      taunt: "Most men pick the wrong one. Every single time."
+      cta: "Tag the most stubborn traveler you know 👇"
+    nationality:
+      taunt: "Americans get this one wrong every time."
+      cta: "Prove me right, America 👇"
+    brits:
+      taunt: "Brits, this is exactly where you fall apart."
+      cta: "Tag your most confident British mate 👇"
+    age:
+      taunt: "Nobody under thirty spots the lie."
+      cta: "Tag a youngster 👇"
+    frequent_flyer:
+      taunt: "Even the frequent flyers miss this one."
+      cta: "Think you're well-travelled? Comment 👇"
+
+asset_generation:
+  openart:
+    model: "Seedance 2.0"
+    aspect: "9:16"
+    resolution: "480p"                       # global default; bump only for final-cut takes
+    duration_s: 15                           # per clip; slider hard cap
+    variant_count: 1
+    audio_on: true
+    character: "Captain Archibald"
+    clip_count: 2                            # see continuation block
+    word_target_per_clip: [30, 42]           # ~70 words total across both clips
+    clip1_reference_image: "sign PNG: '2 TRUTHS & A LIE' + Travel Crush logo (user-generated; reusable every episode)"
+    clip2_reference_image: "clip 1's extracted last frame PNG"
+    prompt_authoring_rules:
+      - "Labeled CAPS section headers (ACTING/SETTING/PROPS/DIALOGUE/VOICE/SHOT/EXCLUSIONS) are proven safe — keep them."
+      - "NEVER use beat names as labels near dialogue ('hook:', 'kicker:', 'claim A:') — Seedance reads them aloud."
+      - "NEVER use timing markers ('0-3s') anywhere in the prompt body."
+      - "Stage directions inside quoted dialogue go in (parentheses) on their own line — proven not spoken."
+      - "Do NOT quote any exact spoken phrase outside DIALOGUE (ACTING/VOICE) — Seedance reads quoted phrases aloud, doubling/cramming the VO (proven Iceland Day 101)."
+      - "Travel Crush is NOT spoken in this format — it is a Remotion lockup. Do not put the brand in DIALOGUE."
+      - "Never describe the Captain's appearance from text — the character reference owns it."
+      - "PROPS must demand the sign image stay FROZEN/unchanged for the whole clip; EXCLUSIONS forbids any other invented text/UI in shot."
+      - "Clip 1 must END on a still, low-motion held pose; clip 2 must CONTINUE the exact same scene from the reference frame."
+      - "Do NOT recite the rules ('two are true, one's a lie') — the sign says it."
+
+remotion:
+  # NO new comp (user decision 2026-06-11). No pinned pills, no countdown, no
+  # reveal, no brand lockup — the sign carries the brand and the claims are
+  # spoken. Reuse the INHERITED trivia-captain compose path (TriviaWithBg
+  # word-by-word captions) unchanged if captions are wanted, or render
+  # caption-free. Nothing to build.
+  composition_id: "TriviaWithBg"             # inherited; captions only, optional
+  needs_build: false
+  captions: optional                         # word-by-word pop, warm-red #D63B2F pill (inherited)
+
+# ─────────────────────────────────────────────────────────────────────────
+# WORKED EXAMPLE — Bahamas row (locked 2026-06-11)
+# lie_model: invented (blue sand is the lie); demographic: most_men.
+# Claims: A swimming pigs (TRUE) · B 600ft blue hole (TRUE) · C blue sand (LIE)
+# ─────────────────────────────────────────────────────────────────────────
+# PROTOTYPE RESULT (2026-06-11): generated end-to-end and VALIDATED.
+#   - In-camera WALL-SIGN mapping WORKS — the v3b marquee renders legibly behind
+#     the Captain (the untested risk is cleared; no Remotion-sign fallback needed).
+#   - Last-frame continuation is SEAMLESS — clip 2's first frame matches clip 1's
+#     last frame (pose/set/sign all carry).
+#   - Captain on-model in the destination set; vibrant + scroll-stopping.
+#   - Output: projects/trivia-captain-2t1l/bahamas-two-truths/renders/bahamas_2t1l_rough.mp4 (~30s)
+#   - NOTE: clip prompts genericized the sign from "wooden" to "glossy game-show
+#     marquee" so the prompt doesn't fight the v3b reference. The actual validated
+#     prompts are in the project run (clip1/clip2). Update the embedded example
+#     prompts below to match before scaffolding.
+#   - BLOCKER for captions/QA: transcriber crashes because .env HF_TOKEN contains
+#     an em-dash (U+2014) at char 40 — invalid HF auth header. Affects Whisper
+#     word-captions across ALL trivia pipelines. Fix: correct/remove HF_TOKEN
+#     (Whisper models are public, no token needed).
+worked_example_bahamas:
+  slug: bahamas-two-truths
+  lie_model: invented
+  demographic: most_men
+  claims:
+    A: { text: "Wild pigs swim out to your boat", truth: true }
+    B: { text: "A blue hole drops over 600 ft", truth: true }
+    C: { text: "One island has naturally blue sand", truth: false }
+  # claims are spoken only — no pinned pills. (kept as caption shorthand if the
+  # inherited word-captions are turned on)
+  caption_shorthand:
+    A: "Wild pigs swim to your boat"
+    B: "A blue hole 600 ft deep"
+    C: "An island with naturally blue sand"
+  clip1_prompt: |
+    ACTING
+    He opens already mid-delight — the host of a little island game show,
+    leaning toward the lens with a bright conspiratorial grin, eyebrows up,
+    thrilled to spring this on you. He introduces today's destination with a
+    showman's flourish, then lays out the first two claims one at a time,
+    savouring each like the best bit of gossip he's heard in years, a soft
+    self-deprecating chuckle leaking between them — he can hardly believe
+    these places are real either. Warm, grandfatherly, in on the joke. At the
+    end he settles into a held, anticipatory pose — hands resting, a knowing
+    half-smile, waiting — and holds it steady and still as the clip ends.
+
+    SETTING
+    An open-air beach bar on a Bahamian cay at golden hour: turquoise shallows
+    and powder-white sand behind him, a weathered driftwood counter, swaying
+    palm fronds, a few warm string lights just coming on. Mounted on the wall
+    just behind his shoulder is a hand-painted wooden show sign.
+
+    PROPS
+    The wooden show sign behind his shoulder displays the exact graphic
+    provided in the reference — appearing exactly as in the reference,
+    hand-painted on weathered board, catching the warm golden light. CRITICAL:
+    the EXACT SAME sign graphic stays frozen and unchanged for the entire clip
+    — it must not change, drift, morph, re-letter, or re-arrange from the
+    first frame to the last.
+
+    DIALOGUE
+    He says:
+    "Today — the Bahamas.
+    (delighted, leaning in)
+    Out here, wild pigs swim straight out to your boat.
+    (a savouring beat, eyebrows up)
+    And one of its blue holes drops six hundred feet, straight down — among
+    the deepest on Earth.
+    (settles into a knowing half-smile, holds — waiting)"
+
+    VOICE
+    Warm, weathered, a born showman-storyteller springing a delicious puzzle
+    on you. Each claim lands like the best gossip he's heard in years, smile
+    audible in every word, a soft chuckle leaking between them. UNHURRIED —
+    savour it, let the pauses breathe. Male, 70s, slight gravel, warm educated
+    diction. Never angry, never shouting, never deadpan — unbelievable but
+    funny, and he loves it.
+
+    SHOT
+    Medium close-up, slightly low angle, photoreal, warm golden-hour light,
+    subtle handheld micro-wobble.
+
+    EXCLUSIONS
+    No reel captions or graphics overlaid on the scene — those are added in
+    post. The only text in shot is the referenced sign graphic on the wooden
+    sign — no other invented text, signage, or UI, no fingers covering it. The
+    sign must NOT animate, change, or morph between frames. End on a still,
+    low-motion held pose — no big gesture on the final frame — so the clip ends
+    clean for the continuation.
+  clip2_prompt: |
+    ACTING
+    Continue seamlessly from the held, anticipatory pose of the reference
+    frame — same man, same beach bar, same sign, same framing and light,
+    picking up without a jump or reset. He delivers the final claim with the
+    same delighted, conspiratorial relish, then turns warmly to the lens for
+    the tease: a knowing, grandfatherly needle at the audience, delighted that
+    they'll trip up, landing the dare with a twinkle — never a sneer. He ends
+    leaning to the lens on the call to action, eyes bright, daring them.
+
+    SETTING
+    Identical to the reference: the same open-air Bahamian beach bar at golden
+    hour, turquoise water and white sand behind, driftwood counter, string
+    lights, palm fronds, and the same hand-painted wooden show sign on the wall
+    behind his shoulder. Continue the exact same scene — do not reinvent the
+    set.
+
+    PROPS
+    The wooden show sign behind his shoulder continues to display the exact
+    same graphic as in the reference frame — frozen and unchanged for the
+    entire clip; it must not re-letter, drift, or morph.
+
+    DIALOGUE
+    He says:
+    "(picking right up, savouring it)
+    And on one island, the sand is naturally bright blue.
+    (a warm knowing beat, turning to the lens)
+    Most men pick the wrong one. Every single time.
+    (leaning in, daring them)
+    Tag the most stubborn traveler you know — let's see if they can spot the
+    lie."
+
+    VOICE
+    Same warm showman register, continuous with the previous clip — no reset.
+    The final claim savoured like the others; the tease delivered as
+    affectionate ribbing, delighted they'll get it wrong, never mean.
+    UNHURRIED — let the dare land. Never angry, never shouting — amused and
+    warm throughout.
+
+    SHOT
+    Medium close-up, slightly low angle, photoreal, warm golden-hour light,
+    subtle handheld micro-wobble — matched to the reference frame for a
+    seamless continuation.
+
+    EXCLUSIONS
+    No reel captions or graphics overlaid on the scene — added in post. Only
+    the referenced sign text in shot; no other invented text or UI. The sign
+    must NOT animate or morph. Do NOT restate the rules aloud — the sign
+    already says it.
