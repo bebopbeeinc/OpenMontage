@@ -90,10 +90,19 @@ LOGIN_TIMEOUT_S = 300
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Selectors:
-    # On the Suite, an unauthenticated user sees "Sign up to create for FREE"
-    # in place of the Generate button. We use its presence as the
-    # "signed out" signal.
-    signed_out_marker: str = "button:has-text('Sign up to create for FREE')"
+    # Signed-out signals. OpenArt serves anonymous users a marketing layout
+    # whose CTA labels drift over time, so we OR several stable affordances
+    # rather than trust a single button label. (A previous single marker,
+    # "Sign up to create for FREE", silently stopped matching when OpenArt
+    # changed the copy — login detection then false-positived and the run
+    # failed downstream at the workspace switcher instead of here.)
+    # Any of these present => not authenticated.
+    signed_out_markers: tuple[str, ...] = (
+        "button:has-text('Sign up to create for FREE')",
+        "button:has-text('Get for free')",
+        "a:has-text('Login')",
+        "button:has-text('Login')",
+    )
 
     # The prompt input is a TipTap/ProseMirror contenteditable div, NOT a textarea.
     prompt_editor: str = "div.tiptap.ProseMirror[contenteditable='true']"
@@ -161,7 +170,7 @@ SEL = Selectors()
 # Auth
 # ---------------------------------------------------------------------------
 def _is_signed_out(page: Page) -> bool:
-    return page.locator(SEL.signed_out_marker).count() > 0
+    return any(page.locator(sel).count() > 0 for sel in SEL.signed_out_markers)
 
 
 def _goto_suite(page: Page, target_url: str) -> None:
@@ -170,20 +179,30 @@ def _goto_suite(page: Page, target_url: str) -> None:
     wait briefly for either the signed-out marker or a textarea to render."""
     page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
     # Give React a beat; we'll check signed-in state on the next call.
+    settle = ", ".join((*SEL.signed_out_markers, "textarea", "button:has-text('Generate')"))
     try:
-        page.wait_for_selector(
-            f"{SEL.signed_out_marker}, textarea, button:has-text('Generate')",
-            timeout=15_000,
-        )
+        page.wait_for_selector(settle, timeout=15_000)
     except PWTimeout:
         pass
 
 
-def _ensure_logged_in(page: Page, target_url: str) -> None:
-    """Navigate to target_url and ensure we're authenticated."""
+def _ensure_logged_in(page: Page, target_url: str, headless: bool = False) -> None:
+    """Navigate to target_url and ensure we're authenticated.
+
+    Headless runs can't show a login window, so manual re-auth is impossible —
+    we fail fast with the headed re-auth command instead of blocking for
+    LOGIN_TIMEOUT_S on a login that can never complete.
+    """
     _goto_suite(page, target_url)
     if not _is_signed_out(page):
         return
+    if headless:
+        raise RuntimeError(
+            "OpenArt session is logged out and this is a headless run — "
+            "can't log in without a browser window. Refresh auth with:\n"
+            "  python scripts/common/openart_driver.py --probe\n"
+            "log in, confirm the suite loads authenticated, then re-run.",
+        )
     print(
         f"\n⚠ Not logged in. Please log in manually in the browser window. "
         f"I'll wait up to {LOGIN_TIMEOUT_S}s.\n",
@@ -858,7 +877,7 @@ def download_resource(
     output_path = Path(output_path).expanduser().resolve()
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
-        _ensure_logged_in(page, OPENART_SUITE_BASE)
+        _ensure_logged_in(page, OPENART_SUITE_BASE, headless=headless)
         print(f"  → resolving resource {resource_id}…", file=sys.stderr)
         (rid, info), = _poll_resources(page, [resource_id], GENERATION_TIMEOUT_S)
         if info.get("status") != "ok":
@@ -910,7 +929,7 @@ def generate_clip(
     target_url = _model_url(model)
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
-        _ensure_logged_in(page, target_url)
+        _ensure_logged_in(page, target_url, headless=headless)
 
         # Re-assert the workspace before anything else — the saved characters
         # live in a specific team and OpenArt can silently swap the active one.

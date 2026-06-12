@@ -74,7 +74,16 @@ LOGIN_TIMEOUT_S = 300
 
 @dataclass(frozen=True)
 class Selectors:
-    signed_out_marker: str = "button:has-text('Sign up to create for FREE')"
+    # Signed-out signals. OpenArt's anonymous CTA labels drift over time, so we
+    # OR several stable affordances rather than trust one button label. A single
+    # marker ("Sign up to create for FREE") silently stopped matching when the
+    # copy changed, false-positiving login detection. Any present => not authed.
+    signed_out_markers: tuple[str, ...] = (
+        "button:has-text('Sign up to create for FREE')",
+        "button:has-text('Get for free')",
+        "a:has-text('Login')",
+        "button:has-text('Login')",
+    )
     prompt_editor: str = "div.tiptap.ProseMirror[contenteditable='true']"
     setting_card: str = "div.group:has-text('Setting'):has-text('Output')"
     model_card: str = "div.group:has-text('Model'):has(svg[aria-label*='Model'])"
@@ -106,24 +115,35 @@ SEL = Selectors()
 # Auth
 # ---------------------------------------------------------------------------
 def _is_signed_out(page: Page) -> bool:
-    return page.locator(SEL.signed_out_marker).count() > 0
+    return any(page.locator(sel).count() > 0 for sel in SEL.signed_out_markers)
 
 
 def _goto_suite(page: Page, target_url: str) -> None:
     page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
+    settle = ", ".join((*SEL.signed_out_markers, SEL.prompt_editor, SEL.generate_button))
     try:
-        page.wait_for_selector(
-            f"{SEL.signed_out_marker}, {SEL.prompt_editor}, {SEL.generate_button}",
-            timeout=15_000,
-        )
+        page.wait_for_selector(settle, timeout=15_000)
     except PWTimeout:
         pass
 
 
-def _ensure_logged_in(page: Page, target_url: str) -> None:
+def _ensure_logged_in(page: Page, target_url: str, headless: bool = False) -> None:
+    """Navigate to target_url and ensure we're authenticated.
+
+    Headless runs can't show a login window, so manual re-auth is impossible —
+    fail fast with the headed re-auth command instead of blocking for
+    LOGIN_TIMEOUT_S on a login that can never complete.
+    """
     _goto_suite(page, target_url)
     if not _is_signed_out(page):
         return
+    if headless:
+        raise RuntimeError(
+            "OpenArt session is logged out and this is a headless run — "
+            "can't log in without a browser window. Refresh auth with:\n"
+            "  python scripts/common/openart_driver.py --probe\n"
+            "log in, confirm the suite loads authenticated, then re-run.",
+        )
     print(
         f"\n⚠ Not logged in. Please log in manually. I'll wait up to {LOGIN_TIMEOUT_S}s.\n",
         file=sys.stderr,
@@ -486,7 +506,7 @@ def generate_image(
 
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
-        _ensure_logged_in(page, target_url)
+        _ensure_logged_in(page, target_url, headless=headless)
 
         _select_model_in_picker(page, model)
         _select_aspect(page, aspect)
