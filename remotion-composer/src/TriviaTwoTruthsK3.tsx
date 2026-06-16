@@ -15,7 +15,10 @@ const MONT = ldMont("normal", { weights: ["900"] }).fontFamily;
 const ANTON = ldAnton().fontFamily;
 const FREDOKA = ldFredoka("normal", { weights: ["600", "700"] }).fontFamily;
 
-// VERSION K3 — themed. Full-bleed (edge-to-edge) top title banner +
+// VERSION K3 — themed. Default (minimal) layout = one centered header lockup:
+// the TC logo + "📍 place" pill (the "2 TRUTHS, 1 LIE" title was removed), kept
+// inside the TikTok safe zone (below the top tabs, clear of the bottom caption
+// strip and right action rail). Set minimal=false to restore the legacy
 // bottom-stacking fact banners. Pick palette/font via `themeName`.
 interface Theme {
   font: string;
@@ -92,12 +95,23 @@ export interface TriviaTwoTruthsK3Props {
   title?: string;
   place?: string;
   themeName?: keyof typeof THEMES;
+  // Minimal layout (default): only the centered header lockup (title + place),
+  // no bottom fact-reveal banners. The claims are spoken-only. This keeps every
+  // graphic inside the TikTok safe zone — clear of the top tabs, the bottom
+  // caption strip, and the right action rail (the v1 full-bleed bars were
+  // getting clipped by all three). Set false to restore the old K3 fact bars.
+  minimal?: boolean;
 }
 
 const BAR_H = 120;
 const GAP = 16;
 const PAD_BOTTOM = 50;
 const BLEED = 10; // push past screen edges so side borders never show
+
+// TikTok safe zone (1080×1920). The header lockup lives below SAFE_TOP so the
+// "For You / Following" tabs never cover it; auto-width + centered keeps it out
+// of the right action rail.
+const SAFE_TOP = 250;
 
 const barShell = (t: Theme): React.CSSProperties => ({
   border: "5px solid transparent",
@@ -111,84 +125,24 @@ const shell = (t: Theme): React.CSSProperties => ({
   boxShadow: `${t.glow}, 0 12px 28px rgba(0,0,0,0.5)`,
 });
 
-const TopTitle: React.FC<{ title: string; logoSrc: string; t: Theme }> = ({
-  title,
+// Header lockup = the TC logo + "📍 place" pill, centered in the top safe band.
+// The "2 TRUTHS, 1 LIE" title was removed — brand mark + location is the whole
+// persistent overlay now.
+const PlaceBanner: React.FC<{ place: string; logoSrc: string; t: Theme }> = ({
+  place,
   logoSrc,
   t,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const e = spring({ frame, fps, config: { damping: 14, stiffness: 180 } });
-  const y = interpolate(e, [0, 1], [-180, 0]);
-  const parts = title.split(/(\bLIE\b)/i);
-  return (
-    <div
-      style={{
-        position: "absolute",
-        top: 48,
-        left: -BLEED,
-        right: -BLEED,
-        height: 156,
-        transform: `translateY(${y}px)`,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 26,
-        ...shell(t),
-      }}
-    >
-      <span
-        style={{
-          fontFamily: t.font,
-          fontWeight: 900,
-          fontStyle: t.italic ? "italic" : "normal",
-          fontSize: 78,
-          color: t.text,
-          textTransform: "uppercase",
-          letterSpacing: t.font === ANTON ? 0 : -1,
-          textShadow: "0 3px 10px rgba(0,0,0,0.55)",
-        }}
-      >
-        {parts.map((p, i) =>
-          /^lie$/i.test(p) ? (
-            <span
-              key={i}
-              style={{
-                display: "inline-block",
-                padding: "0 0.1em",
-                lineHeight: 1.3,
-                ...(t.emphasisGrad
-                  ? {
-                      background: t.emphasisGrad,
-                      WebkitBackgroundClip: "text",
-                      WebkitTextFillColor: "transparent",
-                    }
-                  : { color: t.emphasisColor }),
-              }}
-            >
-              {p}
-            </span>
-          ) : (
-            <span key={i}>{p}</span>
-          ),
-        )}
-      </span>
-      <Img src={logoSrc} style={{ height: 90 }} />
-    </div>
-  );
-};
-
-const PlaceBanner: React.FC<{ place: string; t: Theme }> = ({ place, t }) => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const e = spring({ frame: frame - 6, fps, config: { damping: 14, stiffness: 200 } });
-  const y = interpolate(e, [0, 1], [-44, 0]);
+  const y = interpolate(e, [0, 1], [-120, 0]);
   const op = interpolate(e, [0, 1], [0, 1]);
   return (
     <div
       style={{
         position: "absolute",
-        top: 224,
+        top: SAFE_TOP,
         left: 0,
         right: 0,
         display: "flex",
@@ -199,20 +153,22 @@ const PlaceBanner: React.FC<{ place: string; t: Theme }> = ({ place, t }) => {
     >
       <div
         style={{
-          padding: "12px 38px",
+          padding: "14px 34px",
           borderRadius: 44,
-          display: "flex",
+          display: "inline-flex",
           alignItems: "center",
-          gap: 12,
+          gap: 22,
+          maxWidth: 960,
           ...shell(t),
         }}
       >
+        <Img src={logoSrc} style={{ height: 72 }} />
         <span
           style={{
             fontFamily: t.font,
             fontWeight: 900,
             fontStyle: t.italic ? "italic" : "normal",
-            fontSize: 44,
+            fontSize: 48,
             color: t.text,
             textTransform: "uppercase",
             letterSpacing: t.font === ANTON ? 0 : -0.5,
@@ -315,9 +271,9 @@ export const TriviaTwoTruthsK3: React.FC<TriviaTwoTruthsK3Props> = ({
   videoSrc,
   logoSrc,
   claims,
-  title = "2 TRUTHS, 1 LIE",
   place = "The Bahamas",
   themeName = "neon",
+  minimal = true,
 }) => {
   const { fps } = useVideoConfig();
   const t = THEMES[themeName] ?? THEMES.neon;
@@ -331,11 +287,11 @@ export const TriviaTwoTruthsK3: React.FC<TriviaTwoTruthsK3Props> = ({
           pointerEvents: "none",
         }}
       />
-      <TopTitle title={title} logoSrc={logoSrc} t={t} />
-      <PlaceBanner place={place} t={t} />
-      {claims.map((c, i) => (
-        <FactBar key={i} n={i + 1} label={c.label} reveals={reveals} index={i} t={t} />
-      ))}
+      <PlaceBanner place={place} logoSrc={logoSrc} t={t} />
+      {!minimal &&
+        claims.map((c, i) => (
+          <FactBar key={i} n={i + 1} label={c.label} reveals={reveals} index={i} t={t} />
+        ))}
     </AbsoluteFill>
   );
 };

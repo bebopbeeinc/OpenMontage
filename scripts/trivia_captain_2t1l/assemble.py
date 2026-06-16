@@ -136,8 +136,18 @@ def main() -> int:
     labels = [r.get("label_1") or "Claim 1", r.get("label_2") or "Claim 2",
               r.get("label_3") or "Claim 3"]
 
-    print("→ transcribing + aligning each claim to its banner reveal")
-    reveals = reveal_times(bg, claims)
+    # Minimal layout (default) shows only the header lockup — no per-claim
+    # reveal banners — so the Whisper word-alignment is unnecessary. Skip it and
+    # fall back to even spacing (kept in props only so the legacy K3 fact bars
+    # still work if rendered with minimal=false). Set TC2T1L_REVEAL_ALIGN=1 to
+    # force the alignment pass.
+    import os
+    if os.environ.get("TC2T1L_REVEAL_ALIGN") == "1":
+        print("→ transcribing + aligning each claim to its banner reveal")
+        reveals = reveal_times(bg, claims)
+    else:
+        reveals = [2.0, 5.0, 8.0]
+        print("→ minimal layout: skipping Whisper reveal-alignment (even spacing)")
     print(f"  reveal times: {reveals}")
     place = r.get("place") or "Today"
     theme = r.get("theme") or "goldround"

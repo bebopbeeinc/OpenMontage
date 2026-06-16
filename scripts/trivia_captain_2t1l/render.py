@@ -1,8 +1,12 @@
 """Render the TriviaTwoTruthsK3 overlay over the Captain clip (the 'compose' stage).
 
-Stages bg.mp4 into remotion-composer/public/ and renders the kinetic full-bleed
-overlay (top title + place banner, bottom-stacking fact banners) using the
-per-row props.json (theme, place, claim labels + reveal times).
+Stages bg.mp4 into remotion-composer/public/ and renders the minimal, safe-zone
+overlay: a single centered header lockup = the TC logo + "📍 <place>" pill (the
+"2 TRUTHS, 1 LIE" title was removed), sized to hug content and parked below the
+TikTok top tabs so it never collides with the top/bottom chrome or the right
+action rail. The claims are spoken-only (no on-screen fact banners). props.json
+carries theme/place (+ title/claims, ignored unless the legacy fact-bar layout
+is re-enabled with minimal=false).
 
 Usage:
     python scripts/trivia_captain_2t1l/render.py <slug>
