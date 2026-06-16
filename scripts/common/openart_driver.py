@@ -73,9 +73,13 @@ def _model_url(model: str) -> str:
     return f"{OPENART_SUITE_BASE}/{slug}"
 
 # How long we'll wait for a generation job to finish, per model.
-# Seedance 8s clips usually land in 60-180s; HappyHorse 3s in 30-90s.
-# Be generous; we'd rather wait than miss the result.
-GENERATION_TIMEOUT_S = 600
+# Seedance 8s clips usually land in 60-180s; HappyHorse 3s in 30-90s, but a
+# 15s Seedance 2.0 clip under load has been observed taking ~744s — past the
+# old 600s ceiling, which silently timed out a clip that had actually
+# completed. Be generous; we exit early the moment the history endpoint
+# reports `completed`/`failed`, so a high ceiling costs nothing on the happy
+# path and only protects against queue backlogs.
+GENERATION_TIMEOUT_S = 1200
 
 # Polling interval while waiting for the new clip to appear.
 POLL_INTERVAL_S = 3
@@ -714,10 +718,37 @@ def _resolve_project_id(page: Page) -> str:
     raise RuntimeError("no projects found for the active workspace")
 
 
+def _resolve_project_id_from_history(page: Page, history_id: str) -> tuple[str | None, str | None]:
+    """Return (project_id, status) for a submission from its history record.
+
+    The history record (`/suite/api/history/{id}`) is the authoritative,
+    workspace-agnostic source: it carries the real `project_id` the creation
+    landed in (set at submit time) and a `status` that flips to
+    `completed`/`failed`. We use it instead of `_resolve_project_id` because
+    OpenArt can silently swap the *active* team between submit and poll, after
+    which `_resolve_project_id` (which picks the active workspace's isDefault
+    project) points at the wrong project and the just-submitted variant is
+    invisible — the exact bug that timed out completed clips.
+    """
+    import json
+    try:
+        resp = page.context.request.get(
+            f"https://openart.ai/suite/api/history/{history_id}", timeout=15_000,
+        )
+        if not resp.ok:
+            return None, None
+        h = json.loads(resp.text()).get("history") or {}
+        return h.get("project_id"), (h.get("status") or "").lower() or None
+    except Exception:
+        return None, None
+
+
 def _poll_resources(
     page: Page,
     resource_ids: list[str],
     timeout_s: int,
+    history_id: str | None = None,
+    project_id: str | None = None,
 ) -> list[tuple[str, dict]]:
     """Poll the project-scoped resources LIST endpoint until each id settles.
 
@@ -725,6 +756,18 @@ def _poll_resources(
         (resource_id, {"status": "ok", "url": <full-res CDN URL>, "metadata": {...}})
         (resource_id, {"status": "failed", "error": "<reason>"})
         (resource_id, {"status": "timeout"})
+
+    Project resolution (the part that bit us): the resources LIST endpoint is
+    project-scoped, so we must know which project the creation landed in. In
+    priority order we use:
+      1. an explicit `project_id` arg (caller already knows it), else
+      2. `history_id` → the history record's `project_id` (authoritative;
+         survives a silent active-team swap between submit and poll), else
+      3. `_resolve_project_id(page)` — the active workspace's isDefault
+         project (legacy fallback; wrong if the team swapped under us).
+    When a `history_id` is given we also read its `status`: a `failed` history
+    settles every variant as failed immediately instead of waiting out the
+    full timeout.
 
     Why the LIST endpoint and not GET `/suite/api/resources/{id}`:
       OpenArt removed (or locked) the per-id resource route — it now returns
@@ -742,46 +785,65 @@ def _poll_resources(
       exact ids the submit returned keeps that disambiguation.
     """
     import json
-    project_id = _resolve_project_id(page)
-    list_url = (
-        "https://openart.ai/suite/api/resources"
-        f"?folderIdNull=true&limit=50&projectId={project_id}"
-    )
     wanted = set(resource_ids)
     settled: dict[str, dict] = {}
     deadline = time.time() + timeout_s
     last_progress = -1
+    resolved_pid = project_id  # may stay None until history/fallback resolves it
 
     while len(settled) < len(wanted) and time.time() < deadline:
         progress = len(settled)
         if progress != last_progress:
             print(f"    resolved {progress}/{len(resource_ids)}", file=sys.stderr)
             last_progress = progress
-        try:
-            resp = page.context.request.get(list_url, timeout=15_000)
-            if resp.ok:
-                rows = json.loads(resp.text()).get("data") or []
-                by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
-                for rid in list(wanted - set(settled)):
-                    row = by_id.get(rid)
-                    if row is None:
-                        continue  # not yet on the newest page — keep polling
-                    status = (row.get("status") or "").lower()
-                    url = row.get("url")
-                    if url and status not in {"failed", "error"}:
-                        settled[rid] = {
-                            "status": "ok",
-                            "url": url,
-                            "metadata": row.get("metadata") or {},
-                        }
-                    elif status in {"failed", "error"} or row.get("error"):
-                        settled[rid] = {
-                            "status": "failed",
-                            "error": row.get("error") or status or "unknown",
-                        }
-        except Exception:
-            # Transient — try again next round
-            pass
+
+        # Consult the history record for the authoritative project id + status.
+        if history_id:
+            pid, hstatus = _resolve_project_id_from_history(page, history_id)
+            if pid:
+                resolved_pid = pid
+            if hstatus == "failed":
+                for rid in wanted - set(settled):
+                    settled[rid] = {"status": "failed", "error": "history status=failed"}
+                break
+
+        # Legacy fallback: active workspace's default project.
+        if not resolved_pid:
+            try:
+                resolved_pid = _resolve_project_id(page)
+            except Exception:
+                resolved_pid = None
+
+        if resolved_pid:
+            list_url = (
+                "https://openart.ai/suite/api/resources"
+                f"?folderIdNull=true&limit=50&projectId={resolved_pid}"
+            )
+            try:
+                resp = page.context.request.get(list_url, timeout=15_000)
+                if resp.ok:
+                    rows = json.loads(resp.text()).get("data") or []
+                    by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
+                    for rid in list(wanted - set(settled)):
+                        row = by_id.get(rid)
+                        if row is None:
+                            continue  # not yet on the newest page — keep polling
+                        status = (row.get("status") or "").lower()
+                        url = row.get("url")
+                        if url and status not in {"failed", "error"}:
+                            settled[rid] = {
+                                "status": "ok",
+                                "url": url,
+                                "metadata": row.get("metadata") or {},
+                            }
+                        elif status in {"failed", "error"} or row.get("error"):
+                            settled[rid] = {
+                                "status": "failed",
+                                "error": row.get("error") or status or "unknown",
+                            }
+            except Exception:
+                # Transient — try again next round
+                pass
         if len(settled) < len(wanted):
             time.sleep(POLL_INTERVAL_S)
 
@@ -1012,7 +1074,10 @@ def generate_clip(
         )
         print(f"  → polling /api/resources for {n} variant(s) (up to {GENERATION_TIMEOUT_S * n}s)…", file=sys.stderr)
 
-        resolved = _poll_resources(page, resource_ids, GENERATION_TIMEOUT_S * max(1, n))
+        resolved = _poll_resources(
+            page, resource_ids, GENERATION_TIMEOUT_S * max(1, n),
+            history_id=history_id,
+        )
 
         saved: list[Path] = []
         for (rid, info), dest in zip(resolved, output_paths):
