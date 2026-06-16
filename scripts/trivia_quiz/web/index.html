@@ -312,7 +312,9 @@ function actionsCell(r) {
   // Publish: enabled only when status is Ready to publish AND a local render
   // exists (mirrors trivia-reaction). Build flips the row to Ready to publish
   // on success, so the button appears right after a build.
-  const canPublish = status === 'Ready to publish' && f.render_exists;
+  // !building guards against re-publishing a render that's being overwritten
+  // by an in-flight Re-build & Render.
+  const canPublish = status === 'Ready to publish' && f.render_exists && !building;
   const pubBtn = canPublish
     ? `<button class="warn small" ${publishing?'disabled':''}
          onclick="runPublish('${escapeHtml(slug)}')">
@@ -323,7 +325,7 @@ function actionsCell(r) {
   // Mark as Published: status-only flip 'Ready to publish' -> 'Published'.
   // Shown only once the row is Ready to publish AND a Drive link exists (i.e.
   // Publish has run). The human's signal that the post is actually live.
-  const canMark = status === 'Ready to publish' && (r.drive_link||'').trim();
+  const canMark = status === 'Ready to publish' && (r.drive_link||'').trim() && !building;
   const markBtn = canMark
     ? `<button class="primary small" ${marking?'disabled':''}
          onclick="runMarkPublished('${escapeHtml(slug)}')">

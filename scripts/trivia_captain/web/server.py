@@ -54,6 +54,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
 from scripts.trivia_captain import queue_row  # noqa: E402
 from scripts.trivia_captain.paths import project_dir  # noqa: E402
+from scripts.common.download_ready_to_publish import DriveReconciler  # noqa: E402
 
 LIBRARY_DIR = REPO / "scripts" / "trivia_captain" / "library" / "clips"
 REMOTION_PUBLIC = REPO / "remotion-composer" / "public"
@@ -243,27 +244,25 @@ async def _run_select(job: Job) -> None:
 
 async def _run_generate(job: Job) -> None:
     """Full clip-to-render chain — openart_generate → assemble → transcribe
-    → remotion render. Triggered by the 'Generate' button. On Draft rows
-    this flips status to 'Ready to review' as soon as the chain starts;
-    on success the row ends at 'Ready to publish'."""
+    → remotion render. Triggered by the 'Generate' button. The Queue status is
+    left untouched while the chain runs and is only advanced to
+    'Ready to publish' on full success: a chain that fails partway leaves the
+    row's prior status intact. In particular a re-generate of a row that was
+    already 'Ready to publish' keeps that status (and its existing render +
+    Drive link) if the new run fails — instead of being stranded at
+    'Ready to review'."""
     if not job.slug:
         raise RuntimeError("generate job missing 'slug'")
     py = sys.executable
 
-    # Lock the row to 'Ready to review' at the start — signals "user committed
-    # to spending OpenArt credits on this row; chain is in flight". This is
-    # idempotent if the row was already in Ready to review.
-    try:
-        ws = await asyncio.to_thread(queue_row.build_sheets, True)
-        existing = await asyncio.to_thread(_find_row_by_slug, ws, job.slug)
-        if existing:
-            await asyncio.to_thread(
-                queue_row.update_cells, ws, existing,
-                status=queue_row.STATUS_READY_TO_REVIEW,
-            )
-            _emit(job, f"  Queue!C{existing} -> {queue_row.STATUS_READY_TO_REVIEW}")
-    except Exception as e:  # noqa: BLE001
-        _emit(job, f"  ⚠ Queue status lock skipped: {e}")
+    # Intentionally do NOT write the status at chain start. Downgrading to
+    # 'Ready to review' here used to strand a row that was already
+    # 'Ready to publish' whenever the chain then failed (e.g. the OpenArt step
+    # timed out) — destroying an accurate status for a row whose prior render
+    # is still good. In-flight is signalled by the job badge in the UI, and
+    # Publish/Mark are disabled there while a generate is running, so the
+    # start-write is both unnecessary and harmful. Status only moves forward,
+    # on success (the 'Ready to publish' flip below).
 
     # Phase 0: fact image + tablet reference. Idempotent — reuses the existing
     # reference so avatar re-rolls don't burn an image credit; force_image
@@ -433,12 +432,27 @@ async def api_health():
     }
 
 
+# Page-access reconciler: render -> renders/<slug>.mp4, clip -> library/clips.
+_reconciler = DriveReconciler(
+    lambda slug: (project_dir(slug) / "renders" / f"{slug}.mp4",
+                  LIBRARY_DIR / f"{slug}.mp4"),
+    log=lambda m: print(m, flush=True),
+)
+
+
 @app.get("/api/rows")
 async def api_rows():
     try:
-        return await asyncio.to_thread(read_rows)
+        rows = await asyncio.to_thread(read_rows)
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+    # Self-heal rows published on another machine (no local render) — spawns
+    # non-blocking background pulls from Drive; this response is not delayed.
+    try:
+        _reconciler.kick(rows)
+    except Exception:
+        pass
+    return rows
 
 
 def _find_row_by_slug(sheets, slug: str) -> int | None:

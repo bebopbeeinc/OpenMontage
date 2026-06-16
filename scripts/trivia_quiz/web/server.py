@@ -51,6 +51,7 @@ PKG_DIR = Path(__file__).resolve().parent.parent   # scripts/trivia_quiz/
 sys.path.insert(0, str(REPO))
 from scripts.trivia_quiz import sheets as quiz_sheets  # noqa: E402
 from scripts.trivia_quiz.publish import DRIVE_FOLDER_ID  # noqa: E402
+from scripts.common.download_ready_to_publish import DriveReconciler  # noqa: E402
 
 SA_PATH = quiz_sheets.SA_PATH
 PROJECTS_ROOT = REPO / "projects" / "trivia-quiz"
@@ -398,12 +399,25 @@ async def api_health():
     }
 
 
+# Page-access reconciler: pull final_quiz.mp4 from Drive when missing locally
+# (row published on another machine). Quiz has no separate raw clip.
+_reconciler = DriveReconciler(
+    lambda slug: (PROJECTS_ROOT / slug / "renders" / "final_quiz.mp4", None),
+    log=lambda m: print(m, flush=True),
+)
+
+
 @app.get("/api/rows")
 async def api_rows():
     try:
-        return await asyncio.to_thread(read_rows)
+        rows = await asyncio.to_thread(read_rows)
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+    try:
+        _reconciler.kick(rows)
+    except Exception:
+        pass
+    return rows
 
 
 @app.post("/api/run")

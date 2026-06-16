@@ -48,6 +48,10 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(PKG_DIR))
 from scripts.trivia_reaction import queue_row  # noqa: E402
 from scripts.trivia_reaction.paths import project_dir  # noqa: E402
+from scripts.common.download_ready_to_publish import (  # noqa: E402
+    build_drive, _download as _drive_download, _file_id_from_link,
+    DriveReconciler,
+)
 
 LIBRARY_DIR = REPO / "scripts" / "trivia_reaction" / "library" / "clips"
 REMOTION_PUBLIC = REPO / "remotion-composer" / "public"
@@ -56,7 +60,7 @@ QUEUE_SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{queue_row.QUEUE_SHEET}/edit"
 )
 
-JobKind = Literal["select", "generate", "publish", "mark_published"]
+JobKind = Literal["select", "generate", "publish", "mark_published", "pull"]
 JobStatus = Literal["queued", "running", "success", "error"]
 
 
@@ -212,27 +216,25 @@ async def _run_select(job: Job) -> None:
 
 async def _run_generate(job: Job) -> None:
     """Full clip-to-render chain — openart_generate → assemble → transcribe
-    → remotion render. Triggered by the 'Generate' button. On Draft rows
-    this flips status to 'Ready to review' as soon as the chain starts;
-    on success the row ends at 'Ready to publish'."""
+    → remotion render. Triggered by the 'Generate' button. The Queue status is
+    left untouched while the chain runs and is only advanced to
+    'Ready to publish' on full success: a chain that fails partway leaves the
+    row's prior status intact. In particular a re-generate of a row that was
+    already 'Ready to publish' keeps that status (and its existing render +
+    Drive link) if the new run fails — instead of being stranded at
+    'Ready to review'."""
     if not job.slug:
         raise RuntimeError("generate job missing 'slug'")
     py = sys.executable
 
-    # Lock the row to 'Ready to review' at the start — signals "user committed
-    # to spending OpenArt credits on this row; chain is in flight". This is
-    # idempotent if the row was already in Ready to review.
-    try:
-        ws = await asyncio.to_thread(queue_row.build_sheets, True)
-        existing = await asyncio.to_thread(_find_row_by_slug, ws, job.slug)
-        if existing:
-            await asyncio.to_thread(
-                queue_row.update_cells, ws, existing,
-                status=queue_row.STATUS_READY_TO_REVIEW,
-            )
-            _emit(job, f"  Queue!C{existing} -> {queue_row.STATUS_READY_TO_REVIEW}")
-    except Exception as e:  # noqa: BLE001
-        _emit(job, f"  ⚠ Queue status lock skipped: {e}")
+    # Intentionally do NOT write the status at chain start. Downgrading to
+    # 'Ready to review' here used to strand a row that was already
+    # 'Ready to publish' whenever the chain then failed (e.g. the OpenArt step
+    # timed out) — destroying an accurate status for a row whose prior render
+    # is still good. In-flight is signalled by the job badge in the UI, and
+    # Publish/Mark are disabled there while a generate is running, so the
+    # start-write is both unnecessary and harmful. Status only moves forward,
+    # on success (the 'Ready to publish' flip below).
 
     _emit(job, "=== Phase 1/5: openart_generate (Seedance clip) ===")
     variants = int(job.extra.get("variants", 1))
@@ -335,6 +337,44 @@ async def _run_mark_published(job: Job) -> None:
     _emit(job, f"Queue!C{existing} -> {queue_row.STATUS_PUBLISHED}")
 
 
+async def _run_pull(job: Job) -> None:
+    """Reconstruct local files from Drive for a row that was published on
+    another machine. Pulls the captioned render -> renders/<slug>.mp4 and the
+    raw Seedance clip -> library/clips/<slug>.mp4 so the UI's render_exists /
+    clip_exists flip true — clearing the inconsistent 'Ready to publish' +
+    'Generate' + Drive-link state (no local render, so Review is hidden and the
+    button can't say Re-generate). Leaves the Queue status untouched (already
+    Ready to publish) and spends no OpenArt credit."""
+    if not job.slug:
+        raise RuntimeError("pull job missing 'slug'")
+    sheets = await asyncio.to_thread(queue_row.build_sheets, False)
+    row = next(
+        (r for r in queue_row.read_queue_bulk(sheets)
+         if (r.get("slug") or "").strip() == job.slug),
+        None,
+    )
+    if not row:
+        raise RuntimeError(f"no Queue row for slug={job.slug!r}")
+    render_fid = _file_id_from_link((row.get("drive_link") or "").strip())
+    clip_fid = _file_id_from_link((row.get("drive_clip_link") or "").strip())
+    if not render_fid and not clip_fid:
+        raise RuntimeError(f"{job.slug}: no usable Drive links on the row to pull from")
+
+    drive = await asyncio.to_thread(build_drive)
+    targets = [
+        ("render", render_fid, project_dir(job.slug) / "renders" / f"{job.slug}.mp4"),
+        ("clip", clip_fid, LIBRARY_DIR / f"{job.slug}.mp4"),
+    ]
+    for label, fid, dest in targets:
+        if not fid:
+            _emit(job, f"  {label}: no Drive link — skipping")
+            continue
+        _emit(job, f"  pulling {label} <- Drive -> {dest.relative_to(REPO)}")
+        action = await asyncio.to_thread(_drive_download, drive, fid, dest)
+        _emit(job, f"    {label} {action} ({dest.stat().st_size // 1024} KB)")
+    _emit(job, "✓ pulled from Drive — Review / Re-generate / Re-publish now available")
+
+
 async def _worker(job: Job) -> None:
     async with worker_lock:
         job.status = "running"
@@ -348,6 +388,8 @@ async def _worker(job: Job) -> None:
                 await _run_publish(job)
             elif job.kind == "mark_published":
                 await _run_mark_published(job)
+            elif job.kind == "pull":
+                await _run_pull(job)
             else:
                 raise RuntimeError(f"unknown job kind: {job.kind}")
             job.status = "success"
@@ -390,12 +432,27 @@ async def api_health():
     }
 
 
+# Page-access reconciler: render -> renders/<slug>.mp4, clip -> library/clips.
+_reconciler = DriveReconciler(
+    lambda slug: (project_dir(slug) / "renders" / f"{slug}.mp4",
+                  LIBRARY_DIR / f"{slug}.mp4"),
+    log=lambda m: print(m, flush=True),
+)
+
+
 @app.get("/api/rows")
 async def api_rows():
     try:
-        return await asyncio.to_thread(read_rows)
+        rows = await asyncio.to_thread(read_rows)
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+    # Self-heal rows published on another machine (no local render) — spawns
+    # non-blocking background pulls from Drive; this response is not delayed.
+    try:
+        _reconciler.kick(rows)
+    except Exception:
+        pass
+    return rows
 
 
 def _find_row_by_slug(sheets, slug: str) -> int | None:
@@ -435,7 +492,7 @@ async def api_queue_status(payload: dict):
 @app.post("/api/run")
 async def api_run(payload: dict):
     kind = payload.get("kind", "")
-    if kind not in ("select", "generate", "publish", "mark_published"):
+    if kind not in ("select", "generate", "publish", "mark_published", "pull"):
         raise HTTPException(400, f"bad kind: {kind!r}")
     slug = (payload.get("slug") or "").strip()
     extra: dict = {}

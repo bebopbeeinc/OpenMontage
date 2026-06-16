@@ -370,7 +370,10 @@ function actionsCell(r) {
   const canGenerate = slug && (
     status === 'Draft' || status === 'Ready to review' || status === 'Ready to publish'
   );
-  const isRegen = status === 'Ready to publish';
+  // "Re-generate" whenever a take already exists (clip or render) — keying on
+  // the status string alone mislabeled a row that already had a clip/render as
+  // "Generate" (and skipped the overwrite confirm). See trivia-reaction.
+  const isRegen = !!(f.clip_exists || f.render_exists);
   const genLabel = isRegen ? 'Re-generate' : 'Generate';
   const genClass = isRegen ? 'small' : 'captain small';
   const genBtn = canGenerate
@@ -391,7 +394,10 @@ function actionsCell(r) {
     : '';
 
   // Publish: enabled when status is Ready to publish AND a local render exists.
-  const canPublish = slug && status === 'Ready to publish' && f.render_exists;
+  // Also guard on !generating: now that a re-generate no longer downgrades the
+  // status, this is what hides Publish mid-regen so you can't re-publish a
+  // half-overwritten render.
+  const canPublish = slug && status === 'Ready to publish' && f.render_exists && !generating;
   const pubBtn = canPublish
     ? `<button class="warn small" ${publishing?'disabled':''}
          onclick="runPublish('${escapeHtml(slug)}')">
@@ -401,7 +407,7 @@ function actionsCell(r) {
 
   // Mark as Published: enabled only when a Drive link exists (i.e. publish has run).
   // Status-only flip; the human's signal that the IG post is live.
-  const canMark = slug && status === 'Ready to publish' && (r.drive_link||'').trim();
+  const canMark = slug && status === 'Ready to publish' && (r.drive_link||'').trim() && !generating;
   const markBtn = canMark
     ? `<button class="small" ${marking?'disabled':''}
          onclick="runMarkPublished('${escapeHtml(slug)}')">

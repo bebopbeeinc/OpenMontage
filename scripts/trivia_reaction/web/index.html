@@ -337,7 +337,14 @@ function actionsCell(r) {
   const canGenerate = slug && (
     status === 'Draft' || status === 'Ready to review' || status === 'Ready to publish'
   );
-  const isRegen = status === 'Ready to publish';
+  // "Re-generate" whenever a take already exists (clip or render): clicking
+  // Generate then overwrites it and spends a fresh OpenArt credit, so the
+  // label must agree with the Review button (which also keys on an existing
+  // render) and the confirm() guard in runGenerate must fire. Keying on the
+  // status string alone (=== 'Ready to publish') mislabeled a 'Ready to
+  // review' row that already had a clip/render as "Generate" and skipped the
+  // overwrite warning — the "Generate + Review together" inconsistency.
+  const isRegen = !!(f.clip_exists || f.render_exists);
   const genLabel = isRegen ? 'Re-generate' : 'Generate';
   const genClass = isRegen ? 'small' : 'orange small';
   const genBtn = canGenerate
@@ -347,8 +354,13 @@ function actionsCell(r) {
        </button>`
     : '';
 
-  // Publish: enabled when status is Ready to publish AND a local render exists.
-  const canPublish = slug && status === 'Ready to publish' && f.render_exists;
+  // Publish: enabled when status is Ready to publish AND a local render exists
+  // AND no generate is in flight. The last guard matters now that a re-generate
+  // no longer downgrades the status — without it you could re-publish a render
+  // that's being half-overwritten mid-regen. (Previously the status drop to
+  // 'Ready to review' hid Publish during a regen; that's gone, so guard on
+  // `generating` directly.)
+  const canPublish = slug && status === 'Ready to publish' && f.render_exists && !generating;
   const pubBtn = canPublish
     ? `<button class="warn small" ${publishing?'disabled':''}
          onclick="runPublish('${escapeHtml(slug)}')">
@@ -358,7 +370,7 @@ function actionsCell(r) {
 
   // Mark as Published: enabled only when a Drive link exists (i.e. publish has run).
   // Status-only flip; the human's signal that the IG post is live.
-  const canMark = slug && status === 'Ready to publish' && (r.drive_link||'').trim();
+  const canMark = slug && status === 'Ready to publish' && (r.drive_link||'').trim() && !generating;
   const markBtn = canMark
     ? `<button class="small" ${marking?'disabled':''}
          onclick="runMarkPublished('${escapeHtml(slug)}')">
@@ -366,7 +378,22 @@ function actionsCell(r) {
        </button>`
     : '';
 
-  return `<div class="btn-row">${reviewBtn}${genBtn}${pubBtn}${markBtn}</div>`;
+  // Pull from Drive: the row was published on another machine — it carries a
+  // Drive link + 'Ready to publish' status but no local render, so it shows
+  // 'Generate' (no local artifact) with no Review button. Download the
+  // published render + raw clip back into the local project paths to restore a
+  // consistent state. Spends no OpenArt credit.
+  const needsPull = slug && status === 'Ready to publish'
+                    && (r.drive_link||'').trim() && !f.render_exists;
+  const pullBtn = needsPull
+    ? `<button class="small" ${generating?'disabled':''}
+         title="Local render missing — download the published render + clip from Drive"
+         onclick="runPull('${escapeHtml(slug)}')">
+         ${stateBadge(slug && inFlight(slug, 'pull'))} ⤓ Pull from Drive
+       </button>`
+    : '';
+
+  return `<div class="btn-row">${pullBtn}${reviewBtn}${genBtn}${pubBtn}${markBtn}</div>`;
 }
 
 function filesCell(r) {
@@ -561,6 +588,23 @@ async function runGenerate(slug, isRegen=false) {
     refreshActive();
   } catch (e) {
     toast(`generate failed: ${e.message}`, 'err');
+  }
+}
+
+async function runPull(slug) {
+  if (!slug) return;
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'pull', slug}),
+    });
+    toast(`pull from Drive queued (${slug})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`pull failed: ${e.message}`, 'err');
   }
 }
 

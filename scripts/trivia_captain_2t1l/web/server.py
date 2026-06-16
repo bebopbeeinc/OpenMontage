@@ -37,6 +37,7 @@ SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
 sys.path.insert(0, str(REPO))
 from scripts.trivia_captain_2t1l import queue_row  # noqa: E402
 from scripts.trivia_captain_2t1l.paths import project_dir  # noqa: E402
+from scripts.common.download_ready_to_publish import DriveReconciler  # noqa: E402
 
 QUEUE_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{queue_row.QUEUE_SHEET}/edit"
 
@@ -260,12 +261,27 @@ async def api_health():
             "sa_present": SA_PATH.exists(), "python": sys.executable}
 
 
+# Page-access reconciler: render -> renders/<slug>.mp4, clip -> assets/video.
+_reconciler = DriveReconciler(
+    lambda slug: (project_dir(slug) / "renders" / f"{slug}.mp4",
+                  project_dir(slug) / "assets" / "video" / "clip.mp4"),
+    log=lambda m: print(m, flush=True),
+)
+
+
 @app.get("/api/rows")
 async def api_rows():
     try:
-        return await asyncio.to_thread(read_rows)
+        rows = await asyncio.to_thread(read_rows)
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+    # Self-heal rows published on another machine (no local render) — spawns
+    # non-blocking background pulls from Drive; this response is not delayed.
+    try:
+        _reconciler.kick(rows)
+    except Exception:
+        pass
+    return rows
 
 
 @app.post("/api/run")

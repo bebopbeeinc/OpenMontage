@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from post_row import (  # noqa: E402
     POST_SHEET, ROW_KEYS, SA_PATH, build_sheets, read_posts_bulk,
 )
+from scripts.common.download_ready_to_publish import DriveReconciler  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[3]
 WEB_DIR = Path(__file__).resolve().parent
@@ -601,14 +602,31 @@ async def api_health():
     }
 
 
+# Page-access reconciler: pull final_with_bg.mp4 from Drive when missing
+# locally. trivia-short names its fields final_status / final_video_link and
+# exposes render_exists at the top level (not under "files").
+_reconciler = DriveReconciler(
+    lambda slug: (REPO / "projects" / slug / "renders" / "final_with_bg.mp4", None),
+    status_of=lambda r: (r.get("final_status") or "").strip(),
+    drive_link_of=lambda r: (r.get("final_video_link") or "").strip(),
+    render_exists_of=lambda r: bool(r.get("render_exists")),
+    log=lambda m: print(m, flush=True),
+)
+
+
 @app.get("/api/rows")
 async def api_rows():
     try:
-        return read_rows()
+        rows = read_rows()
     except FileNotFoundError as e:
         raise HTTPException(503, str(e))
     except Exception as e:
         raise HTTPException(500, f"sheet read failed: {e}")
+    try:
+        _reconciler.kick(rows)
+    except Exception:
+        pass
+    return rows
 
 
 @app.post("/api/run")

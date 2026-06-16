@@ -266,16 +266,19 @@ function actionsCell(r) {
   const reviewBtn = f.render_exists
     ? `<button class="small" onclick="openReview('${escapeHtml(slug)}', ${f.render_mtime||0})">▷ Review</button>` : '';
   const canGenerate = slug && (status==='Draft'||status==='Ready to review'||status==='Ready to publish');
-  const isRegen = status === 'Ready to publish';
+  // "Re-generate" whenever a take already exists (clip or render), not just at
+  // status 'Ready to publish' — otherwise a row with a clip/render shows
+  // "Generate" alongside the Review button. See trivia-reaction.
+  const isRegen = !!(f.clip_exists || f.render_exists);
   const genBtn = canGenerate
     ? `<button class="${isRegen?'small':'captain small'}" ${generating?'disabled':''}
          onclick="runGenerate('${escapeHtml(slug)}', ${isRegen?'true':'false'})">
          ${stateBadge(generating)} ${isRegen?'Re-generate':'Generate'}</button>` : '';
-  const canPublish = slug && status==='Ready to publish' && f.render_exists;
+  const canPublish = slug && status==='Ready to publish' && f.render_exists && !generating;
   const pubBtn = canPublish
     ? `<button class="warn small" ${publishing?'disabled':''} onclick="runPublish('${escapeHtml(slug)}')">
          ${stateBadge(publishing)} ${(r.drive_link||'').trim()?'Re-publish':'Publish'}</button>` : '';
-  const canMark = slug && status==='Ready to publish' && (r.drive_link||'').trim();
+  const canMark = slug && status==='Ready to publish' && (r.drive_link||'').trim() && !generating;
   const markBtn = canMark
     ? `<button class="small" ${marking?'disabled':''} onclick="runMarkPublished('${escapeHtml(slug)}')">
          ${stateBadge(marking)} ✓ Mark as Published</button>` : '';
