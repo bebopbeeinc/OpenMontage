@@ -16,6 +16,7 @@ from pathlib import Path
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 REPO = Path(__file__).resolve().parents[2]
@@ -48,15 +49,26 @@ def _file_id(link: str) -> str | None:
 
 
 def _upload_or_replace(drive, local: Path, name: str, existing_link: str) -> tuple[str, str]:
-    media = MediaFileUpload(str(local), mimetype="video/mp4", resumable=False)
     fid = _file_id(existing_link)
     if fid:
-        f = drive.files().update(fileId=fid, media_body=media,
-                                 fields="id,webViewLink").execute()
-        return f["webViewLink"], "replaced"
+        try:
+            f = drive.files().update(
+                fileId=fid,
+                media_body=MediaFileUpload(str(local), mimetype="video/mp4", resumable=False),
+                fields="id,webViewLink", supportsAllDrives=True,
+            ).execute()
+            return f["webViewLink"], "replaced"
+        except HttpError as e:
+            # The linked file is gone (deleted, or it was published from another
+            # machine into a Drive this SA can't reach). Don't crash the publish
+            # — upload a fresh copy and relink the row to it below.
+            if getattr(e, "resp", None) is None or e.resp.status != 404:
+                raise
+            print(f"  ⚠ existing Drive file {fid} not found (404) — uploading fresh copy")
     f = drive.files().create(
         body={"name": name, "parents": [DRIVE_FOLDER_ID]},
-        media_body=media, fields="id,webViewLink", supportsAllDrives=True,
+        media_body=MediaFileUpload(str(local), mimetype="video/mp4", resumable=False),
+        fields="id,webViewLink", supportsAllDrives=True,
     ).execute()
     return f["webViewLink"], "created"
 
