@@ -365,7 +365,7 @@ interface CaptionPage {
 // Used to split the resolution caption from the CTA when there's no audio
 // pause between them; the caller (component below) computes this mark by
 // matching the canonical CTA text against the transcript.
-function buildPages(
+export function buildPages(
   words: WordCaption[],
   forceBreakBeforeMs?: number | null,
 ): CaptionPage[] {
@@ -450,7 +450,7 @@ function findCtaStartMs(
   return null;
 }
 
-const TikTokPage: React.FC<{
+export const TikTokPage: React.FC<{
   page: CaptionPage;
   highlightColor: string;
   baseColor: string;

@@ -13,9 +13,12 @@ publish.py refuses to run while the placeholder is unset.
 ```
 python scripts/trivia_captain_2t1l/publish.py <slug>
 ```
-- Uploads `renders/<slug>.mp4` (and the raw `clip.mp4` as a secondary deliverable)
-  to the Drive folder; replaces in place if a link already exists (stable links).
-- Writes Queue!P (Drive Link), Queue!Q (Drive Clip), and status → **Ready to publish**.
+- Uploads two deliverables to the Drive folder (replaces in place if a link
+  already exists, for stable links):
+  - `renders/<slug>.mp4` → Queue!P — the final WITH captions (the posted video).
+  - `renders/<slug>_clip.mp4` → Queue!Q — the "clip": same K3 treatment with
+    captions OFF (NOT the raw Seedance video). Produced by render.py alongside the final.
+- Writes status → **Ready to publish**.
 
 ## Hard rules
 - Wait for an explicit approval phrase ("publish", "ship it", "yes go") in the

@@ -119,6 +119,36 @@ def merge_split_tokens(words: list[dict]) -> int:
     return merges
 
 
+# Whisper splits grouped numbers at the separator: "3,000" -> "3" + ",000",
+# "1.5" -> "1" + ".5". Without merging, each piece becomes its own caption
+# word and the number flashes across two frames ("3" then ",000").
+_NUM_TAIL = re.compile(r"\d$")          # current token ends in a digit
+_NUM_SEP_HEAD = re.compile(r"^[.,]\d")  # next token is separator + digits
+
+
+def merge_number_tokens(words: list[dict]) -> int:
+    """In-place: merge a numeric token with a following separator+digits token
+    ("3" + ",000" -> "3,000"). Chains for grouped numbers ("1" + ",000" +
+    ",000" -> "1,000,000") and preserves trailing punctuation on the last
+    piece ("3" + ",000." -> "3,000."). Returns merge count. Mutates `words`."""
+    merges = 0
+    i = 0
+    while i < len(words) - 1:
+        cur = words[i]["word"]
+        nxt = words[i + 1]["word"]
+        if _NUM_TAIL.search(cur) and _NUM_SEP_HEAD.match(nxt):
+            words[i] = {
+                "word": cur + nxt,
+                "startMs": words[i]["startMs"],
+                "endMs": words[i + 1]["endMs"],
+            }
+            del words[i + 1]
+            merges += 1
+            continue  # don't advance — allow chaining the next group
+        i += 1
+    return merges
+
+
 def _project_brand_tokens(project: Path) -> tuple[str, ...]:
     """Read per-project brand additions from brand_tokens_extra.json (written
     by apply_feedback_patches.py when the reviewer flagged a missing brand)."""
@@ -199,6 +229,7 @@ def main(slug: str, root: Path = REPO / "projects") -> None:
     ]
 
     merges = merge_split_tokens(words)
+    num_merges = merge_number_tokens(words)
     extra = _project_brand_tokens(project)
     if extra:
         print(f"  per-project brand tokens: {list(extra)}")
@@ -215,6 +246,8 @@ def main(slug: str, root: Path = REPO / "projects") -> None:
     notes = []
     if merges:
         notes.append(f"{merges} split-token merge{'s' if merges != 1 else ''}")
+    if num_merges:
+        notes.append(f"{num_merges} number merge{'s' if num_merges != 1 else ''}")
     if fixes:
         notes.append(f"{fixes} case fix{'es' if fixes != 1 else ''}")
     note_str = f" ({', '.join(notes)})" if notes else ""

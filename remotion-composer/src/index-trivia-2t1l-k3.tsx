@@ -19,6 +19,10 @@ const Root: React.FC = () => (
         { label: "600ft blue hole", revealAtSec: 5.0 },
         { label: "Blue sand", revealAtSec: 7.7 },
       ],
+      words: [],
+      highlightColor: "#D63B2F",
+      baseColor: "#FFFFFF",
+      fontSize: 78,
     }}
   />
 );

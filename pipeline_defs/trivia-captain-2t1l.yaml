@@ -86,7 +86,7 @@ external_state:
     id: "1930CVitXd4d6BsZ39EleWyxmtsgaXVGY"   # @dailytrivia.tc deliverables (shared with the SA; reused from trivia-short/quiz)
     role: deliverable_drop
     auth: service_account
-    notes: publish.py uploads the final render + raw clip here. Override with $TRIVIA_2T1L_DRIVE_FOLDER.
+    notes: publish.py uploads the final captioned render + the no-caption clip here. Override with $TRIVIA_2T1L_DRIVE_FOLDER.
 
 stages:
   - name: idea
@@ -176,7 +176,7 @@ stages:
     human_approval_default: true     # per user memory: never auto-publish
     review_focus:
       - "Human explicitly approved publication in the current turn"
-      - "Render + raw clip uploaded to the Drive folder; links written to Queue P/Q"
+      - "Final captioned render → Queue P; no-caption clip (same treatment, captions off, NOT raw) → Queue Q"
       - "Status flipped to Ready to publish (human flips to Published after posting)"
     success_criteria:
       - publish_log.drive_link is a non-empty https URL

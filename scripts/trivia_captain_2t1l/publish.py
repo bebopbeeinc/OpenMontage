@@ -1,4 +1,7 @@
-"""Upload the final render + raw clip to Drive and write links back to the Queue.
+"""Upload the final captioned render + the no-caption clip to Drive, write links to Queue.
+
+Both files share the K3 treatment; the clip (renders/<slug>_clip.mp4) is the same
+render with captions off — NOT the raw Seedance video.
 
 NEVER auto-runs — the operator triggers it after reviewing the render.
 
@@ -78,7 +81,7 @@ def main(slug: str) -> int:
         sys.exit("Set DRIVE_FOLDER_ID in publish.py (create a Drive folder, share it with the SA).")
     pdir = paths.project_dir(slug)
     render = pdir / "renders" / f"{slug}.mp4"
-    clip = pdir / "assets" / "video" / "clip.mp4"
+    clip = pdir / "renders" / f"{slug}_clip.mp4"
     if not render.exists():
         sys.exit(f"render not found: {render}")
 
@@ -89,12 +92,16 @@ def main(slug: str) -> int:
         sys.exit(f"slug {slug!r} not found in Queue")
     r = queue_row.read_queue_row(wsheets, row)
 
+    # P = the final captioned render. Q = the "clip": the SAME K3 treatment with
+    # captions off (renders/<slug>_clip.mp4), NOT the raw Seedance video.
     render_link, a1 = _upload_or_replace(drive, render, f"{slug}.mp4", r.get("drive_link", ""))
     updates = {"drive_link": render_link, "status": queue_row.STATUS_READY_TO_PUBLISH}
     if clip.exists():
         clip_link, a2 = _upload_or_replace(drive, clip, f"{slug}_clip.mp4", r.get("drive_clip_link", ""))
         updates["drive_clip_link"] = clip_link
-        print(f"  clip: {a2} {clip_link}")
+        print(f"  clip (no captions): {a2} {clip_link}")
+    else:
+        print(f"  ⚠ no clip render at {clip} — re-run render.py; skipping Q upload")
     queue_row.update_cells(wsheets, row, **updates)
     print(f"✓ render: {a1} {render_link}")
     print(f"✓ row {row} → Ready to publish")

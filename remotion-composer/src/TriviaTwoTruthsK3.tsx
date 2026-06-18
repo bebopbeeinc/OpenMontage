@@ -2,6 +2,7 @@ import {
   AbsoluteFill,
   Img,
   OffthreadVideo,
+  Sequence,
   interpolate,
   spring,
   useCurrentFrame,
@@ -10,6 +11,8 @@ import {
 import { loadFont as ldMont } from "@remotion/google-fonts/Montserrat";
 import { loadFont as ldAnton } from "@remotion/google-fonts/Anton";
 import { loadFont as ldFredoka } from "@remotion/google-fonts/Fredoka";
+import type { WordCaption } from "./components/CaptionOverlay";
+import { buildPages, TikTokPage } from "./TriviaWithBg";
 
 const MONT = ldMont("normal", { weights: ["900"] }).fontFamily;
 const ANTON = ldAnton().fontFamily;
@@ -101,6 +104,12 @@ export interface TriviaTwoTruthsK3Props {
   // caption strip, and the right action rail (the v1 full-bleed bars were
   // getting clipped by all three). Set false to restore the old K3 fact bars.
   minimal?: boolean;
+  // Word-level karaoke captions burned at the bottom, identical to the
+  // ellie.travelcrush (trivia-reaction) style — reuses buildPages + TikTokPage.
+  words?: WordCaption[];
+  highlightColor?: string;
+  baseColor?: string;
+  fontSize?: number;
 }
 
 const BAR_H = 120;
@@ -274,10 +283,15 @@ export const TriviaTwoTruthsK3: React.FC<TriviaTwoTruthsK3Props> = ({
   place = "The Bahamas",
   themeName = "neon",
   minimal = true,
+  words = [],
+  highlightColor = "#D63B2F", // 2t1l brand warm-red pill (styles/trivia-captain-2t1l.yaml)
+  baseColor = "#FFFFFF",
+  fontSize = 78,
 }) => {
-  const { fps } = useVideoConfig();
+  const { fps, durationInFrames } = useVideoConfig();
   const t = THEMES[themeName] ?? THEMES.neon;
   const reveals = claims.map((c) => c.revealAtSec * fps);
+  const pages = buildPages(words);
   return (
     <AbsoluteFill style={{ background: "#000" }}>
       <OffthreadVideo src={videoSrc} muted={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -292,6 +306,19 @@ export const TriviaTwoTruthsK3: React.FC<TriviaTwoTruthsK3Props> = ({
         claims.map((c, i) => (
           <FactBar key={i} n={i + 1} label={c.label} reveals={reveals} index={i} t={t} />
         ))}
+      {/* Word-level karaoke captions — same renderer as ellie.travelcrush. */}
+      {pages.map((page, i) => {
+        const fromFrame = Math.max(0, Math.round((page.startMs / 1000) * fps));
+        const nextStartMs = pages[i + 1]?.startMs ?? Infinity;
+        const endMs = Math.min(page.endMs + 400, nextStartMs);
+        const endFrame = Math.min(durationInFrames, Math.round((endMs / 1000) * fps));
+        const duration = Math.max(1, endFrame - fromFrame);
+        return (
+          <Sequence key={i} from={fromFrame} durationInFrames={duration}>
+            <TikTokPage page={page} highlightColor={highlightColor} baseColor={baseColor} fontSize={fontSize} />
+          </Sequence>
+        );
+      })}
     </AbsoluteFill>
   );
 };
