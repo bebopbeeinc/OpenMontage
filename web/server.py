@@ -49,8 +49,8 @@ WEB_DIR = Path(__file__).resolve().parent
 # Posting accounts attached to a pipeline. Rendered as outbound links on the
 # launcher card so it's one click from a pipeline to the feed it publishes to.
 DAILYTRIVIA_ACCOUNTS = [
-    {"platform": "TikTok", "handle": "dailytrivia.tc",
-     "url": "https://www.tiktok.com/@dailytrivia.tc"},
+    {"platform": "TikTok", "handle": "captain.travelcrush",
+     "url": "https://www.tiktok.com/@captain.travelcrush"},
     {"platform": "Instagram", "handle": "marcelo.travelcrush",
      "url": "https://www.instagram.com/marcelo.travelcrush"},
 ]
