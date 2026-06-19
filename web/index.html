@@ -68,7 +68,7 @@
   <div class="header">
     <div>
       <h1>OpenMontage</h1>
-      <p class="sub">Pick a pipeline. · <a class="nav-link" href="/archive">Archive →</a></p>
+      <p class="sub">Pick a pipeline. · <a class="nav-link" href="/archive">Archive →</a><span id="whoami" style="color: var(--muted)"></span></p>
     </div>
     <div class="deploy">
       <button id="deploy-btn" type="button">Deploy latest</button>
@@ -121,6 +121,11 @@ function escapeHtml(s) {
 }
 
 loadPipelines();
+
+// Show who's signed in (email comes from the oauth2-proxy in front of us).
+fetch("api/me").then(r => r.json()).then(({ email }) => {
+  if (email) document.getElementById("whoami").textContent = " · " + email;
+}).catch(() => { /* no proxy (local dev) — leave the badge empty */ });
 
 // --- Deploy button ---------------------------------------------------------
 

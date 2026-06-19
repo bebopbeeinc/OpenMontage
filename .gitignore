@@ -59,6 +59,7 @@ scripts/social_stats/out/
 *.env
 .youtube-token.json
 .secrets/
+web/oauth2-proxy.cfg
 
 # Stray media downloads (test/scratch clips left in repo root)
 pexels_video_*.mp4

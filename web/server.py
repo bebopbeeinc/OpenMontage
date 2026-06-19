@@ -30,7 +30,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Query
+from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 # Pipeline sub-apps. Each must be a self-contained FastAPI app.
@@ -215,6 +215,20 @@ async def list_pipelines():
 @app.get("/api/health")
 async def health():
     return {"ok": True, "pipelines": [p["id"] for p in PIPELINES]}
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    """Signed-in identity, injected by the oauth2-proxy sitting in front of us.
+
+    The proxy (web/oauth2-proxy.cfg) gates the whole launcher behind Google
+    sign-in restricted to bebopbee.com and forwards the user's email in these
+    headers. None when the launcher is reached directly (e.g. local dev on the
+    internal port, bypassing the proxy) — the UI just hides the badge then.
+    """
+    email = (request.headers.get("X-Forwarded-Email")
+             or request.headers.get("X-Auth-Request-Email"))
+    return {"email": email}
 
 
 # Restart strategy is picked at request time, but we cache the mode at boot so

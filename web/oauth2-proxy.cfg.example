@@ -1,0 +1,31 @@
+# Template for oauth2-proxy.cfg (the real file is gitignored — it holds secrets).
+# Topology: AWS tunnel -> this Mac:8765 (proxy) -> 127.0.0.1:8766 (uvicorn launcher).
+# Public URL: http://dev.redlion.bebopbee.com:8765
+#
+# 1. cp web/oauth2-proxy.cfg.example web/oauth2-proxy.cfg
+# 2. Fill client_id / client_secret — REUSE the existing bebopbee.com OAuth
+#    client (same one code-qa-web uses on :8770). One client can hold multiple
+#    redirect URIs; add the :8765 callback below to it in Cloud Console.
+# 3. Generate cookie_secret:
+#       python3 -c 'import secrets,base64;print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())'
+# 4. Sign-in is restricted to the bebopbee.com domain via email_domains.
+
+provider      = "google"
+client_id     = "FILL_ME.apps.googleusercontent.com"
+client_secret = "FILL_ME"
+cookie_secret = "FILL_ME_32_BYTE_BASE64"
+
+# Allow any bebopbee.com Google account to sign in.
+email_domains = ["bebopbee.com"]
+
+http_address = "127.0.0.1:8765"          # where the AWS tunnel lands
+upstreams    = ["http://127.0.0.1:8766"] # the uvicorn launcher (web.server:app)
+
+pass_user_headers    = true
+set_xauthrequest     = true
+skip_provider_button = true
+
+# Plain http over the tunnel -> cookie can't be Secure-only. If the tunnel edge
+# can serve https, flip cookie_secure = true and use an https redirect URL.
+cookie_secure = false
+redirect_url  = "http://dev.redlion.bebopbee.com:8765/oauth2/callback"
