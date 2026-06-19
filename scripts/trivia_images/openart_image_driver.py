@@ -46,6 +46,14 @@ STATE_FILE = REPO / ".playwright" / "openart-state.json"
 
 OPENART_SUITE_BASE = "https://openart.ai/suite/create-image"
 
+# The OpenArt account belongs to more than one team, and OpenArt persists the
+# active team per session — it can silently swap the active workspace between
+# runs. The trivia-images question/answer art is owned by the "BebopBee Art
+# Team" workspace (NOT the personal "R N" team that owns the saved video
+# characters), so we re-assert it on every run before generating. Set to ""
+# to skip the switch and use whatever team is currently active.
+OPENART_WORKSPACE = "BebopBee Art Team"
+
 # Model display name -> URL slug. The slug is the source of truth; landing on
 # the slug URL preselects the model in the Model card.
 MODEL_SLUGS: dict[str, str] = {
@@ -156,6 +164,86 @@ def _ensure_logged_in(page: Page, target_url: str, headless: bool = False) -> No
             _goto_suite(page, target_url)
             return
     raise RuntimeError("login timed out")
+
+
+# ---------------------------------------------------------------------------
+# Workspace switcher
+# ---------------------------------------------------------------------------
+def _select_workspace(page: Page, workspace: str) -> None:
+    """Ensure the named OpenArt team/workspace is the active one.
+
+    The workspace switcher is a Radix popover in the header: the trigger is a
+    `button[aria-haspopup='dialog']` showing an avatar + the current workspace
+    name + an ArrowDownBold chevron; clicking it opens a `[role='dialog']`
+    titled "Workspaces" with one `<button>` per workspace.
+
+    Idempotent: if the switcher already shows `workspace`, do nothing. Diagnoses
+    each failure with a screenshot under .playwright/. Mirrors
+    `scripts/common/openart_driver.py::_select_workspace` — the header UI is
+    shared between the Create-Image and Animate-Video suites.
+    """
+    out_dir = REPO / ".playwright"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # There are a couple of chevron-dialog buttons in the header (workspace and
+    # project switchers); match them all and disambiguate by behaviour.
+    triggers = page.locator(
+        "button[aria-haspopup='dialog']:has(svg[aria-label='ArrowDownBold'])"
+    )
+    try:
+        triggers.first.wait_for(timeout=15_000)
+    except PWTimeout:
+        page.screenshot(path=str(out_dir / "img_ws_fail_no_trigger.png"), full_page=True)
+        raise RuntimeError(
+            "workspace switcher not found — OpenArt header may have changed. "
+            "See .playwright/img_ws_fail_no_trigger.png",
+        )
+
+    # Fast path: the active workspace name is rendered inside its trigger label
+    # (with the avatar initial prepended, e.g. "BBebopBee Art Team"), so a
+    # containment test against any switcher trigger tells us we're already there.
+    n = triggers.count()
+    for i in range(n):
+        if workspace in (triggers.nth(i).text_content() or ""):
+            return
+
+    # Open the Workspaces popover. The first chevron trigger is the workspace
+    # one, but fall back to the others if the "Workspaces" dialog doesn't show.
+    dlg = None
+    for i in range(n):
+        triggers.nth(i).click(force=True)
+        time.sleep(0.8)
+        cand = page.get_by_role("dialog").filter(has_text="Workspaces").first
+        if cand.count() > 0:
+            dlg = cand
+            break
+        try:
+            page.keyboard.press("Escape")
+            time.sleep(0.3)
+        except Exception:
+            pass
+    if dlg is None:
+        page.screenshot(path=str(out_dir / "img_ws_fail_no_menu.png"), full_page=True)
+        raise RuntimeError(
+            "could not open the Workspaces switcher — "
+            "see .playwright/img_ws_fail_no_menu.png",
+        )
+
+    item = dlg.get_by_role("button").filter(
+        has=page.get_by_text(workspace, exact=True),
+    ).first
+    try:
+        item.wait_for(timeout=10_000)
+    except PWTimeout:
+        names = dlg.locator("button p").all_text_contents()
+        page.screenshot(path=str(out_dir / "img_ws_fail_no_item.png"), full_page=True)
+        raise RuntimeError(
+            f"workspace {workspace!r} not offered (saw {names!r}) — check the "
+            f"name. See .playwright/img_ws_fail_no_item.png",
+        )
+    item.click(force=True)
+    # Switching workspace reloads the suite content + asset library.
+    time.sleep(2.5)
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +560,7 @@ def generate_image(
     resolution: str = "2K",
     keep_source_ext: bool = True,
     reference_image_path: Optional[Path] = None,
+    workspace: Optional[str] = OPENART_WORKSPACE,
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` image variants.
 
@@ -492,6 +581,9 @@ def generate_image(
             output keeps the environment of the reference while applying the
             new prompt's content. Only the models that accept image refs in
             Create Image mode will use it (Nano Banana family, Seedream).
+        workspace: OpenArt team to make active before generating (defaults to
+            "BebopBee Art Team"). Re-asserted on every run because OpenArt can
+            silently swap the active team. Pass "" / None to skip the switch.
 
     Returns saved paths in newest-first gallery order, aligned with
     `output_paths` (output_paths[0] = newest variant).
@@ -507,6 +599,13 @@ def generate_image(
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
         _ensure_logged_in(page, target_url, headless=headless)
+
+        # Re-assert the workspace before anything else — OpenArt can silently
+        # swap the active team between runs, and the trivia-images art lives in
+        # a specific one.
+        if workspace:
+            print(f"  → ensuring workspace: {workspace}", file=sys.stderr)
+            _select_workspace(page, workspace)
 
         _select_model_in_picker(page, model)
         _select_aspect(page, aspect)
@@ -597,6 +696,9 @@ def _main() -> int:
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--reference", type=Path,
                     help="local image to attach as a same-scene reference")
+    ap.add_argument("--workspace", default=OPENART_WORKSPACE,
+                    help="OpenArt team to activate before generating "
+                         "(default %(default)r; pass '' to keep the active one)")
     args = ap.parse_args()
 
     if args.probe:
@@ -617,6 +719,7 @@ def _main() -> int:
         aspect=args.aspect,
         resolution=args.resolution,
         reference_image_path=args.reference,
+        workspace=args.workspace,
     )
     for s in saved:
         print(f"saved: {s}")
