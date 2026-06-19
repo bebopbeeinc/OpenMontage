@@ -33,6 +33,14 @@ skip_provider_button = true
 # you hit second.
 cookie_name = "_oauth2_proxy_openmontage"
 
+# The launcher home page fires several XHRs before auth (api/me, api/boot,
+# api/pipelines, api/jobs/active). Each unauthenticated request 302s through
+# /oauth2/start, which rewrites the single CSRF cookie — so the interactive
+# Google round-trip comes back to a clobbered cookie ("CSRF token mismatch,
+# potential attack" -> 403). Per-request CSRF cookies give each concurrent
+# login its own cookie, keyed by state.
+cookie_csrf_per_request = true
+
 # Plain http over the tunnel -> cookie can't be Secure-only. If the tunnel edge
 # can serve https, flip cookie_secure = true and use an https redirect URL.
 cookie_secure = false
