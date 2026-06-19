@@ -7,8 +7,8 @@ renders TO Drive + flip the sheet status; this pulls the published Drive
 files DOWN into the account-matching local subfolder.
 
 Two accounts, each backed by its own pipeline + queue sheet:
-  dailytrivia.tc   <- trivia-quiz     Posts_Quiz tab, Final Status / Final Video Link
-  ellie.travelcrush <- trivia-reaction Queue tab, Status / Drive Link (+ Drive Clip)
+  dailytrivia.tc   <- trivia-captain-reaction Posts_Reaction tab, Status / Drive Link (+ Drive Clip)
+  ellie.travelcrush <- trivia-reaction        Queue tab, Status / Drive Link (+ Drive Clip)
 
 Idempotent: if a local file already matches the Drive file's byte size it's
 skipped; otherwise it's (re)downloaded (Drive may carry a re-render).
@@ -36,7 +36,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
 from scripts.trivia_reaction import queue_row
-from scripts.trivia_quiz import sheets as quiz_sheets
+from scripts.trivia_captain_reaction import queue_row as captain_reaction_queue
 
 DOWNLOAD_ROOT = Path(
     "/Users/bbb/Library/Application Support/com.netease.mumu.nemux-global/"
@@ -222,32 +222,25 @@ def do_ellie(drive) -> int:
 
 
 def do_dailytrivia(drive) -> int:
-    # Angle changed: dailytrivia.tc now pulls from the Posts_2T1L tab
-    # (Captain's Two Truths & a Lie) instead of trivia-quiz / Posts_Quiz.
-    # Same spreadsheet + service-account auth as trivia-quiz; row 1 is a
-    # banner, row 2 the header, data from row 3. Columns:
-    #   B Slug | C Status | P Drive Link (captioned final) | Q Drive Clip (raw)
-    sheets = quiz_sheets.build_sheets()
-    resp = sheets.spreadsheets().values().get(
-        spreadsheetId=quiz_sheets.QUIZ_SHEET_ID,
-        range="Posts_2T1L!A3:S",
-    ).execute()
-    rows = resp.get("values", [])
-    ready = []
-    for row in rows:
-        row = (list(row) + [""] * 19)[:19]
-        slug, status = row[1].strip(), row[2].strip()
-        if slug and status == "Ready to publish":
-            ready.append({"slug": slug, "drive_link": row[15], "drive_clip_link": row[16]})
+    # Angle changed: dailytrivia.tc now pulls from the Posts_Reaction tab
+    # (trivia-captain-reaction — Captain reaction format) instead of Posts_2T1L.
+    # The reaction queue uses the clean 12-col schema: B Slug | C Status |
+    # I Drive Link (captioned final) | L Drive Clip (raw). Mirror of do_ellie.
+    sheets = captain_reaction_queue.build_sheets(write=False)
+    rows = captain_reaction_queue.read_queue_bulk(sheets)
+    ready = [r for r in rows
+             if (r.get("status") or "").strip() == captain_reaction_queue.STATUS_READY_TO_PUBLISH]
     dest_dir = DEST["dailytrivia"]
-    print(f"\n=== dailytrivia.tc  (trivia-captain / Posts_2T1L)  →  {dest_dir} ===")
-    print(f"{len(ready)} row(s) at Status='Ready to publish'")
-    for p in ready:
-        slug = p["slug"]
+    print(f"\n=== dailytrivia.tc  (trivia-captain-reaction / Posts_Reaction)  →  {dest_dir} ===")
+    print(f"{len(ready)} row(s) at Status='{captain_reaction_queue.STATUS_READY_TO_PUBLISH}'")
+    for r in ready:
+        slug = (r.get("slug") or "").strip()
+        if not slug:
+            continue
         print(f"  {slug}")
-        _pull(drive, "render", _file_id_from_link(p.get("drive_link") or ""),
+        _pull(drive, "render", _file_id_from_link(r.get("drive_link") or ""),
               dest_dir / f"{slug}.mp4")
-        _pull(drive, "clip  ", _file_id_from_link(p.get("drive_clip_link") or ""),
+        _pull(drive, "clip  ", _file_id_from_link(r.get("drive_clip_link") or ""),
               dest_dir / f"{slug}_clip.mp4")
     return len(ready)
 
