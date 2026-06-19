@@ -50,6 +50,7 @@ scripts/trivia_images/library/
 scripts/trivia_reaction/library/
 scripts/trivia_quiz/library/
 scripts/trivia_captain/library/
+scripts/trivia_captain_reaction/library/
 scripts/social_stats/out/
 
 # Environment & credentials

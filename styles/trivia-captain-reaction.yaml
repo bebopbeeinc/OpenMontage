@@ -1,0 +1,302 @@
+identity:
+  name: "Trivia Captain Reaction"
+  category: short-form
+  mood: amused disbelief, worldly, in-on-the-joke, hand-held-selfie intimate
+  # Inherits the trivia-reaction (ellie.travelcrush) v9 pace 1:1 — this
+  # pipeline is a CHARACTER swap, not a format change. The reel is ONE
+  # continuous setup sentence (~10s) → a genuine amused laugh/disbelief
+  # break (~2s) → SHORT punchline through the chuckle (~3s). Built to A/B
+  # test whether the Captain Archibald character (vs Ellie) is what's
+  # hurting reach on dailytrivia.tc, holding the proven format constant.
+  pace: setup 0-10s (continuous build), amused laugh/disbelief break 10-12s, punchline 12-15s
+  best_for: >
+    Single-fact viral shorts in the "So I just found out..." reaction format,
+    fronted by Captain Archibald. Same fact selection as trivia-reaction:
+    daily-trivia rows whose Question+Answer pair sets up an absurd-sounding
+    rule, ratio, or twist the Captain can frame as long-setup → laugh-break
+    → punchline.
+  reference: "Format ported 1:1 from styles/trivia-reaction.yaml (Eisha Chopra mango reel, instagram.com/reels/DXL7nOrCOfC/)"
+  not_for: >
+    Vocabulary / language quizzes ("What's the French word for hello?") —
+    these have no kicker beat and read as a flat answer. Skip them.
+
+visual_language:
+  color_palette:
+    primary:    ["#C04FE0"]              # caption emphasis pill — warm purple
+    accent:     ["#FFFFFF"]              # caption base text — white
+    text_stroke: "#0A061E"               # dark stroke around white text for readability
+    text_active: "#0A061E"               # text color when sitting on the warm-purple pill
+    background: "varies per row"
+    music:      "none"                   # reference uses no music; we match
+  composition: >
+    9:16 vertical. Subject centered or slightly right of center, head-and-shoulders
+    framing (medium close-up). Varied backdrop per row — backdrop choice rotates
+    across rooms / environments tied to the fact's vibe and to a well-traveled
+    older man's world.
+  texture: photoreal, phone-camera-style, slight handheld micro-wobble
+
+avatar:
+  character_ref: "Captain Archibald"     # OpenArt saved character name; the user maintains this
+  description: >
+    "Captain" Archibald — a 70-year-old lifelong world traveler (NOT a sea
+    captain; the nickname is affectionate), warm, twinkly-eyed, amused by how
+    much the world keeps surprising him. The character reference is built once
+    in OpenArt (My Library -> Characters) and locked across every row so the
+    avatar identity stays consistent. Update the reference upstream if you want
+    a new look; never describe Archibald's face from text in the per-row prompt.
+    NO reference image / NO tablet splash — this is a pure character swap on
+    ellie's reaction format.
+  # Acting spec ported from trivia-reaction v9, re-gendered and aged up to the
+  # Archibald register. The reel still has a REAL audible break between the
+  # setup sentence and the punchline — but for a 70-year-old it reads as an
+  # amused, disbelieving chuckle (head shake, hand over mouth, "can you
+  # believe this" energy), NOT helpless giggling.
+  #
+  # CRITICAL: write the acting as PROSE describing the emotional arc.
+  # Do NOT use timing markers like "0-2s:", "12-15s:", or beat names
+  # ("hook:", "fact:", "kicker:") in the OpenArt prompt body — Seedance
+  # reads them as dialogue (the sister pipeline's take10 literally said
+  # "The kicker?" aloud).
+  acting_beats:
+    arc: |
+      ONE emotional arc, not three separate beats. Tell Seedance the
+      story of how the Captain breaks into amused disbelief at the
+      absurdity of the fact:
+
+      1. STARTS RELAXED — seated selfie, eyes warm and engaged with the
+         camera, a knowing half-smile already there like an old friend
+         about to share something delightful over a drink. Worldly and
+         unhurried. NOT deadpan, NOT a lecturing professor.
+      2. BUILDS THROUGH THE SETUP — as he works through the long
+         sentence his smile keeps building. Voice warms with growing
+         disbelief. Eyes crinkle. A small "after all these years..."
+         wonder creeps in. He holds it together.
+      3. BREAKS INTO AMUSED DISBELIEF — the moment he finishes the
+         setup sentence the absurdity lands. A genuine, warm laugh:
+         head shakes slowly, eyes squeeze, a hand comes up to his
+         mouth or brow, shoulders bounce once, audible chuckle/exhale
+         for ~2s, no words. Delight, never anger.
+      4. RECOVERS THROUGH THE PUNCHLINE — recovers just enough to
+         deliver the short closing line still chuckling: head tilts
+         back, a finger lifted in a small "and-can-you-believe-it"
+         gesture, eyes bright, voice carrying the laugh.
+    pose: >
+      Relaxed seated selfie — phone held close at eye level, like he's
+      video-calling an old friend to share the news. Do NOT lock a
+      specific hand position; give Seedance the energy ("relaxed,
+      intimate, worldly selfie") and let the character ref handle the
+      physical specifics.
+  audio_on_openart: true                 # Seedance 2.0 generates native synced voice
+  voice_direction: >
+    Warm, worldly, and casual from the start — an older gentleman
+    gossiping with a close friend, already faintly amused by what he's
+    about to share. Through the long setup sentence his voice warms with
+    growing disbelief, the smile leaking into every word. The [laughs]
+    cues in the spoken line represent a real audible break — a genuine
+    amused chuckle, warm exhale, breathy ha-ha of disbelief, no actual
+    words, for about two full seconds (a delighted "can you believe
+    this," never a guffaw, never sarcasm). He then delivers the short
+    closing line through the ongoing chuckle — voice carrying the laugh,
+    smile audible under every word. Male, 60s-70s, warm baritone,
+    intimate selfie energy. Never deadpan, never lecturing, never angry.
+    Never says anything meta about his own laughing — the warmth in his
+    voice is the only acknowledgment. When the fact touches family or
+    home life, he references his WIFE (he is a married 70-year-old man),
+    never a husband.
+
+backdrops:
+  strategy: varied_per_row
+  rotation: >
+    The script-director picks a backdrop appropriate to the fact's vibe,
+    drawn from a well-traveled older man's world. Avoid repeating the same
+    setting two days in a row.
+  prompt_palette:
+    - "study lined with bookshelves and framed travel photos, warm tungsten light"
+    - "sunlit kitchen with a worn wooden table, morning light"
+    - "balcony at golden hour with a distant city skyline behind him"
+    - "cozy living room with a globe and souvenirs from decades of travel"
+    - "train window seat, blurred landscape passing"
+    - "veranda overlooking a garden, soft late-afternoon light"
+    - "den with a leather armchair and a wall of maps"
+    - "small café corner, espresso in front of him"
+    - "sunroom with potted plants, soft daylight"
+    - "hotel room desk with a window onto an unfamiliar street"
+    - "porch at dusk, warm lamp glow"
+    - "workshop nook with travel curios on the shelves"
+  rules:
+    - "Always include a soft natural light direction in the prompt"
+    - "Keep the backdrop quiet — no busy crowds; backdrop is decoration not story"
+    - "Backdrop should not contain readable text; warm-purple-pill captions own the text layer"
+
+typography:
+  captions:
+    font: "Montserrat"                   # already loaded by remotion-composer
+    weight: 900
+    case: UPPERCASE
+    size_px: 78                          # default; tune to 70-90 if VO is wordy
+    line_height: 1.15
+    letter_spacing: "-0.5px"
+    text_stroke_px: 2.5
+    text_stroke_color: "#0A061E"
+    paint_order: "stroke fill"
+  emphasis_pill:
+    fill: "#C04FE0"
+    text_when_active: "#0A061E"
+    radius_px: 18
+    padding_px: "6 22 10"
+    activation: per-word (word lights up when its audio timestamp is current)
+
+motion:
+  transitions: []                        # single-take avatar clip; no cuts
+  caption_entrance: "spring(damping=12, stiffness=180, mass=0.7) — 20px translate up + opacity 0->1"
+  caption_pop: "spring(damping=11, stiffness=260, mass=0.5) — scale 1.0->1.06 on active word"
+  pacing_rules:
+    target_duration_seconds: 15
+    duration_min_seconds: 13
+    duration_max_seconds: 15            # Seedance 2.0 slider hard cap is 15s
+    words_per_page_max: 3
+    page_break_pause_ms: 350
+  # Audio-break expectation, inherited from trivia-reaction. Compose stage's
+  # transcribe step MUST use a model strong enough to catch words spoken
+  # through the chuckle — base.en + vad_filter=True drops words during the
+  # recovery line. Recommended: small.en + vad_filter=False + beam_size=5.
+  transcribe_recommendation:
+    model: "small.en"
+    vad_filter: false
+    beam_size: 5
+    expected_silent_gap_ms_min: 1500
+    expected_silent_gap_ms_max: 3000
+
+audio:
+  source: "seedance_native"              # voice is generated by Seedance 2.0 with the video
+  music_mood: "none"
+  music_volume: 0.0
+  sfx_style: "none — match the reference reel exactly"
+  loudness_target_lufs: null             # Seedance handles its own mix; we don't loudnorm
+
+asset_generation:
+  openart:
+    model: "Seedance 2.0"                # native synced voice
+    aspect: "9:16"
+    resolution: "480p"                   # global default per user memory; bumps to 1080p only for final-cut takes
+    duration_s: 15                       # Seedance 2.0 slider hard cap
+    variant_count: 1                     # single take per row, not a pair
+    audio_on: true                       # Seedance generates dialogue + lip-sync
+    workspace: "R N"                     # OpenArt team that owns the saved character; NOT "BebopBee Art Team"
+    character: "Captain Archibald"
+    reference_image: null                # NO splash / NO tablet — pure character swap
+    duration_s_default: 15
+    word_target: [28, 35]
+    # CRITICAL: this template is INTENTIONALLY label-free. The sister
+    # pipeline learned the hard way that "{hook} {fact} {kicker}"
+    # interpolations made Seedance read the labels aloud. Concatenate
+    # hook+fact into one continuous setup sentence before substituting
+    # into {setup_sentence}.
+    prompt_template: |
+      {acting_arc_prose} {pose_prose}.
+      Setting: {backdrop_description}.
+      He says: "{setup_sentence} [laughs] [laughs] [laughs] [laughs] {punchline_sentence}"
+      Voice: {voice_direction}
+      Medium close-up, handheld selfie framing, eye-level, soft natural light,
+      photoreal, subtle camera micro-wobble.
+      No on-screen text, no captions, no graphics — captions are added in post.
+    prompt_authoring_rules:
+      - "NEVER use beat names in the prompt body (no 'hook', 'fact', 'kicker', 'punchline', 'setup' as labels followed by ':')."
+      - "NEVER use timing markers in the prompt body (no '0-2s', '12-15s', etc) — Seedance reads them aloud."
+      - "Concatenate hook+fact into ONE setup sentence; describe the rest as prose."
+      - "Use [laughs] x4 between setup and punchline — stronger anchor than 1-2 cues. For Archibald these read as a warm amused chuckle, not helpless giggles."
+      - "Voice direction explains that [laughs] cues represent an audible break (not a silent gap), with a delighted disbelieving chuckle."
+      - "Punchline ends with '.' or '!' — '!' gives Seedance a stronger inflection cue."
+      - "Phonetically respell rare proper nouns / loanwords (animals, place names, foods) inside the SPOKEN line only — Seedance reads spoken_lines literally for native VO and stumbles on unfamiliar words. Use a LOWERCASE, natural-looking respelling that anchors the vowel (e.g. quokka -> 'kwocka' where '-ocka' forces the short-o). Do NOT use ALL-CAPS hyphenated forms — Seedance reads those as letters: 'KWOK-uh' came out as 'cougar', 'kwocka' came out clean. Keep beats spelled correctly so the burned-in captions stay right."
+      - "When the fact touches family/home, the Captain refers to his WIFE, never a husband."
+  image_negative_prompt: "captions, subtitles, on-screen text, watermark, low quality"
+  consistency_anchors:
+    - "Always use OpenArt character reference `Captain Archibald` — never describe his face from text"
+    - "Always 9:16 / handheld selfie framing"
+    - "Audio ON on OpenArt; VO is native Seedance"
+    - "Backdrop varies per row; subject does not"
+    - "NO reference image / NO tablet splash (unlike trivia-captain)"
+    - "NO directional labels in the OpenArt prompt body (see prompt_authoring_rules)"
+
+overlays:
+  word_caption:
+    bg_active: "#C04FE0"
+    text_active: "#0A061E"
+    text_inactive: "#FFFFFF"
+    stroke: "#0A061E"
+    radius: 18
+
+# Instagram post caption (NOT the on-video caption — that's `overlays`).
+# Body voice ported from trivia-reaction, but in the Captain's worldly
+# register. Hashtags swapped to the dailytrivia.tc account.
+post_caption:
+  structure: |
+    Two paragraphs separated by a blank line:
+      1. Reel-voice body (1-2 short sentences, dry/self-aware, worldly)
+      2. Hashtag block — 2 brand tags first, then 3 niche tags (5 total)
+  body:
+    voice: |
+      Dry, self-aware, worldly — an older traveler amused that the world
+      still surprises him. Meta about the reaction rather than a recap of
+      the fact. Patterns like "Been to [place] twice and nobody mentioned
+      this," "Sixty years on this planet and [absurd detail]," or a punchy
+      disclaimer ("No idea if this is true, but I'm delighted either way").
+      Conversational. One or two short sentences max.
+    length_chars: [60, 130]
+    emojis: false                  # the warmth is in the voice; no decoration
+    forbidden:
+      - "Recap of the fact verbatim (the video already does that)"
+      - "Marketing-speak / 'wait, what??' SEO hooks"
+      - "Recapping the kicker (it's funnier when you have to watch for it)"
+      - "Sea-captain / nautical puns — Archibald is a world traveler, not a sailor"
+    patterns:
+      - "Been to [place] and nobody warned me about [specific Y from the fact]."
+      - "Sixty years of travel and [absurd detail] is news to me."
+      - "[Punchy observation about how absurd the fact is]. [Dry follow-up: 'I have follow-up questions' / 'Documenting this here']."
+      - "[Brief disclaimer]: 'No idea if this is true, but I'm delighted either way.'"
+  hashtags:
+    count: 5                       # 2 brand + 3 niche
+    brand_tags:                    # FIXED — same across every row, brand anchor.
+      - "#DailyTrivia"             # account handle (dailytrivia.tc) — confirm/adjust if the account uses a different anchor tag
+      - "#IJustFoundOut"           # series / format tag (shared with the reaction format)
+    niche_tags:
+      count: 3
+      style: niche                 # specific geography/topic, NOT generic
+      forbidden:
+        - "#TIL #DidYouKnow #ReactionReel #FunFact #Viral — overused generics, low ROI on reach"
+        - "#Reels #Instagram #Insta — platform-meta, looks lazy"
+        - "Same niche block across multiple posts — defeats the discovery purpose"
+      composition_rules:
+        - "Mix specific geography (e.g. #Switzerland, #Buñol) with topic (e.g. #GuineaPigs, #LaTomatina)"
+        - "If a place is central to the fact, include both country AND city/region"
+        - "Prefer existing communities (#CatTok, #MarineLife) over invented tags"
+        - "All 3 tags should be relevant to THIS fact specifically — no boilerplate"
+    order: "Brand tags first, niche tags second, all on one line separated by single spaces"
+  worked_examples:
+    - row: "owning-just-one-guinea-pig"
+      caption: |
+        Been to Switzerland twice and nobody mentioned the guinea-pig law.
+
+        #DailyTrivia #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
+    - row: "la-tomatina-tomato-fight"
+      caption: |
+        Sixty years of travel and I'm only now hearing about the tomato war.
+
+        #DailyTrivia #IJustFoundOut #LaTomatina #Spain #Buñol
+
+remotion:
+  composition_id: "TriviaWithBg"
+  props:
+    highlightColor: "#C04FE0"
+    baseColor: "#FFFFFF"
+    fontSize: 78
+    showFactsOverlay: false
+    mode: "Facts"
+  notes: >
+    Reuses the trivia-short TriviaWithBg composition with
+    showFactsOverlay=false (no check/X buttons, no progress bar) and
+    highlightColor=#C04FE0 (warm purple pill). The composition's word-by-word
+    pop animation, caption page-building, and TikTok-style stroke are all
+    inherited as-is. The active word sits on the warm-purple pill with dark
+    (#0a061e) text — the comp's default active-text color, which reads
+    cleanly on this bright purple. No new composition file is needed.

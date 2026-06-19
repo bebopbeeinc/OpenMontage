@@ -37,6 +37,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from scripts.trivia.web import server as trivia
 from scripts.trivia_captain.web import server as trivia_captain
 from scripts.trivia_captain_2t1l.web import server as trivia_captain_2t1l
+from scripts.trivia_captain_reaction.web import server as trivia_captain_reaction
 from scripts.trivia_images.web import server as trivia_images
 from scripts.trivia_quiz.web import server as trivia_quiz
 from scripts.trivia_reaction.web import server as trivia_reaction
@@ -123,6 +124,19 @@ PIPELINES = [
         ),
         "stability": "alpha",
     },
+    {
+        "id": "trivia-captain-reaction",
+        "path": "/trivia-captain-reaction/",
+        "name": "Captain Reaction",
+        "description": (
+            "Captain Archibald in Ellie's \"I just found out\" reaction format — "
+            "dailytrivia.tc test. Faithful clone of Trivia Reaction: same "
+            "daily-trivia source and Seedance/Remotion path, but fronted by "
+            "\"Captain\" Archibald with a warm-purple caption pill, publishing to "
+            "the dailytrivia.tc Drive account."
+        ),
+        "stability": "alpha",
+    },
 ]
 
 
@@ -139,6 +153,7 @@ PIPELINE_MODULES: dict[str, object] = {
     "trivia-reaction": trivia_reaction,
     "trivia-captain": trivia_captain,
     "trivia-captain-2t1l": trivia_captain_2t1l,
+    "trivia-captain-reaction": trivia_captain_reaction,
 }
 
 # Mount each sub-app at "/<id>". Sub-apps have their own routes rooted at "/",
