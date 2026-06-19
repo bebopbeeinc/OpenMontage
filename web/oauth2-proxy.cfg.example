@@ -25,6 +25,14 @@ pass_user_headers    = true
 set_xauthrequest     = true
 skip_provider_button = true
 
+# Distinct cookie name so our cookies don't collide with the other
+# oauth2-proxy on this host (code-qa-web on :8770). Cookies are scoped by host,
+# not port — sharing dev.redlion.bebopbee.com with the default name
+# (_oauth2_proxy) makes the two proxies clobber each other's CSRF/session
+# cookies, surfacing as "Unable to find a valid CSRF token" on whichever app
+# you hit second.
+cookie_name = "_oauth2_proxy_openmontage"
+
 # Plain http over the tunnel -> cookie can't be Secure-only. If the tunnel edge
 # can serve https, flip cookie_secure = true and use an https redirect URL.
 cookie_secure = false
