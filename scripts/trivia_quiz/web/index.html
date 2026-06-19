@@ -166,6 +166,38 @@
 </head>
 <body>
 
+<!-- account links (injected; data from launcher /api/pipelines, single source of truth) -->
+<div id="om-account-bar" aria-label="posting accounts"></div>
+<style>
+  #om-account-bar:empty { display: none; }
+  #om-account-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    justify-content: flex-end; padding: 8px 16px;
+    font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  #om-account-bar .om-acct-label { color: #b0b8c0; margin-right: 2px; }
+  #om-account-bar .om-acct { color: #e6edf3; font-weight: 500; text-decoration: none;
+    background: rgba(88,166,255,0.12); border: 1px solid rgba(88,166,255,0.40);
+    border-radius: 999px; padding: 5px 11px; transition: border-color .12s ease, background .12s ease; }
+  #om-account-bar .om-acct:hover { border-color: #58a6ff; background: rgba(88,166,255,0.22); }
+</style>
+<script>
+(function(){
+  var id = location.pathname.split('/').filter(Boolean)[0];
+  if (!id) return;
+  function esc(s){return (s||'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  fetch('/api/pipelines').then(function(r){return r.ok ? r.json() : null;}).then(function(d){
+    if (!d) return;
+    var p = (d.pipelines||[]).find(function(x){return x.id===id;});
+    if (!p || !p.accounts || !p.accounts.length) return;
+    var bar = document.getElementById('om-account-bar');
+    if (!bar) return;
+    bar.innerHTML = '<span class="om-acct-label">Posts to</span>' + p.accounts.map(function(a){
+      return '<a class="om-acct" href="'+a.url+'" target="_blank" rel="noopener" title="'+esc(a.platform)+': @'+esc(a.handle)+'">'+esc(a.platform)+' \u00b7 @'+esc(a.handle)+'</a>';
+    }).join('');
+  }).catch(function(){});
+})();
+</script>
+
+
 <header>
   <h1>Trivia Quiz</h1>
   <div class="meta" id="meta">loading…</div>

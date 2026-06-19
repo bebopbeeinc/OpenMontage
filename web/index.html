@@ -54,10 +54,11 @@
 
   .card-accounts { display: flex; flex-wrap: wrap; gap: 8px;
                    padding-top: 12px; border-top: 1px solid var(--border); }
-  .acct { font-size: 12px; color: var(--muted); text-decoration: none;
-          border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
-          transition: border-color 0.12s ease, color 0.12s ease; }
-  .acct:hover { border-color: var(--accent); color: var(--text); }
+  .acct { font-size: 12px; font-weight: 500; color: var(--text); text-decoration: none;
+          background: rgba(88, 166, 255, 0.12);
+          border: 1px solid rgba(88, 166, 255, 0.40); border-radius: 999px; padding: 4px 11px;
+          transition: border-color 0.12s ease, background 0.12s ease; }
+  .acct:hover { border-color: var(--running); background: rgba(88, 166, 255, 0.22); }
 
   .empty { text-align: center; color: var(--muted); padding: 60px 0; }
 </style>
