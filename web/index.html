@@ -22,6 +22,8 @@
   .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 40px; }
   .header h1 { margin: 0 0 8px 0; font-size: 32px; font-weight: 700; letter-spacing: -0.5px; }
   .header .sub { color: var(--muted); margin: 0; font-size: 14px; }
+  .nav-link { color: var(--running); text-decoration: none; }
+  .nav-link:hover { text-decoration: underline; }
 
   .deploy { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
   .deploy button {
@@ -41,20 +43,21 @@
   @media (min-width: 720px) { .pipeline-grid { grid-template-columns: 1fr 1fr; } }
 
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-          padding: 20px 22px; text-decoration: none; color: inherit;
-          display: flex; flex-direction: column; gap: 8px; min-height: 140px;
+          padding: 20px 22px; display: flex; flex-direction: column; gap: 12px; min-height: 140px;
           transition: border-color 0.12s ease, transform 0.12s ease; }
   .card:hover { border-color: var(--running); transform: translateY(-1px); }
-  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .card-main { text-decoration: none; color: inherit; display: flex; flex-direction: column;
+               gap: 8px; flex: 1 1 auto; }
   .card h2 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.2px; }
-  .card .stab { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
-                padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
-  .card .stab.production { color: var(--accent); border-color: rgba(34, 232, 138, 0.3); }
-  .card .stab.beta { color: var(--warn); border-color: rgba(240, 180, 41, 0.3); }
-  .card .stab.alpha { color: var(--running); border-color: rgba(88, 166, 255, 0.3); }
-  .card .stab.test { color: var(--muted); }
   .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
-  .card .open { margin-top: auto; font-size: 12px; color: var(--running); }
+  .card .open { margin-top: auto; font-size: 12px; color: var(--running); padding-top: 4px; }
+
+  .card-accounts { display: flex; flex-wrap: wrap; gap: 8px;
+                   padding-top: 12px; border-top: 1px solid var(--border); }
+  .acct { font-size: 12px; color: var(--muted); text-decoration: none;
+          border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+          transition: border-color 0.12s ease, color 0.12s ease; }
+  .acct:hover { border-color: var(--accent); color: var(--text); }
 
   .empty { text-align: center; color: var(--muted); padding: 60px 0; }
 </style>
@@ -64,42 +67,50 @@
   <div class="header">
     <div>
       <h1>OpenMontage</h1>
-      <p class="sub">Pick a pipeline.</p>
+      <p class="sub">Pick a pipeline. · <a class="nav-link" href="/archive">Archive →</a></p>
     </div>
     <div class="deploy">
       <button id="deploy-btn" type="button">Deploy latest</button>
       <div id="deploy-status" class="deploy-status"></div>
     </div>
   </div>
-  <div id="pipeline-grid" class="pipeline-grid">
+  <div id="pipeline-root">
     <div class="empty">Loading…</div>
   </div>
 </main>
 
 <script>
 async function loadPipelines() {
+  const root = document.getElementById("pipeline-root");
   const r = await fetch("api/pipelines");
   if (!r.ok) {
-    document.getElementById("pipeline-grid").innerHTML =
-      `<div class="empty">Failed to load pipelines: ${r.status}</div>`;
+    root.innerHTML = `<div class="empty">Failed to load pipelines: ${r.status}</div>`;
     return;
   }
   const { pipelines } = await r.json();
-  const root = document.getElementById("pipeline-grid");
   if (!pipelines.length) {
     root.innerHTML = `<div class="empty">No pipelines registered.</div>`;
     return;
   }
-  root.innerHTML = pipelines.map(p => `
-    <a class="card" href="${p.path}">
-      <div class="card-head">
+  const active = pipelines.filter(p => !p.archived);
+  root.innerHTML = `<div class="pipeline-grid">${active.map(cardHtml).join("")}</div>`;
+}
+
+function cardHtml(p) {
+  const accounts = (p.accounts || []).map(a => `
+        <a class="acct" href="${a.url}" target="_blank" rel="noopener"
+           title="${escapeHtml(a.platform)}: @${escapeHtml(a.handle)}">${escapeHtml(a.platform)} · @${escapeHtml(a.handle)}</a>`
+  ).join("");
+  const accountsRow = accounts ? `<div class="card-accounts">${accounts}</div>` : "";
+  return `
+    <div class="card">
+      <a class="card-main" href="${p.path}">
         <h2>${escapeHtml(p.name)}</h2>
-        <span class="stab ${p.stability}">${escapeHtml(p.stability)}</span>
-      </div>
-      <p>${escapeHtml(p.description)}</p>
-      <div class="open">Open →</div>
-    </a>
-  `).join("");
+        <p>${escapeHtml(p.description)}</p>
+        <div class="open">Open →</div>
+      </a>
+      ${accountsRow}
+    </div>`;
 }
 
 function escapeHtml(s) {

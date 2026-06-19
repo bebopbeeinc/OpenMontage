@@ -46,8 +46,25 @@ REPO = Path(__file__).resolve().parents[1]
 WEB_DIR = Path(__file__).resolve().parent
 
 
+# Posting accounts attached to a pipeline. Rendered as outbound links on the
+# launcher card so it's one click from a pipeline to the feed it publishes to.
+DAILYTRIVIA_ACCOUNTS = [
+    {"platform": "TikTok", "handle": "dailytrivia.tc",
+     "url": "https://www.tiktok.com/@dailytrivia.tc"},
+    {"platform": "Instagram", "handle": "marcelo.travelcrush",
+     "url": "https://www.instagram.com/marcelo.travelcrush"},
+]
+ELLIE_ACCOUNTS = [
+    {"platform": "TikTok", "handle": "ellie.travelcrush",
+     "url": "https://www.tiktok.com/@ellie.travelcrush"},
+    {"platform": "Instagram", "handle": "ellie.travelcrush",
+     "url": "https://www.instagram.com/ellie.travelcrush"},
+]
+
 # Pipeline catalog — drives the launcher home page. Keep `path` in sync with
 # the mount call below + the `<base href>` in the pipeline's index.html.
+#   - `archived`: render under the Archive section (kept around, not in rotation)
+#   - `accounts`: posting feeds this pipeline publishes to (outbound links)
 PIPELINES = [
     {
         "id": "trivia",
@@ -60,6 +77,8 @@ PIPELINES = [
             "publishes to Drive."
         ),
         "stability": "beta",
+        "archived": True,
+        "accounts": DAILYTRIVIA_ACCOUNTS,
     },
     {
         "id": "trivia-images",
@@ -72,6 +91,8 @@ PIPELINES = [
             "using the question image as a same-scene reference."
         ),
         "stability": "beta",
+        "archived": False,
+        "accounts": [],
     },
     {
         "id": "trivia-quiz",
@@ -84,6 +105,8 @@ PIPELINES = [
             "Remotion TriviaQuiz composition; Publish uploads to Drive."
         ),
         "stability": "alpha",
+        "archived": True,
+        "accounts": DAILYTRIVIA_ACCOUNTS,
     },
     {
         "id": "trivia-reaction",
@@ -96,6 +119,8 @@ PIPELINES = [
             "clip, assemble + Remotion-render captions, publish to Drive."
         ),
         "stability": "alpha",
+        "archived": False,
+        "accounts": ELLIE_ACCOUNTS,
     },
     {
         "id": "trivia-captain",
@@ -110,6 +135,11 @@ PIPELINES = [
             "image."
         ),
         "stability": "alpha",
+        "archived": False,
+        "accounts": [
+            {"platform": "TikTok", "handle": "arabellabbb",
+             "url": "https://www.tiktok.com/@arabellabbb"},
+        ],
     },
     {
         "id": "trivia-captain-2t1l",
@@ -123,6 +153,8 @@ PIPELINES = [
             "tab; the lie is never revealed — the comments are the game."
         ),
         "stability": "alpha",
+        "archived": True,
+        "accounts": DAILYTRIVIA_ACCOUNTS,
     },
     {
         "id": "trivia-captain-reaction",
@@ -136,6 +168,8 @@ PIPELINES = [
             "the dailytrivia.tc Drive account."
         ),
         "stability": "alpha",
+        "archived": False,
+        "accounts": DAILYTRIVIA_ACCOUNTS,
     },
 ]
 
@@ -165,6 +199,11 @@ for _pipeline_id, _module in PIPELINE_MODULES.items():
 @app.get("/")
 async def home():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.get("/archive")
+async def archive():
+    return FileResponse(WEB_DIR / "archive.html")
 
 
 @app.get("/api/pipelines")
