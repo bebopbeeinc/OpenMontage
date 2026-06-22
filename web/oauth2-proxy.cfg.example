@@ -41,6 +41,19 @@ cookie_name = "_oauth2_proxy_openmontage"
 # login its own cookie, keyed by state.
 cookie_csrf_per_request = true
 
+# Treat each pipeline sub-app's data endpoints as API routes: when the session
+# is missing/expired, return 401 instead of a 302 into the Google login flow.
+# The pipeline frontends fetch these with XHR (e.g. /trivia-images/api/tabs,
+# /trivia-images/api/rows). Without this a 302 makes fetch() silently follow
+# into a cross-origin login page, response.json() throws, and the UI renders
+# with no tabs/rows — the "server isn't loading" symptom. A 401 lets the
+# frontend detect the expiry and re-trigger sign-in (see the api() helper in
+# scripts/trivia_images/web/index.html). The regex requires a sub-app segment
+# before /api/ so the launcher home page's own pre-auth XHRs (api/me, api/boot,
+# api/pipelines, api/jobs/active) keep the 302-to-login behavior described above.
+# KEEP THIS when regenerating the real cfg — dropping it reintroduces the bug.
+api_routes = ["^/[^/]+/api/"]
+
 # Plain http over the tunnel -> cookie can't be Secure-only. If the tunnel edge
 # can serve https, flip cookie_secure = true and use an https redirect URL.
 cookie_secure = false
