@@ -449,6 +449,17 @@ function tabQuery() { return `tab=${encodeURIComponent(currentTab)}`; }
 
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
+  // Session expired: oauth2-proxy is configured (api_routes) to return 401 for
+  // /api/* instead of a 302 into the Google login flow. A 302 would make
+  // fetch() silently follow into a cross-origin login page and r.json() blow
+  // up in the catch — which is exactly how "tabs/rows won't load" showed up.
+  // On 401 we bounce the whole page through the proxy sign-in so the
+  // interactive round-trip can refresh the cookie, then land back here.
+  if (r.status === 401) {
+    const rd = encodeURIComponent(location.pathname + location.search);
+    location.href = '/oauth2/sign_in?rd=' + rd;
+    throw new Error('session expired — redirecting to sign in');
+  }
   if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}: ${await r.text().catch(()=>'')}`);
   return r.json();
 }

@@ -378,6 +378,46 @@ _schema_lock = threading.Lock()
 _tabs_cache: list[dict] | None = None
 _tabs_lock = threading.Lock()
 
+# Short-TTL cache of assembled /api/rows payloads, keyed by validated tab.
+# read_rows is dominated by a Sheets values().get() that runs 2-9s for the
+# larger country tabs, so flipping between tabs and back re-pays that cost
+# every time. A short TTL collapses those repeat loads to an in-memory hit
+# while bounding staleness, and every row-mutating path drops the affected
+# tab's entry (see _set_approval / _write_prompts) so an action's result is
+# never hidden behind the cache. refresh=1 also bypasses and repopulates it.
+_ROWS_CACHE_TTL_S = 15.0
+_rows_cache: dict[str, tuple[float, list[dict]]] = {}
+_rows_cache_lock = threading.Lock()
+
+
+def _rows_cache_get(tab: str) -> list[dict] | None:
+    import time
+    with _rows_cache_lock:
+        hit = _rows_cache.get(tab)
+        if hit is None:
+            return None
+        ts, rows = hit
+        if time.monotonic() - ts > _ROWS_CACHE_TTL_S:
+            _rows_cache.pop(tab, None)
+            return None
+        return rows
+
+
+def _rows_cache_put(tab: str, rows: list[dict]) -> None:
+    import time
+    with _rows_cache_lock:
+        _rows_cache[tab] = (time.monotonic(), rows)
+
+
+def _rows_cache_drop(tab: str | None = None) -> None:
+    """Evict one tab's cached rows (or all, when tab is None). Called by every
+    path that mutates a row so the next /api/rows reflects the change at once."""
+    with _rows_cache_lock:
+        if tab is None:
+            _rows_cache.clear()
+        else:
+            _rows_cache.pop(tab, None)
+
 
 def _build_sheets():
     cli = getattr(_sheets_local, "client", None)
@@ -782,6 +822,9 @@ def _set_approval(tab: str, row: int, field: str, value: str) -> str:
             body={"values": [[value]]},
         )
     )
+    # The row's approval state just changed — drop the cached /api/rows payload
+    # for this tab so the next fetch reflects it instead of a stale snapshot.
+    _rows_cache_drop(tab)
     return letter
 
 
@@ -831,6 +874,8 @@ def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | Non
             body={"valueInputOption": "USER_ENTERED", "data": data},
         )
     )
+    # Prompts changed — drop this tab's cached rows so the edit shows up at once.
+    _rows_cache_drop(tab)
     return written
 
 
@@ -1078,7 +1123,13 @@ def _rows_sync(tab: str | None, refresh: bool):
         with _tab_country_lock:
             _tab_country_cache.clear()
     validated = _validate_tab(tab)
-    return validated, read_rows(tab=validated, refresh_schema=refresh)
+    if not refresh:
+        cached = _rows_cache_get(validated)
+        if cached is not None:
+            return validated, cached
+    rows = read_rows(tab=validated, refresh_schema=refresh)
+    _rows_cache_put(validated, rows)
+    return validated, rows
 
 
 @app.get("/api/health")
