@@ -82,13 +82,15 @@ def _apply_tail_fade(path: Path) -> None:
 
 def _read_prompt_from_queue(slug: str) -> str:
     """Look up `slug` in TriviaReactionQueue and return its Queue!J prompt.
-    Returns '' if the row doesn't exist or the prompt cell is empty."""
-    try:
-        ws = queue_row.build_sheets(write=False)
-        rows = queue_row.read_queue_bulk(ws)
-    except Exception as e:  # noqa: BLE001
-        print(f"⚠ sheet lookup failed: {e}", file=sys.stderr)
-        return ""
+    Returns '' if the row doesn't exist or the prompt cell is empty.
+
+    Raises on a Sheets API failure. Transient 5xx/429 are already retried
+    inside queue_row._execute_with_retry, so reaching the exception means a
+    persistent failure — surfacing it (instead of returning '') stops the
+    caller from misreporting an API outage as 'Queue!J is empty' and avoids a
+    paid generation on a degraded prompt."""
+    ws = queue_row.build_sheets(write=False)
+    rows = queue_row.read_queue_bulk(ws)
     for r in rows:
         if (r.get("slug") or "").strip() == slug:
             return (r.get("openart_prompt") or "").strip()
@@ -196,7 +198,14 @@ def main() -> int:
         source = f"script.json ({script_path.relative_to(REPO)})"
     else:
         # Resolve prompt from the sheet.
-        prompt_from_sheet = _read_prompt_from_queue(args.slug)
+        try:
+            prompt_from_sheet = _read_prompt_from_queue(args.slug)
+        except Exception as e:  # noqa: BLE001
+            sys.exit(
+                f"TriviaReactionQueue lookup failed after retries: {e}\n"
+                f"This is a Sheets API/transient error, NOT an empty prompt — "
+                f"re-run this step rather than editing Queue!J."
+            )
         if not prompt_from_sheet:
             sys.exit(
                 f"No prompt found for slug={args.slug!r}: "

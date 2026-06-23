@@ -66,13 +66,16 @@ def ffprobe_has_audio(path: Path) -> bool:
 
 
 def _find_queue_row(slug: str) -> dict | None:
-    """Look up `slug` in TriviaReactionQueue. Returns the row dict or None."""
-    try:
-        ws = queue_row.build_sheets(write=False)
-        rows = queue_row.read_queue_bulk(ws)
-    except Exception as e:  # noqa: BLE001
-        print(f"⚠ Queue lookup failed: {e}", file=sys.stderr)
-        return None
+    """Look up `slug` in TriviaReactionQueue. Returns the row dict, or None if
+    the row genuinely isn't present.
+
+    Raises on a Sheets API failure (transient 5xx/429 are already retried
+    inside queue_row._execute_with_retry, so reaching here means the call
+    failed persistently). That case is distinct from 'row absent' and must NOT
+    be collapsed into None — doing so is what made a one-off Sheets 500
+    masquerade as a missing row and kill an otherwise-healthy run."""
+    ws = queue_row.build_sheets(write=False)
+    rows = queue_row.read_queue_bulk(ws)
     for r in rows:
         if (r.get("slug") or "").strip() == slug:
             return r
@@ -147,7 +150,14 @@ def main() -> int:
     def _ensure_qrow() -> dict:
         nonlocal qrow
         if qrow is None:
-            qrow = _find_queue_row(slug)
+            try:
+                qrow = _find_queue_row(slug)
+            except Exception as e:  # noqa: BLE001
+                sys.exit(
+                    f"TriviaReactionQueue lookup failed after retries: {e}\n"
+                    f"This is a Sheets API/transient error, NOT a missing row — "
+                    f"the {slug!r} row may well exist. Just re-run this step."
+                )
             if qrow is None:
                 sys.exit(
                     f"no brief.json/script.json on disk AND no TriviaReactionQueue row "

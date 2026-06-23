@@ -17,10 +17,38 @@ Layout: row 1 = banner, row 2 = header, data starts at row 3.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+# Google Sheets occasionally returns a transient server-side error
+# ("Internal error encountered", rate-limit, backend unavailable). These are
+# not "bad request" failures — a retry a moment later almost always succeeds.
+# Without this, a single hiccup propagates up as an exception that callers
+# (assemble._find_queue_row, openart_generate._read_prompt_from_queue) catch
+# and misreport as "row not found", killing an otherwise-healthy run.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _execute_with_retry(request, *, attempts: int = 4, base_delay: float = 1.0):
+    """Call request.execute(), retrying transient Sheets HttpErrors with
+    exponential backoff. Non-retryable errors (4xx other than 429) and the
+    final attempt's failure propagate unchanged."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return request.execute()
+        except HttpError as e:  # noqa: PERF203
+            status = getattr(getattr(e, "resp", None), "status", None)
+            try:
+                status = int(status)
+            except (TypeError, ValueError):
+                status = None
+            if status not in _RETRYABLE_STATUS or attempt == attempts:
+                raise
+            time.sleep(base_delay * (2 ** (attempt - 1)))
 
 SA_PATH = Path(os.environ.get(
     "OPENMONTAGE_SA_PATH",
@@ -107,10 +135,10 @@ def _index_to_column_letter(idx: int) -> str:
 
 def _refresh_header_cache(sheets) -> dict[str, str]:
     global _header_to_letter_cache
-    r = sheets.spreadsheets().values().get(
+    r = _execute_with_retry(sheets.spreadsheets().values().get(
         spreadsheetId=QUEUE_SHEET,
         range=f"'{QUEUE_TAB}'!{QUEUE_HEADER_ROW}:{QUEUE_HEADER_ROW}",
-    ).execute()
+    ))
     headers = r.get("values", [[]])[0]
     label_to_letter: dict[str, str] = {}
     for i, label in enumerate(headers):
@@ -142,9 +170,9 @@ def cell_for(sheets, row: int, field: str) -> str:
 
 def read_queue_row(sheets, row: int) -> dict:
     """Read one Queue row and return a dict keyed by ROW_KEYS, plus `row`."""
-    r = sheets.spreadsheets().values().get(
+    r = _execute_with_retry(sheets.spreadsheets().values().get(
         spreadsheetId=QUEUE_SHEET, range=QUEUE_ROW_RANGE.format(row=row),
-    ).execute()
+    ))
     values = r.get("values", [[]])[0]
     d = dict(zip(ROW_KEYS, _pad(values, QUEUE_ROW_COLUMN_COUNT)))
     d["row"] = row
@@ -155,10 +183,10 @@ def read_queue_bulk(sheets, min_row: int = None, max_row: int = 500) -> list[dic
     """Read a contiguous range of Queue rows; skips fully-empty rows."""
     if min_row is None:
         min_row = QUEUE_DATA_START_ROW
-    r = sheets.spreadsheets().values().get(
+    r = _execute_with_retry(sheets.spreadsheets().values().get(
         spreadsheetId=QUEUE_SHEET,
         range=QUEUE_ROW_BULK_RANGE.format(min_row=min_row, max_row=max_row),
-    ).execute()
+    ))
     out: list[dict] = []
     for i, vals in enumerate(r.get("values", []), start=min_row):
         if not vals or not any((v or "").strip() for v in vals):
@@ -189,13 +217,13 @@ def append_row(sheets, values: list) -> int:
     if len(values) != QUEUE_ROW_COLUMN_COUNT:
         values = list(values) + [""] * (QUEUE_ROW_COLUMN_COUNT - len(values))
         values = values[:QUEUE_ROW_COLUMN_COUNT]
-    resp = sheets.spreadsheets().values().append(
+    resp = _execute_with_retry(sheets.spreadsheets().values().append(
         spreadsheetId=QUEUE_SHEET,
         range=f"'{QUEUE_TAB}'!A{QUEUE_DATA_START_ROW}",
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": [values]},
-    ).execute()
+    ))
     # appended range looks like 'Queue'!A14:K14 — pull the row number out.
     updated_range = resp.get("updates", {}).get("updatedRange", "")
     if "!" in updated_range:
@@ -216,7 +244,7 @@ def update_cells(sheets, row: int, **fields: str) -> None:
     for field, value in fields.items():
         rng = cell_for(sheets, row, field)
         data.append({"range": rng, "values": [[value]]})
-    sheets.spreadsheets().values().batchUpdate(
+    _execute_with_retry(sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=QUEUE_SHEET,
         body={"valueInputOption": "USER_ENTERED", "data": data},
-    ).execute()
+    ))
