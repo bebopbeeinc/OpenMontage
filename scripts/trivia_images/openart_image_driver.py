@@ -293,6 +293,62 @@ def _select_model_in_picker(page: Page, label: str) -> None:
     time.sleep(1.5)
 
 
+def _select_character(page: Page, character_name: str) -> None:
+    """Attach a saved character as a visual reference to the current image:
+    Add visual references -> "Characters & Worlds" pill -> click the named
+    character card in My Library. This keeps the Create-Image form intact
+    (the panel opens to the side). Screenshots each failing step to
+    .playwright/witw_char_fail_<step>.png.
+
+    Note: do NOT use the left-nav "Characters & Worlds" / "Character" /
+    "Browse Library" items — those navigate to the Character *section* and
+    leave the image form, hiding the generate controls.
+    """
+    out_dir = REPO / ".playwright"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def step(label: str, action) -> None:
+        try:
+            action()
+        except Exception as e:
+            try:
+                page.screenshot(path=str(out_dir / f"witw_char_fail_{label}.png"), full_page=True)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"_select_character failed at step {label!r}: {e}. "
+                f"See .playwright/witw_char_fail_{label}.png",
+            ) from e
+
+    def open_refs():
+        page.locator("text=/Add visual references/i").first.click()
+        time.sleep(1.0)
+    step("1_add_visual_references", open_refs)
+
+    # The in-form pill that opens the references panel to the character library.
+    def cw_pill():
+        page.locator("button:has-text('Characters & Worlds')").last.click(force=True)
+        time.sleep(1.2)
+    step("2_characters_and_worlds_pill", cw_pill)
+
+    # My Library is the default sub-tab; click it if present to be safe.
+    try:
+        ml = page.locator("button:has-text('My Library')")
+        if ml.count() > 0 and ml.first.is_visible():
+            ml.first.click(force=True, timeout=2_000)
+            time.sleep(0.6)
+    except Exception:
+        pass
+
+    def click_char():
+        name = page.locator(f"text=/{re.escape(character_name)}/").first
+        name.wait_for(timeout=15_000)
+        card = name.locator("xpath=ancestor::*[descendant::img][1]").first
+        card.click(force=True)
+        time.sleep(1.5)
+    step("3_click_character", click_char)
+
+
 def _set_variant_count(page: Page, target: int) -> None:
     if target < 1:
         raise ValueError(f"variant count must be ≥ 1, got {target}")
@@ -561,6 +617,7 @@ def generate_image(
     keep_source_ext: bool = True,
     reference_image_path: Optional[Path] = None,
     workspace: Optional[str] = OPENART_WORKSPACE,
+    character: Optional[str] = None,
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` image variants.
 
@@ -584,6 +641,9 @@ def generate_image(
         workspace: OpenArt team to make active before generating (defaults to
             "BebopBee Art Team"). Re-asserted on every run because OpenArt can
             silently swap the active team. Pass "" / None to skip the switch.
+        character: optional saved-character name to attach as a visual
+            reference before the prompt (via _select_character). The character
+            must live in the active `workspace`. None skips the step.
 
     Returns saved paths in newest-first gallery order, aligned with
     `output_paths` (output_paths[0] = newest variant).
@@ -611,6 +671,10 @@ def generate_image(
         _select_aspect(page, aspect)
         _select_resolution(page, resolution)
         _close_popover(page)
+
+        # Insert the saved character as a visual reference before the prompt.
+        if character:
+            _select_character(page, character)
 
         # Attach the reference BEFORE entering the prompt so the upload has
         # time to settle while we fill the rest of the form. The wait inside
