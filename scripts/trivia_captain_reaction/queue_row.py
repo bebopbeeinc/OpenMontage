@@ -1,10 +1,10 @@
 """Posts_Reaction queue schema, reader, and writer (workflow-state SoT).
 
 Sister of scripts/trivia_reaction/queue_row.py — IDENTICAL 12-column schema.
-The only difference is location: this pipeline's workflow state lives on the
-dailytrivia.tc Post Calendar in a dedicated `Posts_Reaction` tab (alongside
-Posts / Posts_Quiz / Posts_2T1L), rather than in ellie's standalone
-TriviaReactionQueue sheet.
+The only difference is location: this pipeline's workflow state lives on its
+own dedicated `@archibald.travelcrush — Post Calendar` spreadsheet in a
+`Posts_Reaction` tab, rather than in ellie's standalone TriviaReactionQueue
+sheet.
 
 Per-row Status, Drive Link, and OpenArt Prompt live here. The trivia CONTENT
 (Question / CorrectAnswer / CorrectExplanation) is owned by the daily-trivia +
@@ -26,9 +26,10 @@ SA_PATH = Path(os.environ.get(
     str(Path.home() / ".google" / "claude-sheets-sa.json"),
 ))
 
-# Pinned IDs. The dailytrivia.tc Post Calendar (shared with the SA), dedicated
-# Posts_Reaction tab. Same spreadsheet that hosts Posts / Posts_Quiz / Posts_2T1L.
-QUEUE_SHEET = "1EzucrS6yUPfodtt7WVuvW3PjZ1yhWUgfWUowPkMP6Eg"
+# Pinned IDs. Dedicated `@archibald.travelcrush — Post Calendar` spreadsheet
+# (in the @archibald.travelcrush shared-drive folder, shared with the SA),
+# Posts_Reaction tab.
+QUEUE_SHEET = "1P2_S-1P6K2fLMzEseIAQ1aq8lemMGRT-P2M2cX2_gG0"
 QUEUE_TAB = "Posts_Reaction"
 QUEUE_HEADER_ROW = 2
 QUEUE_DATA_START_ROW = 3

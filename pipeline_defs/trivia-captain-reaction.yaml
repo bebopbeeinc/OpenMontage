@@ -5,11 +5,9 @@ description: >
   daily-trivia spreadsheet — IDENTICAL format to trivia-reaction
   (ellie.travelcrush), with one creative change: the on-camera avatar is
   "Captain" Archibald (a 70-year-old lifelong world traveler, amused
-  disbelief, never anger) instead of ellie.travelcrush. Built as a controlled
-  A/B test for the dailytrivia.tc account: hold ellie's proven reaction
-  format constant and swap ONLY the character, to test whether the Captain
-  character itself is hurting reach (after the 2T1L format underperformed
-  there).
+  disbelief, never anger) instead of ellie.travelcrush. Holds ellie's proven
+  reaction format constant and swaps ONLY the character, running on the
+  archibald.travelcrush account.
 
   For one Day N, the pipeline resolves the trivia Question / CorrectAnswer /
   CorrectExplanation via the LocalizedTextConfig Uid lookup, drafts VO copy
@@ -24,7 +22,7 @@ description: >
   pure character swap on ellie's format.
 
   Orchestration mirrors trivia-reaction: the Posts_Reaction tab on the
-  dailytrivia.tc Post Calendar is the human-facing review surface (per-row
+  @archibald.travelcrush Post Calendar is the human-facing review surface (per-row
   Status / Drive Link / OpenArt Prompt columns); in-repo execution state lives
   under projects/trivia-captain-reaction/<slug>/artifacts/ as standard
   canonical artifacts. The select stage reads one queue row + the matching
@@ -100,10 +98,10 @@ compatible_playbooks:
 #
 # - DailyTriviaConfig (DEV) is READ-ONLY content, shared with the sister pipelines.
 # - LocalizedTextConfig (DEV) is READ-ONLY text dictionary, shared too.
-# - The dailytrivia.tc Post Calendar's Posts_Reaction tab is the workflow-state
-#   SoT for THIS pipeline (alongside Posts / Posts_Quiz / Posts_2T1L).
-# - The Drive folder is the dailytrivia.tc deliverables folder (shared with the
-#   quiz / 2T1L pipelines).
+# - The @archibald.travelcrush Post Calendar's Posts_Reaction tab is the
+#   workflow-state SoT for THIS pipeline (dedicated spreadsheet).
+# - The Drive folder is the @archibald.travelcrush/Videos deliverables folder
+#   (dedicated to this pipeline).
 external_state:
   - kind: google_sheet
     id: 1G1iffAILfxvfF_JZx7CWNTi9IF1y_LyKmi9hrgWGGfk
@@ -125,13 +123,14 @@ external_state:
       Shared. Rows 1-3 banner/type/locale, row 4 = header, data starts row 5.
       Col A = Uid, col B = EN. EN-only for ship-1.
   - kind: google_sheet
-    id: 1EzucrS6yUPfodtt7WVuvW3PjZ1yhWUgfWUowPkMP6Eg
+    id: 1P2_S-1P6K2fLMzEseIAQ1aq8lemMGRT-P2M2cX2_gG0
     tab: Posts_Reaction
     role: source_of_truth
     auth: service_account
     notes: >
-      dailytrivia.tc Post Calendar, dedicated Posts_Reaction tab (added by
-      scripts/trivia_captain_reaction/seed_sheet.py). Row 1 = banner, row 2 =
+      @archibald.travelcrush — Post Calendar (dedicated to this pipeline),
+      Posts_Reaction tab (seeded by scripts/trivia_captain_reaction/seed_sheet.py).
+      Row 1 = banner, row 2 =
       header. Data starts at row 3. Columns (IDENTICAL to TriviaReactionQueue):
         A Day | B Slug | C Status | D Question (EN) | E Correct Answer (EN) |
         F Hook VO | G Fact VO | H Kicker VO | I Drive Link (captioned final) |
@@ -140,12 +139,12 @@ external_state:
       The pipeline owns C/F/G/H/I/J/K/L; humans own A/B (and may override
       anything). Per-row feedback flows through the chat, not the sheet.
   - kind: google_drive_folder
-    id: 1930CVitXd4d6BsZ39EleWyxmtsgaXVGY
+    id: 1e-0-FLt-cRMMfwV1b5xR4RaMtSeDwNBz
     role: deliverable_drop
     auth: service_account
     notes: >
-      dailytrivia.tc deliverables folder (shared with the quiz / 2T1L
-      pipelines). publish.py uploads renders here. First upload is a new file;
+      @archibald.travelcrush/Videos deliverables folder (dedicated to this
+      pipeline). publish.py uploads renders here. First upload is a new file;
       subsequent re-renders for the same row replace the same Drive file in
       place so the queue Drive Link (col I) stays stable.
 

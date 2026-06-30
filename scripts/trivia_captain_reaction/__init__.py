@@ -4,15 +4,13 @@ Sister of scripts/trivia_reaction/ (the ellie.travelcrush reaction pipeline).
 Same format, same Seedance mechanics, same Remotion compose path — the ONLY
 creative change is the avatar: a locked OpenArt character reference
 (`Captain Archibald`, a 70-year-old male lifelong world traveler) instead of
-`ellie.travelcrush`. Built to A/B test whether the Captain character itself
-is hurting reach on the dailytrivia.tc account, holding ellie's proven
-reaction format constant.
+`ellie.travelcrush`, holding ellie's proven reaction format constant.
 
 Reads daily-trivia rows, drives OpenArt with the locked character reference,
 assembles a 13-15s vertical reel with warm-purple-pill word-by-word captions,
-and uploads to the dailytrivia.tc Drive folder. Workflow state lives in the
-`Posts_Reaction` tab on the dailytrivia.tc Post Calendar (alongside
-Posts / Posts_Quiz / Posts_2T1L).
+and uploads to the @archibald.travelcrush/Videos Drive folder. Workflow state
+lives in the `Posts_Reaction` tab on the dedicated @archibald.travelcrush
+Post Calendar spreadsheet.
 
 Same patterns as the sister pipelines:
 - Per-row workspace under projects/trivia-captain-reaction/<slug>/

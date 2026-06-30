@@ -26,7 +26,7 @@ queue it.
 |---|---|---|
 | Sheet | DailyTriviaConfig (DEV) | Trivia content source |
 | Sheet | LocalizedTextConfig (DEV) | Uid → EN dictionary |
-| Sheet | dailytrivia.tc Post Calendar — Posts_Reaction tab | Workflow-state SoT |
+| Sheet | @archibald.travelcrush Post Calendar — Posts_Reaction tab | Workflow-state SoT |
 | Script | `scripts/trivia_captain_reaction/select_row.py` | The CLI that does all of this |
 | Auth | `~/.google/claude-sheets-sa.json` | Sheets read+write access |
 | Schema | `schemas/artifacts/brief.schema.json` | Artifact validation |

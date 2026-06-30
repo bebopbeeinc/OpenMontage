@@ -14,7 +14,8 @@ the daily-trivia sheet; your job is to:
    out" register, voiced as the Captain — amused disbelief, worldly,
    never angry, never lecturing.
 2. **Choose a varied backdrop** from the style playbook palette,
-   appropriate to the fact's vibe and to a well-traveled older man's world.
+   appropriate to the fact's vibe — the palette is held identical to
+   ellie.travelcrush's so the A/B test isolates the character, not the setting.
 3. **Assemble one OpenArt prompt** that locks the character reference,
    describes the acting beats, names the backdrop, **embeds the three
    spoken lines, and gives Seedance 2.0 a voice direction**. Seedance
@@ -33,7 +34,7 @@ keep the fact verbatim or compress it; never embellish.
 |---|---|---|
 | Artifact | `projects/trivia-captain-reaction/<slug>/artifacts/brief.json` | Question / CorrectAnswer / CorrectExplanation |
 | Playbook | `styles/trivia-captain-reaction.yaml` | Backdrop palette, OpenArt prompt template, voice spec |
-| Sheet | Posts_Reaction tab (dailytrivia.tc Post Calendar) | Write Hook/Fact/Kicker VO back to F/G/H |
+| Sheet | Posts_Reaction tab (@archibald.travelcrush Post Calendar) | Write Hook/Fact/Kicker VO back to F/G/H |
 | Schema | `schemas/artifacts/script.schema.json` | Artifact validation |
 
 ## Process
@@ -54,8 +55,8 @@ Reference reel structure (ported 1:1 from trivia-reaction; ~15s, 30fps):
 | Beat | Duration | Content |
 |---|---|---|
 | hook + fact (one continuous setup sentence) | ~10s | "So I just found out that…" → builds to the absurd detail |
-| (amused laugh/disbelief break — Seedance produces this) | ~2s | a warm disbelieving chuckle, no words |
-| kicker (short punchline through the chuckle) | ~3s | the "can you believe it" closing line |
+| (amused laugh/disbelief break — Seedance produces this) | ~2s | a delighted laugh that gets away from him, no words |
+| kicker (short punchline through the laugh) | ~3s | the "can you believe it" closing line |
 
 The brief artifact still uses three sections (hook / fact / kicker) for
 caption-page bookkeeping, but **conceptually hook+fact are ONE setup
@@ -109,13 +110,15 @@ punchline ~10.4-14.4s.)
 ### 3. Pick A Backdrop
 
 Read `styles/trivia-captain-reaction.yaml` → `backdrops.prompt_palette`
-and pick one appropriate to the fact's vibe — drawn from a well-traveled
-older man's world:
+and pick one appropriate to the fact's vibe. **The palette is held
+IDENTICAL to ellie.travelcrush's on purpose** — this A/B test changes only
+the avatar, so the environments must match Ellie's. Do NOT age the palette
+up to an "older man's world"; that re-introduces a confound.
 
-- Animal facts → cozy living room with souvenirs / sunroom
-- Food facts → sunlit kitchen / café corner
-- Travel facts → balcony at golden hour / train window seat / hotel desk
-- Science/history facts → study with bookshelves / den with a wall of maps
+- Animal facts → cozy living room / plant corner
+- Food facts → kitchen / cafe
+- Travel facts → balcony at golden hour / train window seat
+- Science facts → office nook / bookshop
 - Default → varied — rotate through the palette
 
 **Variation rule:** Do not pick the same backdrop two days in a row.
@@ -154,10 +157,12 @@ so the viewer still sees the real word while Seedance hears something it
 can pronounce.
 
 **`{acting_arc_prose}`**: a single prose paragraph telling Seedance the
-emotional arc as a story — relaxed worldly start → smile builds →
-genuine amused laugh/disbelief break (head shake, hand to mouth) →
-recover and deliver the punchline through the chuckle. Pull the
-playbook's `avatar.acting_beats.arc` and adapt it minimally. **Do not
+emotional arc as a story — relaxed worldly start, eyes twinkling →
+grin spreads, fighting to keep a straight face → the laugh gets away
+from him (head shake, hand to the forehead) → recover and deliver the
+punchline still laughing through it. Worldly 70-yo man, but young and
+playful in spirit. Pull the playbook's `avatar.acting_beats.arc` and
+adapt it minimally. **Do not
 use beat names ("hook"/"fact"/"kicker") or timing markers ("0-2s",
 "12-15s") in the prompt body** — Seedance reads them aloud.
 
@@ -165,15 +170,15 @@ use beat names ("hook"/"fact"/"kicker") or timing markers ("0-2s",
 intentionally open ("relaxed, intimate, worldly selfie") rather than
 locking a specific hand position.
 
-**`{backdrop_description}`**: one of the palette entries, customized to
-the fact's geographic / topical vibe. Example:
+**`{backdrop_description}`**: one of the palette entries (the Ellie-matched
+palette), customized to the fact's geographic / topical vibe. Example:
 
-> a warm wood-paneled study lined with bookshelves and framed photos
-> from decades of travel, a globe on the desk, soft tungsten light
+> a sunny kitchen with open shelves and a worn wooden counter, soft
+> morning light coming through the window
 
 **Voice direction.** Use the playbook's `avatar.voice_direction` string
 verbatim. It explicitly explains that `[laughs]` cues are an audible
-amused chuckle, not a silent gap, and that the Captain references his
+playful laugh he can't quite hold in, not a silent gap, and that the Captain references his
 wife (never a husband).
 
 **Critical:** The OpenArt **character reference** carries Archibald's
@@ -205,9 +210,8 @@ paragraphs separated by a blank line:
 - **No sea-captain / nautical puns.**
 
 **Paragraph 2 — hashtags** (5 total: 2 brand + 3 niche, on one line):
-- **Brand tags (fixed, always first):** `#DailyTrivia #IJustFoundOut`
-  (confirm/adjust the account anchor tag with the user if dailytrivia.tc
-  uses a different one)
+- **Brand tags (fixed, always first):** `#TravelCrush #IJustFoundOut`
+  (matches the ellie.travelcrush reaction pipeline)
 - **Niche tags (3, varied per row):** mix specific geography + topic
   (e.g. `#Switzerland #GuineaPigs #SwissLaws`)
 - All 3 niche tags relevant to THIS fact — no boilerplate niche block
@@ -219,13 +223,13 @@ paragraphs separated by a blank line:
 ```
 Been to Switzerland twice and nobody mentioned the guinea-pig law.
 
-#DailyTrivia #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
+#TravelCrush #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
 ```
 
 ```
 Sixty years of travel and I'm only now hearing about the tomato war.
 
-#DailyTrivia #IJustFoundOut #LaTomatina #Spain #Buñol
+#TravelCrush #IJustFoundOut #LaTomatina #Spain #Buñol
 ```
 
 The full caption (body + blank line + hashtags) goes into `script.json`

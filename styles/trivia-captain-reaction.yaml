@@ -1,13 +1,13 @@
 identity:
   name: "Trivia Captain Reaction"
   category: short-form
-  mood: amused disbelief, worldly, in-on-the-joke, hand-held-selfie intimate
+  mood: playful amused disbelief, worldly but young-at-heart, in-on-the-joke, hand-held-selfie intimate
   # Inherits the trivia-reaction (ellie.travelcrush) v9 pace 1:1 — this
   # pipeline is a CHARACTER swap, not a format change. The reel is ONE
   # continuous setup sentence (~10s) → a genuine amused laugh/disbelief
-  # break (~2s) → SHORT punchline through the chuckle (~3s). Built to A/B
-  # test whether the Captain Archibald character (vs Ellie) is what's
-  # hurting reach on dailytrivia.tc, holding the proven format constant.
+  # break (~2s) → SHORT punchline through the chuckle (~3s). Runs the proven
+  # ellie.travelcrush reaction format with the Captain Archibald character on
+  # the archibald.travelcrush account.
   pace: setup 0-10s (continuous build), amused laugh/disbelief break 10-12s, punchline 12-15s
   best_for: >
     Single-fact viral shorts in the "So I just found out..." reaction format,
@@ -31,8 +31,8 @@ visual_language:
   composition: >
     9:16 vertical. Subject centered or slightly right of center, head-and-shoulders
     framing (medium close-up). Varied backdrop per row — backdrop choice rotates
-    across rooms / environments tied to the fact's vibe and to a well-traveled
-    older man's world.
+    across rooms / environments tied to the fact's vibe. Palette is held IDENTICAL
+    to ellie.travelcrush's so the A/B test isolates the character, not the setting.
   texture: photoreal, phone-camera-style, slight handheld micro-wobble
 
 avatar:
@@ -46,11 +46,12 @@ avatar:
     a new look; never describe Archibald's face from text in the per-row prompt.
     NO reference image / NO tablet splash — this is a pure character swap on
     ellie's reaction format.
-  # Acting spec ported from trivia-reaction v9, re-gendered and aged up to the
-  # Archibald register. The reel still has a REAL audible break between the
-  # setup sentence and the punchline — but for a 70-year-old it reads as an
-  # amused, disbelieving chuckle (head shake, hand over mouth, "can you
-  # believe this" energy), NOT helpless giggling.
+  # Acting spec ported from trivia-reaction v9, re-gendered to a 70-year-old
+  # man but holding Ellie's YOUNG, PLAYFUL spirit — he tries to keep a straight
+  # face and can't. The reel has a REAL audible break between the setup
+  # sentence and the punchline: a delighted laugh that gets away from him
+  # (head shake, hand to the forehead, "can you believe this" energy). Young
+  # at heart, unguarded — NOT a reserved, dignified chuckle.
   #
   # CRITICAL: write the acting as PROSE describing the emotional arc.
   # Do NOT use timing markers like "0-2s:", "12-15s:", or beat names
@@ -63,42 +64,51 @@ avatar:
       story of how the Captain breaks into amused disbelief at the
       absurdity of the fact:
 
-      1. STARTS RELAXED — seated selfie, eyes warm and engaged with the
-         camera, a knowing half-smile already there like an old friend
-         about to share something delightful over a drink. Worldly and
-         unhurried. NOT deadpan, NOT a lecturing professor.
+      1. STARTS RELAXED — seated selfie, eyes warm and already
+         twinkling at the camera, a mischievous half-smile like an old
+         friend who can't wait to share something delightful. Worldly
+         but young at heart. NOT deadpan, NOT a lecturing professor.
       2. BUILDS THROUGH THE SETUP — as he works through the long
-         sentence his smile keeps building. Voice warms with growing
-         disbelief. Eyes crinkle. A small "after all these years..."
-         wonder creeps in. He holds it together.
-      3. BREAKS INTO AMUSED DISBELIEF — the moment he finishes the
-         setup sentence the absurdity lands. A genuine, warm laugh:
-         head shakes slowly, eyes squeeze, a hand comes up to his
-         mouth or brow, shoulders bounce once, audible chuckle/exhale
-         for ~2s, no words. Delight, never anger.
-      4. RECOVERS THROUGH THE PUNCHLINE — recovers just enough to
-         deliver the short closing line still chuckling: head tilts
-         back, a finger lifted in a small "and-can-you-believe-it"
-         gesture, eyes bright, voice carrying the laugh.
+         sentence his grin keeps spreading. Voice bubbles with growing
+         disbelief. Eyes crinkle. He's clearly fighting to keep a
+         straight face — and losing.
+      3. THE LAUGH GETS AWAY FROM HIM — the moment he finishes the
+         setup sentence the absurdity gets the better of him and the
+         laugh escapes: head tips back then shakes, eyes crinkle shut,
+         a hand comes up to his forehead, shoulders bounce, a delighted
+         can-you-believe-this laugh for ~2s, no words. Unguarded and
+         playful — delight, never anger.
+      4. RECOVERS THROUGH THE PUNCHLINE — pulls himself together just
+         enough to deliver the short closing line still laughing
+         through it: head tilts back, a finger lifted in a small
+         "and-can-you-believe-it" gesture, eyes bright and gleeful,
+         voice carrying the laugh.
     pose: >
       Relaxed seated selfie — phone held close at eye level, like he's
       video-calling an old friend to share the news. Do NOT lock a
       specific hand position; give Seedance the energy ("relaxed,
-      intimate, worldly selfie") and let the character ref handle the
+      intimate, playful selfie") and let the character ref handle the
       physical specifics.
   audio_on_openart: true                 # Seedance 2.0 generates native synced voice
   voice_direction: >
     Warm, worldly, and casual from the start — an older gentleman
     gossiping with a close friend, already faintly amused by what he's
-    about to share. Through the long setup sentence his voice warms with
-    growing disbelief, the smile leaking into every word. The [laughs]
-    cues in the spoken line represent a real audible break — a genuine
-    amused chuckle, warm exhale, breathy ha-ha of disbelief, no actual
-    words, for about two full seconds (a delighted "can you believe
-    this," never a guffaw, never sarcasm). He then delivers the short
-    closing line through the ongoing chuckle — voice carrying the laugh,
-    smile audible under every word. Male, 60s-70s, warm baritone,
-    intimate selfie energy. Never deadpan, never lecturing, never angry.
+    about to share. Through the long setup sentence his voice bubbles
+    with growing disbelief, the smile leaking into every word, like he's
+    fighting to keep a straight face. The [laughs] cues in the spoken
+    line represent a real audible break — a laugh that gets away from
+    him, warm and breathy, the can't-quite-keep-it-together ha-ha of
+    disbelief, no actual words, for about two full seconds (a delighted,
+    playful "can you believe this," unguarded but never mean, never
+    sarcasm). He then delivers the short closing line through the
+    ongoing laughter — voice carrying the laugh,
+    smile audible under every word. Voice identity (keep this CONSTANT every
+    render so the Captain sounds like the same man each time): an American
+    man, late 60s to early 70s, with a warm, weathered, lightly gravelly
+    baritone and a relaxed General American accent — think a retired PBS
+    travel-show host telling a story over coffee. Unhurried, easygoing
+    cadence. NOT British, NOT trans-Atlantic, NOT a gruff cowboy drawl.
+    Intimate selfie energy. Never deadpan, never lecturing, never angry.
     Never says anything meta about his own laughing — the warmth in his
     voice is the only acknowledgment. When the fact touches family or
     home life, he references his WIFE (he is a married 70-year-old man),
@@ -107,22 +117,24 @@ avatar:
 backdrops:
   strategy: varied_per_row
   rotation: >
-    The script-director picks a backdrop appropriate to the fact's vibe,
-    drawn from a well-traveled older man's world. Avoid repeating the same
-    setting two days in a row.
+    The script-director picks a backdrop appropriate to the fact's vibe.
+    Avoid repeating the same setting two days in a row. This palette is held
+    IDENTICAL to styles/trivia-reaction.yaml (ellie.travelcrush) on purpose —
+    the A/B test changes ONLY the avatar, so the environments must match Ellie's.
+    Do not re-introduce an "older man's world" palette; that confounds the test.
   prompt_palette:
-    - "study lined with bookshelves and framed travel photos, warm tungsten light"
-    - "sunlit kitchen with a worn wooden table, morning light"
-    - "balcony at golden hour with a distant city skyline behind him"
-    - "cozy living room with a globe and souvenirs from decades of travel"
+    - "sunny kitchen with open shelves, morning light"
+    - "small cafe corner, cappuccino in front of him"
+    - "balcony at golden hour with city lights coming on behind"
+    - "cozy living room with eclectic art on the wall"
     - "train window seat, blurred landscape passing"
-    - "veranda overlooking a garden, soft late-afternoon light"
-    - "den with a leather armchair and a wall of maps"
-    - "small café corner, espresso in front of him"
-    - "sunroom with potted plants, soft daylight"
-    - "hotel room desk with a window onto an unfamiliar street"
-    - "porch at dusk, warm lamp glow"
-    - "workshop nook with travel curios on the shelves"
+    - "beach boardwalk at dusk, soft warm light"
+    - "indoor plant corner, soft daylight"
+    - "tiled bathroom mirror selfie"
+    - "bookshop aisle, warm tungsten light"
+    - "art gallery white wall, single canvas behind"
+    - "rooftop pool deck, late afternoon"
+    - "scandi office nook, plant + lamp"
   rules:
     - "Always include a soft natural light direction in the prompt"
     - "Keep the backdrop quiet — no busy crowds; backdrop is decoration not story"
@@ -204,8 +216,8 @@ asset_generation:
       - "NEVER use beat names in the prompt body (no 'hook', 'fact', 'kicker', 'punchline', 'setup' as labels followed by ':')."
       - "NEVER use timing markers in the prompt body (no '0-2s', '12-15s', etc) — Seedance reads them aloud."
       - "Concatenate hook+fact into ONE setup sentence; describe the rest as prose."
-      - "Use [laughs] x4 between setup and punchline — stronger anchor than 1-2 cues. For Archibald these read as a warm amused chuckle, not helpless giggles."
-      - "Voice direction explains that [laughs] cues represent an audible break (not a silent gap), with a delighted disbelieving chuckle."
+      - "Use [laughs] x4 between setup and punchline — stronger anchor than 1-2 cues. For Archibald these read as a delighted laugh that gets away from him — playful, unguarded, can't-keep-it-together (still warm, never a mean cackle)."
+      - "Voice direction explains that [laughs] cues represent an audible break (not a silent gap), with a delighted, playful laugh he can't quite hold in."
       - "Punchline ends with '.' or '!' — '!' gives Seedance a stronger inflection cue."
       - "Phonetically respell rare proper nouns / loanwords (animals, place names, foods) inside the SPOKEN line only — Seedance reads spoken_lines literally for native VO and stumbles on unfamiliar words. Use a LOWERCASE, natural-looking respelling that anchors the vowel (e.g. quokka -> 'kwocka' where '-ocka' forces the short-o). Do NOT use ALL-CAPS hyphenated forms — Seedance reads those as letters: 'KWOK-uh' came out as 'cougar', 'kwocka' came out clean. Keep beats spelled correctly so the burned-in captions stay right."
       - "When the fact touches family/home, the Captain refers to his WIFE, never a husband."
@@ -228,7 +240,7 @@ overlays:
 
 # Instagram post caption (NOT the on-video caption — that's `overlays`).
 # Body voice ported from trivia-reaction, but in the Captain's worldly
-# register. Hashtags swapped to the dailytrivia.tc account.
+# register. Brand hashtags match the ellie.travelcrush reaction pipeline.
 post_caption:
   structure: |
     Two paragraphs separated by a blank line:
@@ -257,7 +269,7 @@ post_caption:
   hashtags:
     count: 5                       # 2 brand + 3 niche
     brand_tags:                    # FIXED — same across every row, brand anchor.
-      - "#DailyTrivia"             # account handle (dailytrivia.tc) — confirm/adjust if the account uses a different anchor tag
+      - "#TravelCrush"             # brand handle (matches the ellie.travelcrush reaction pipeline)
       - "#IJustFoundOut"           # series / format tag (shared with the reaction format)
     niche_tags:
       count: 3
@@ -277,12 +289,12 @@ post_caption:
       caption: |
         Been to Switzerland twice and nobody mentioned the guinea-pig law.
 
-        #DailyTrivia #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
+        #TravelCrush #IJustFoundOut #Switzerland #GuineaPigs #SwissLaws
     - row: "la-tomatina-tomato-fight"
       caption: |
         Sixty years of travel and I'm only now hearing about the tomato war.
 
-        #DailyTrivia #IJustFoundOut #LaTomatina #Spain #Buñol
+        #TravelCrush #IJustFoundOut #LaTomatina #Spain #Buñol
 
 remotion:
   composition_id: "TriviaWithBg"

@@ -60,6 +60,12 @@ ELLIE_ACCOUNTS = [
     {"platform": "Instagram", "handle": "ellie.travelcrush",
      "url": "https://www.instagram.com/ellie.travelcrush"},
 ]
+ARCHIBALD_ACCOUNTS = [
+    {"platform": "TikTok", "handle": "archibald.travelcrush",
+     "url": "https://www.tiktok.com/@archibald.travelcrush"},
+    {"platform": "Instagram", "handle": "archibald.travelcrush",
+     "url": "https://www.instagram.com/archibald.travelcrush"},
+]
 
 # Pipeline catalog — drives the launcher home page. Keep `path` in sync with
 # the mount call below + the `<base href>` in the pipeline's index.html.
@@ -165,11 +171,11 @@ PIPELINES = [
             "dailytrivia.tc test. Faithful clone of Trivia Reaction: same "
             "daily-trivia source and Seedance/Remotion path, but fronted by "
             "\"Captain\" Archibald with a warm-purple caption pill, publishing to "
-            "the dailytrivia.tc Drive account."
+            "the archibald.travelcrush account."
         ),
         "stability": "alpha",
         "archived": False,
-        "accounts": DAILYTRIVIA_ACCOUNTS,
+        "accounts": ARCHIBALD_ACCOUNTS,
     },
 ]
 

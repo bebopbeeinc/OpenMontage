@@ -11,7 +11,7 @@ User references the trivia-captain-reaction workflow. Triggers:
 
 For a one-off short, the daily trivia mobile game, or any non-reaction
 format, pick a different pipeline. This pipeline is specific to the
-"I just found out" reaction-reel format for the dailytrivia.tc account.
+"I just found out" reaction-reel format for the archibald.travelcrush account.
 
 ## Philosophy
 
@@ -20,7 +20,7 @@ Trivia-captain-reaction is **sheet-authoritative on two surfaces**:
 1. **DailyTriviaConfig (DEV)** + **LocalizedTextConfig (DEV)** own the
    *content* — Question / CorrectAnswer / CorrectExplanation. Pipeline
    never writes here. Resolved every run via `daily_trivia.read_daily_trivia_row`.
-2. **The Posts_Reaction tab on the dailytrivia.tc Post Calendar** owns the
+2. **The Posts_Reaction tab on the @archibald.travelcrush Post Calendar** owns the
    *workflow state* — Slug, Status, the three VO lines, Drive Link, and the
    assembled OpenArt Prompt. Pipeline writes here at select / script /
    compose / publish boundaries.
@@ -54,9 +54,9 @@ The three sheets, what each stage reads and writes:
 |---|---|---|---|
 | DailyTriviaConfig | DailyTriviaConfig (DEV) | all stages (via brief) | nothing |
 | LocalizedTextConfig | LocalizedTextConfig (DEV) | select (Uid→EN) | nothing |
-| dailytrivia.tc Post Calendar | Posts_Reaction | all stages | select, script, compose, publish |
+| @archibald.travelcrush Post Calendar | Posts_Reaction | all stages | select, script, compose, publish |
 
-Within the Posts_Reaction tab on the dailytrivia.tc Post Calendar:
+Within the Posts_Reaction tab on the @archibald.travelcrush Post Calendar:
 
 | Col | Field | Read | Written by |
 |---|---|---|---|

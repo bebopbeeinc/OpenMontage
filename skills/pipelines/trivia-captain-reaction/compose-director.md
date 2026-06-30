@@ -28,7 +28,7 @@ You are rendering the final mp4 by:
 
 The voice rides inside `bg.mp4` (Seedance native). Transcribe it to
 word-level timestamps. Per the playbook's `motion.transcribe_recommendation`,
-use a model strong enough to catch words spoken through the amused chuckle:
+use a model strong enough to catch words spoken through the laugh:
 `small.en`, `vad_filter=false`, `beam_size=5`. `base.en` drops words during
 the recovery line.
 

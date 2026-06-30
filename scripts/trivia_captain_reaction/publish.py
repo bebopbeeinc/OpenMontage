@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""Upload trivia-captain-reaction deliverables to the dailytrivia.tc Drive folder
-and write back to the Posts_Reaction queue row.
+"""Upload trivia-captain-reaction deliverables to the @archibald.travelcrush Drive
+folder and write back to the Posts_Reaction queue row.
 
 Two files per slug:
   1. <slug>.mp4       — captioned final render (the posted version). The
@@ -32,7 +32,7 @@ from scripts.trivia_captain_reaction import queue_row  # noqa: E402
 from scripts.trivia_captain_reaction.paths import project_dir  # noqa: E402
 
 SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
-DRIVE_FOLDER_ID = "1930CVitXd4d6BsZ39EleWyxmtsgaXVGY"   # dailytrivia.tc deliverables
+DRIVE_FOLDER_ID = "1e-0-FLt-cRMMfwV1b5xR4RaMtSeDwNBz"   # @archibald.travelcrush/Videos
 LIBRARY_DIR = REPO / "scripts" / "trivia_captain_reaction" / "library" / "clips"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -68,7 +68,7 @@ def find_row(sheets, slug: str) -> tuple[int, dict]:
 def _upload_or_replace(
     drive, local_path: Path, drive_name: str, existing_link: str,
 ) -> tuple[str, str]:
-    """Upload `local_path` to the dailytrivia.tc Drive folder as `drive_name`.
+    """Upload `local_path` to the @archibald.travelcrush Drive folder as `drive_name`.
     If `existing_link` resolves to a Drive file id, replace that file's content
     in place (preserves the link). Returns (webViewLink, action) where action
     is "created" or "replaced"."""

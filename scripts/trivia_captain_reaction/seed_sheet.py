@@ -1,20 +1,19 @@
-"""Add + populate the Posts_Reaction tab on the dailytrivia.tc Post Calendar.
+"""Add + populate the Posts_Reaction tab on the @archibald.travelcrush Post Calendar.
 
-The Post Calendar spreadsheet already exists and is shared with the service
-account (it hosts Posts / Posts_Quiz / Posts_2T1L). This script ADDS a new
-`Posts_Reaction` tab (never renames existing tabs), then lays out row 1
-(banner), row 2 (header from queue_row.HEADER_LABELS), bold/frozen header,
-and column widths.
+The Post Calendar spreadsheet (`@archibald.travelcrush — Post Calendar`,
+dedicated to this pipeline) is shared with the service account. This script
+ADDS a `Posts_Reaction` tab if missing (never renames existing tabs), then
+lays out row 1 (banner), row 2 (header from queue_row.HEADER_LABELS),
+bold/frozen header, and column widths.
 
 Setup:
   1. Confirm the SA (claude-sheets-config@travel-crush.iam.gserviceaccount.com)
      has Editor on the Post Calendar.
-  2. Run:  python scripts/trivia_captain_reaction/seed_sheet.py --sheet-id 1EzucrS6yUPfodtt7WVuvW3PjZ1yhWUgfWUowPkMP6Eg
-     (the --sheet-id default already points at the Post Calendar; queue_row.QUEUE_SHEET
-      is the source of truth.)
+  2. Run:  python scripts/trivia_captain_reaction/seed_sheet.py
+     (the --sheet-id default points at queue_row.QUEUE_SHEET, the source of truth.)
 
-The Drive renders folder is the existing dailytrivia.tc folder
-(publish.DRIVE_FOLDER_ID) — no new folder needed.
+The Drive renders folder is the @archibald.travelcrush/Videos folder
+(publish.DRIVE_FOLDER_ID).
 """
 from __future__ import annotations
 
@@ -30,8 +29,8 @@ from scripts.trivia_captain_reaction import queue_row  # noqa: E402
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 BANNER = (
-    "I Just Found Out — Captain Archibald reaction reels (dailytrivia.tc). "
-    "ellie.travelcrush's proven reaction format, Captain character A/B test. "
+    "I Just Found Out — Captain Archibald reaction reels (archibald.travelcrush). "
+    "ellie.travelcrush's proven reaction format, Captain character. "
     "Workflow-state SoT; trivia content resolved from DailyTriviaConfig."
 )
 

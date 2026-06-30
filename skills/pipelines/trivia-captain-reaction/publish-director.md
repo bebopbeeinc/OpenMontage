@@ -3,7 +3,7 @@
 ## When To Use
 
 The render has been frame-reviewed and the human has explicitly approved
-publication. Your job is to upload to the dailytrivia.tc Drive folder
+publication. Your job is to upload to the @archibald.travelcrush Drive folder
 and write back to the Queue row.
 
 **This stage NEVER auto-runs.** Per user memory: never auto-run publish
@@ -17,8 +17,8 @@ scripts. Always wait for explicit human OK in the current turn.
 | Artifact | `projects/trivia-captain-reaction/<slug>/artifacts/brief.json` | Slug, Day |
 | Render | `projects/trivia-captain-reaction/<slug>/renders/<slug>.mp4` | The deliverable |
 | Script | `scripts/trivia_captain_reaction/publish.py` | Drive upload + Queue write-back |
-| Drive | folder `1uDneOUH21xUqh4oifQTh5sqgIVk6EREg` | dailytrivia.tc |
-| Sheet | dailytrivia.tc Post Calendar — Posts_Reaction tab | Status + Drive Link write-back |
+| Drive | folder `1e-0-FLt-cRMMfwV1b5xR4RaMtSeDwNBz` | @archibald.travelcrush/Videos |
+| Sheet | @archibald.travelcrush Post Calendar — Posts_Reaction tab | Status + Drive Link write-back |
 | Auth | `~/.google/claude-sheets-sa.json` | Drive + Sheets RW |
 | Schema | `schemas/artifacts/publish_log.schema.json` | Artifact validation |
 
@@ -51,7 +51,7 @@ What it does:
 3. For each deliverable: if Queue!I (render) / Queue!L (clip) already
    has a Drive link → `drive.files().update` replaces the file content
    in place (link stays stable, useful for re-renders). Else →
-   `drive.files().create` uploads a new file to the dailytrivia.tc
+   `drive.files().create` uploads a new file to the @archibald.travelcrush
    folder using `<slug>.mp4` for the render or `<slug>_clip.mp4` for
    the raw clip.
 4. Write Queue!C = `Ready to publish`, Queue!I = render webViewLink,
@@ -88,7 +88,7 @@ auto-post via Instagram Graph API — out of scope for this pipeline
 version.)
 
 Tell the user: "Drive link in Queue row <N>, ready for you to post to
-dailytrivia.tc on Instagram."
+archibald.travelcrush on TikTok / Instagram."
 
 ### 5. Self-Review + Checkpoint
 
