@@ -354,6 +354,7 @@ function actionsCell(r) {
   const generating = slug && inFlight(slug, 'generate');
   const publishing = slug && inFlight(slug, 'publish');
   const marking    = slug && inFlight(slug, 'mark_published');
+  const scheduling = slug && inFlight(slug, 'schedule_buffer');
 
   const reviewBtn = f.render_exists
     ? `<button class="small" onclick="openReview('${escapeHtml(slug)}', ${f.render_mtime || 0})">▷ Review</button>`
@@ -400,6 +401,19 @@ function actionsCell(r) {
        </button>`
     : '';
 
+  // Schedule to Buffer: enabled once a Drive link exists (publish has run) and
+  // a caption is written — Buffer references the render from Drive and posts to
+  // ellie's TikTok + IG. Opens a modal to pick the schedule time + channels.
+  const canBuffer = slug && status === 'Ready to publish'
+                    && (r.drive_link||'').trim() && (r.caption||'').trim() && !generating;
+  const bufferBtn = canBuffer
+    ? `<button class="small" ${scheduling?'disabled':''}
+         title="Schedule this reel to ellie's TikTok + Instagram via Buffer"
+         onclick="openBufferModal('${escapeHtml(slug)}')">
+         ${stateBadge(scheduling)} ◷ Schedule to Buffer
+       </button>`
+    : '';
+
   // Mark as Published: enabled only when a Drive link exists (i.e. publish has run).
   // Status-only flip; the human's signal that the IG post is live.
   const canMark = slug && status === 'Ready to publish' && (r.drive_link||'').trim() && !generating;
@@ -425,7 +439,7 @@ function actionsCell(r) {
        </button>`
     : '';
 
-  return `<div class="btn-row">${pullBtn}${reviewBtn}${genBtn}${pubBtn}${markBtn}</div>`;
+  return `<div class="btn-row">${pullBtn}${reviewBtn}${genBtn}${pubBtn}${bufferBtn}${markBtn}</div>`;
 }
 
 function filesCell(r) {
@@ -528,11 +542,13 @@ function renderRows() {
     const klass = statusPillClass(status);
     const rowState = (r.slug && (inFlight(r.slug, 'generate') === 'running'
                                 || inFlight(r.slug, 'publish') === 'running'
-                                || inFlight(r.slug, 'mark_published') === 'running'))
+                                || inFlight(r.slug, 'mark_published') === 'running'
+                                || inFlight(r.slug, 'schedule_buffer') === 'running'))
                    ? 'row-running'
                    : (r.slug && (inFlight(r.slug, 'generate') === 'queued'
                                 || inFlight(r.slug, 'publish') === 'queued'
-                                || inFlight(r.slug, 'mark_published') === 'queued'))
+                                || inFlight(r.slug, 'mark_published') === 'queued'
+                                || inFlight(r.slug, 'schedule_buffer') === 'queued'))
                    ? 'row-queued' : '';
     return `
       <tr class="${rowState}">
@@ -674,6 +690,94 @@ async function runMarkPublished(slug) {
     refreshActive();
   } catch (e) {
     toast(`mark failed: ${e.message}`, 'err');
+  }
+}
+
+function openBufferModal(slug) {
+  if (!slug) return;
+  const row = allRows.find(r => r.slug === slug) || {};
+  const caption = (row.caption || '').trim();
+  // Default the picker to ~1 hour out, on the next quarter hour, in LOCAL time.
+  const d = new Date(Date.now() + 60*60*1000);
+  d.setMinutes(Math.ceil(d.getMinutes()/15)*15, 0, 0);
+  const pad = n => String(n).padStart(2, '0');
+  const localVal = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+                 + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const root = $('modal-root');
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="script-modal" onclick="event.stopPropagation()" style="width: min(560px, 100%);">
+        <h2>Schedule to Buffer — ${escapeHtml(slug)}</h2>
+        <div class="modal-meta">
+          <b>Instagram</b> — captioned clip, auto-published at the time below.<br>
+          <b>TikTok</b> — no-caption clip; Buffer sends a phone reminder at that
+          time and you finish in the TikTok app (enable auto-captions there).
+        </div>
+        <div class="field">
+          <label>Channels</label>
+          <div style="display:flex; gap:18px; padding:2px 0;">
+            <label style="text-transform:none; letter-spacing:0; color:var(--text); display:flex; gap:6px; align-items:center;">
+              <input type="checkbox" id="buf-tiktok" checked style="width:auto;"> TikTok</label>
+            <label style="text-transform:none; letter-spacing:0; color:var(--text); display:flex; gap:6px; align-items:center;">
+              <input type="checkbox" id="buf-instagram" checked style="width:auto;"> Instagram</label>
+          </div>
+        </div>
+        <div class="field">
+          <label>Posting time (your local time)</label>
+          <input type="datetime-local" id="buf-due" value="${localVal}" step="900" style="width:auto;">
+          <div class="wc">
+            <label style="text-transform:none; letter-spacing:0; color:var(--muted); display:inline-flex; gap:6px; align-items:center;">
+              <input type="checkbox" id="buf-queue" style="width:auto;">
+              Ignore time — add to Buffer's next available queue slot</label>
+          </div>
+        </div>
+        <div class="field">
+          <label style="text-transform:none; letter-spacing:0; color:var(--text); display:flex; gap:6px; align-items:center;">
+            <input type="checkbox" id="buf-draft" style="width:auto;">
+            Save as draft (won't auto-publish — you send it from Buffer)</label>
+        </div>
+        <div class="field">
+          <label>Caption (read-only — edit in the Caption column / sheet)</label>
+          <textarea readonly style="min-height:90px;">${escapeHtml(caption || '(no caption set)')}</textarea>
+        </div>
+        <div class="actions-row">
+          <span class="grow"></span>
+          <button onclick="closeModal()">Cancel</button>
+          <button class="primary" onclick="submitBuffer('${escapeHtml(slug)}')">Schedule</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function submitBuffer(slug) {
+  const tk = $('buf-tiktok').checked, ig = $('buf-instagram').checked;
+  const channels = [tk && 'tiktok', ig && 'instagram'].filter(Boolean).join(',');
+  if (!channels) { toast('pick at least one channel', 'err'); return; }
+  let due = '';
+  if (!$('buf-queue').checked) {
+    const v = $('buf-due').value;
+    if (!v) { toast('pick a time or choose the queue slot', 'err'); return; }
+    // datetime-local is naive local time; toISOString() converts to UTC Z.
+    const dt = new Date(v);
+    if (isNaN(dt.getTime())) { toast('invalid date', 'err'); return; }
+    if (dt.getTime() < Date.now()) { toast('time is in the past', 'err'); return; }
+    due = dt.toISOString();
+  }
+  const draft = $('buf-draft').checked;
+  closeModal();
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({kind: 'schedule_buffer', slug, due, channels, draft}),
+    });
+    toast(`buffer ${draft ? 'draft' : 'schedule'} queued (${slug} → ${channels})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`schedule failed: ${e.message}`, 'err');
   }
 }
 

@@ -60,7 +60,7 @@ QUEUE_SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{queue_row.QUEUE_SHEET}/edit"
 )
 
-JobKind = Literal["select", "generate", "publish", "mark_published", "pull"]
+JobKind = Literal["select", "generate", "publish", "mark_published", "pull", "schedule_buffer"]
 JobStatus = Literal["queued", "running", "success", "error"]
 
 
@@ -322,6 +322,28 @@ async def _run_publish(job: Job) -> None:
         raise RuntimeError(f"publish failed (exit {rc})")
 
 
+async def _run_schedule_buffer(job: Job) -> None:
+    """Schedule the published render to TikTok + Instagram via Buffer.
+    Requires the row to already carry a Drive link (Publish run first) — the
+    render is referenced from Drive, not re-uploaded. Status is left untouched;
+    'Mark as Published' remains the human signal that posts are actually live."""
+    if not job.slug:
+        raise RuntimeError("schedule_buffer job missing 'slug'")
+    py = sys.executable
+    cmd = [py, "-m", "scripts.trivia_reaction.buffer_push", job.slug]
+    due = (job.extra.get("due") or "").strip()
+    if due:
+        cmd += ["--due", due]
+    channels = (job.extra.get("channels") or "").strip()
+    if channels:
+        cmd += ["--channels", channels]
+    if job.extra.get("draft"):
+        cmd.append("--draft")
+    rc = await _run_subprocess(job, cmd, REPO)
+    if rc != 0:
+        raise RuntimeError(f"buffer_push failed (exit {rc})")
+
+
 async def _run_mark_published(job: Job) -> None:
     """Status-only write: 'Ready to publish' -> 'Published'. Human signal
     that the Instagram post is live."""
@@ -386,6 +408,8 @@ async def _worker(job: Job) -> None:
                 await _run_generate(job)
             elif job.kind == "publish":
                 await _run_publish(job)
+            elif job.kind == "schedule_buffer":
+                await _run_schedule_buffer(job)
             elif job.kind == "mark_published":
                 await _run_mark_published(job)
             elif job.kind == "pull":
@@ -492,7 +516,7 @@ async def api_queue_status(payload: dict):
 @app.post("/api/run")
 async def api_run(payload: dict):
     kind = payload.get("kind", "")
-    if kind not in ("select", "generate", "publish", "mark_published", "pull"):
+    if kind not in ("select", "generate", "publish", "mark_published", "pull", "schedule_buffer"):
         raise HTTPException(400, f"bad kind: {kind!r}")
     slug = (payload.get("slug") or "").strip()
     extra: dict = {}
@@ -517,6 +541,13 @@ async def api_run(payload: dict):
                     409,
                     f"no render to publish for {slug} — run Generate first",
                 )
+        elif kind == "schedule_buffer":
+            # Optional schedule time + channel subset. buffer_push reads the
+            # row and errors clearly if the Drive link / caption is missing, so
+            # we only carry the knobs through here.
+            extra["due"] = (payload.get("due") or "").strip()
+            extra["channels"] = (payload.get("channels") or "").strip()
+            extra["draft"] = bool(payload.get("draft", False))
 
     job = Job(id=uuid.uuid4().hex[:8], kind=kind, slug=slug, extra=extra)
     jobs[job.id] = job
