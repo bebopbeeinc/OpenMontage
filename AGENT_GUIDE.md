@@ -46,6 +46,14 @@ This is a first-class workflow in OpenMontage.
 
 If a model misses this distinction, it will often fall back to plain search + guesswork. That is incorrect for OpenMontage.
 
+## Comment Reply Entry Point
+
+When the user wants help **replying to a comment on a published post** — e.g. "got this comment on `<post>`, how should I reply?", "reply to this comment on `<account>`" — this is **not** a production request. Do **not** route it through a pipeline, preflight, or Rule Zero.
+
+**Read:** `skills/meta/comment-reply.md`
+
+It teaches you to resolve the account to its source sheet, pull the **real** post row (hook/fact/kicker/caption), read the account's voice, and draft in-voice reply options grounded in what the viewer actually saw. Draft-only — the user posts manually.
+
 ## Rule Zero — All Production Goes Through a Pipeline
 
 **Every video production request MUST go through the pipeline system. No exceptions.**

@@ -280,6 +280,7 @@ Cross-cutting skills that apply to all pipelines:
 | Reviewer | `meta/reviewer.md` | Self-review protocol after every stage |
 | Checkpoint Protocol | `meta/checkpoint-protocol.md` | When/how to checkpoint and request human approval |
 | Skill Creator | `meta/skill-creator.md` | Dynamically create new skills during pipeline runs |
+| Comment Reply | `meta/comment-reply.md` | Reply to a comment on a published post — resolve account → pull the real post row → draft in-voice replies (draft-only, no auto-post) |
 
 ## Style Playbooks
 
