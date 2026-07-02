@@ -60,7 +60,7 @@ QUEUE_SHEET_URL = (
     f"https://docs.google.com/spreadsheets/d/{queue_row.QUEUE_SHEET}/edit"
 )
 
-JobKind = Literal["select", "generate", "publish", "mark_published", "pull", "schedule_buffer"]
+JobKind = Literal["select", "generate", "publish", "mark_published", "pull", "schedule_buffer", "cover"]
 JobStatus = Literal["queued", "running", "success", "error"]
 
 
@@ -127,7 +127,8 @@ def _project_state(slug: str) -> dict:
         return {
             "brief_exists": False, "script_exists": False, "clip_exists": False,
             "bg_exists": False, "render_exists": False, "render_path": None,
-            "render_mtime": None,
+            "render_mtime": None, "cover_exists": False, "cover_mtime": None,
+            "cover_variants": 0,
         }
     project = project_dir(slug)
     brief = project / "artifacts" / "brief.json"
@@ -138,6 +139,10 @@ def _project_state(slug: str) -> dict:
     render_final = project / "renders" / f"{slug}.mp4"
     render_path = render_final if render_final.exists() else None
     clip = LIBRARY_DIR / f"{slug}.mp4"
+    images_dir = project / "assets" / "images"
+    cover = images_dir / f"{slug}_cover.png"
+    cover_exists = cover.exists()
+    cover_variants = len(sorted(images_dir.glob(f"{slug}_cover_v*.png"))) if images_dir.exists() else 0
     return {
         "brief_exists": brief.exists(),
         "script_exists": script.exists(),
@@ -146,6 +151,9 @@ def _project_state(slug: str) -> dict:
         "render_exists": render_path is not None,
         "render_path": str(render_path.relative_to(REPO)) if render_path else None,
         "render_mtime": render_path.stat().st_mtime if render_path else None,
+        "cover_exists": cover_exists,
+        "cover_mtime": cover.stat().st_mtime if cover_exists else None,
+        "cover_variants": cover_variants,
     }
 
 
@@ -322,6 +330,91 @@ async def _run_publish(job: Job) -> None:
         raise RuntimeError(f"publish failed (exit {rc})")
 
 
+async def _run_cover(job: Job) -> None:
+    """Generate the custom cover image via cover_gen.py (OpenArt Nano Banana
+    Pro editing a peak-emotion frame). Writes N variants + a canonical
+    <slug>_cover.png. Does NOT touch Queue status — the cover is an optional
+    asset attached at publish and posted manually."""
+    if not job.slug:
+        raise RuntimeError("cover job missing 'slug'")
+    prompt = (job.extra.get("prompt") or "").strip()
+    headline = (job.extra.get("headline") or "").strip()
+    if not prompt and not headline:
+        raise RuntimeError("cover job needs a 'prompt' or a 'headline'")
+
+    # cover_gen pulls the base frame from the local render. If it's missing but
+    # the row carries a Drive link (published on another machine), sync it from
+    # Drive first so Build Cover works without a manual Pull.
+    render = project_dir(job.slug) / "renders" / f"{job.slug}.mp4"
+    if not render.exists():
+        _emit(job, "local render missing — syncing from Drive…")
+        sheets = await asyncio.to_thread(queue_row.build_sheets, False)
+        row = await asyncio.to_thread(
+            lambda: next((r for r in queue_row.read_queue_bulk(sheets)
+                          if (r.get("slug") or "").strip() == job.slug), None))
+        fid = _file_id_from_link((row or {}).get("drive_link", "").strip()) if row else None
+        if not fid:
+            raise RuntimeError(
+                f"no local render for {job.slug} and no Drive link to sync from — "
+                "run Generate (or Pull) first")
+        drive = await asyncio.to_thread(build_drive)
+        action = await asyncio.to_thread(_drive_download, drive, fid, render)
+        _emit(job, f"  render {action} from Drive ({render.stat().st_size // 1024} KB)")
+
+    py = sys.executable
+    cmd = [py, "scripts/trivia_reaction/cover_gen.py", job.slug, "--headless",
+           "--variants", str(int(job.extra.get("variants", 2)))]
+    if prompt:
+        # Verbatim prompt is the reviewable/tweakable source of truth.
+        cmd += ["--prompt", prompt]
+    else:
+        cmd += ["--headline", headline]
+        for flag, key in (("--highlight", "highlight"), ("--emotion", "emotion"),
+                          ("--prop", "prop")):
+            val = (job.extra.get(key) or "").strip()
+            if val:
+                cmd += [flag, val]
+    if (job.extra.get("character") or "").strip():
+        cmd += ["--character", job.extra["character"].strip()]
+    ft = job.extra.get("frame_time")
+    if ft not in (None, ""):
+        cmd += ["--frame-time", str(ft)]
+    rc = await _run_subprocess(job, cmd, REPO)
+    if rc != 0:
+        raise RuntimeError(f"cover_gen failed (exit {rc})")
+    images_dir = project_dir(job.slug) / "assets" / "images"
+    canonical = images_dir / f"{job.slug}_cover.png"
+    if not canonical.exists():
+        raise RuntimeError(f"cover_gen reported success but {canonical} is missing")
+    job.output_path = str(canonical.relative_to(REPO))
+
+    # Upload the cover to Drive immediately (so a shareable download link is
+    # available right after Build — no need to Publish the video first) and
+    # persist both the Drive link (Queue!T) and the effective prompt (Queue!U).
+    from scripts.trivia_reaction import publish  # lazy: pulls google clients
+    prompt_file = images_dir / f"{job.slug}_cover_prompt.txt"
+    updates: dict = {}
+    if prompt_file.exists():
+        updates["cover_prompt"] = prompt_file.read_text()
+    try:
+        drive, sheets = await asyncio.to_thread(publish.build_clients)
+        row = await asyncio.to_thread(
+            lambda: next((r for r in queue_row.read_queue_bulk(sheets)
+                          if (r.get("slug") or "").strip() == job.slug), None))
+        if not row:
+            raise RuntimeError("no Queue row to write cover link to")
+        cover_link, action = await asyncio.to_thread(
+            publish._upload_or_replace, drive, canonical, f"{job.slug}_cover.png",
+            (row.get("cover") or "").strip(), "image/png")
+        updates["cover"] = cover_link
+        await asyncio.to_thread(queue_row.update_cells, sheets, row["row"], **updates)
+        _emit(job, f"  cover {action} on Drive → {cover_link}")
+        _emit(job, "  saved cover link → Queue!T, prompt → Queue!U")
+    except Exception as e:  # noqa: BLE001
+        _emit(job, f"  ⚠ Drive upload / sheet write skipped: {e}")
+    _emit(job, f"cover ready for review: {canonical.relative_to(REPO)}")
+
+
 async def _run_schedule_buffer(job: Job) -> None:
     """Schedule the published render to TikTok + Instagram via Buffer.
     Requires the row to already carry a Drive link (Publish run first) — the
@@ -410,6 +503,8 @@ async def _worker(job: Job) -> None:
                 await _run_publish(job)
             elif job.kind == "schedule_buffer":
                 await _run_schedule_buffer(job)
+            elif job.kind == "cover":
+                await _run_cover(job)
             elif job.kind == "mark_published":
                 await _run_mark_published(job)
             elif job.kind == "pull":
@@ -513,10 +608,52 @@ async def api_queue_status(payload: dict):
     return {"ok": True, "slug": slug, "status": status}
 
 
+@app.post("/api/save_prompt")
+async def api_save_prompt(payload: dict):
+    """Save an editable prompt back to the Queue sheet. Two fields are
+    editable from the web (mirroring trivia-images): the video prompt
+    (openart_prompt → Queue!J, read by openart_generate) and the cover
+    prompt (cover_prompt → Queue!U, used verbatim by cover_gen)."""
+    slug = (payload.get("slug") or "").strip()
+    field = (payload.get("field") or "").strip()
+    value = payload.get("value")
+    if field not in ("openart_prompt", "cover_prompt"):
+        raise HTTPException(400, f"field must be openart_prompt or cover_prompt, got {field!r}")
+    if not slug or value is None:
+        raise HTTPException(400, "slug and value required")
+    try:
+        ws = await asyncio.to_thread(queue_row.build_sheets, True)
+        target = await asyncio.to_thread(_find_row_by_slug, ws, slug)
+        if not target:
+            raise HTTPException(404, f"no Queue row for slug={slug!r}")
+        await asyncio.to_thread(queue_row.update_cells, ws, target, **{field: value})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"sheet write failed: {e}")
+    return {"ok": True, "slug": slug, "field": field}
+
+
+@app.post("/api/cover_prompt/assemble")
+async def api_cover_prompt_assemble(payload: dict):
+    """Assemble a default cover prompt from the structured fields so the human
+    can review + tweak it before generating. Single source of truth for the
+    template lives in cover_gen.build_prompt (imported lazily — it pulls in the
+    Playwright driver)."""
+    from scripts.trivia_reaction.cover_gen import build_prompt  # lazy
+    prompt = build_prompt(
+        (payload.get("headline") or "").strip(),
+        (payload.get("highlight") or "").strip(),
+        (payload.get("emotion") or "").strip(),
+        (payload.get("prop") or "").strip(),
+    )
+    return {"prompt": prompt}
+
+
 @app.post("/api/run")
 async def api_run(payload: dict):
     kind = payload.get("kind", "")
-    if kind not in ("select", "generate", "publish", "mark_published", "pull", "schedule_buffer"):
+    if kind not in ("select", "generate", "publish", "mark_published", "pull", "schedule_buffer", "cover"):
         raise HTTPException(400, f"bad kind: {kind!r}")
     slug = (payload.get("slug") or "").strip()
     extra: dict = {}
@@ -548,6 +685,26 @@ async def api_run(payload: dict):
             extra["due"] = (payload.get("due") or "").strip()
             extra["channels"] = (payload.get("channels") or "").strip()
             extra["draft"] = bool(payload.get("draft", False))
+        elif kind == "cover":
+            # Cover needs a frame source: either a local render, or a Drive link
+            # we can sync the render from (_run_cover pulls it). Refuse only when
+            # there's neither.
+            has_render = _project_state(slug)["render_exists"]
+            has_drive = bool((payload.get("drive_link") or "").strip())
+            if not has_render and not has_drive:
+                raise HTTPException(
+                    409, f"no render for {slug} and nothing on Drive to sync — run Generate first",
+                )
+            prompt = (payload.get("prompt") or "").strip()
+            headline = (payload.get("headline") or "").strip()
+            if not prompt and not headline:
+                raise HTTPException(400, "cover requires a 'prompt' or a 'headline'")
+            extra["prompt"] = prompt
+            extra["headline"] = headline
+            for key in ("highlight", "emotion", "prop", "character"):
+                extra[key] = (payload.get(key) or "").strip()
+            extra["frame_time"] = payload.get("frame_time")
+            extra["variants"] = int(payload.get("variants", 2))
 
     job = Job(id=uuid.uuid4().hex[:8], kind=kind, slug=slug, extra=extra)
     jobs[job.id] = job
@@ -641,3 +798,43 @@ async def api_render(slug: str):
     if not state["render_exists"]:
         raise HTTPException(404, f"no render for {slug}")
     return FileResponse(REPO / state["render_path"], media_type="video/mp4")
+
+
+def _cover_path(slug: str, variant: int | None = None) -> Path:
+    if "/" in slug or ".." in slug:
+        raise HTTPException(400, "bad slug")
+    images = project_dir(slug) / "assets" / "images"
+    name = f"{slug}_cover.png" if variant is None else f"{slug}_cover_v{variant}.png"
+    return images / name
+
+
+@app.get("/api/cover/{slug}")
+async def api_cover(slug: str):
+    p = _cover_path(slug)
+    if not p.exists():
+        raise HTTPException(404, f"no cover for {slug}")
+    return FileResponse(p, media_type="image/png")
+
+
+@app.get("/api/cover/{slug}/v/{variant}")
+async def api_cover_variant(slug: str, variant: int):
+    p = _cover_path(slug, variant)
+    if not p.exists():
+        raise HTTPException(404, f"no cover variant {variant} for {slug}")
+    return FileResponse(p, media_type="image/png")
+
+
+@app.post("/api/cover_select")
+async def api_cover_select(payload: dict):
+    """Promote one generated variant to the canonical <slug>_cover.png that
+    publish + the row thumbnail use."""
+    slug = (payload.get("slug") or "").strip()
+    try:
+        variant = int(payload.get("variant"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "variant must be an integer")
+    src = _cover_path(slug, variant)
+    if not src.exists():
+        raise HTTPException(404, f"no cover variant {variant} for {slug}")
+    shutil.copy(src, _cover_path(slug))
+    return {"ok": True, "slug": slug, "variant": variant}

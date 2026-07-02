@@ -80,10 +80,23 @@ ROW_KEYS: tuple[str, ...] = (
     "openart_prompt",       # J — assembled Seedance prompt, written by script director; human-readable copy-paste source
     "caption",              # K — IG-ready post description + hashtags, written by script director
     "drive_clip_link",      # L — raw avatar-clip webViewLink (Seedance output, no captions); secondary deliverable
+    # M–S: TikTok analytics columns added to the sheet after this module was
+    # first written. Reads are POSITIONAL (ROW_KEYS zipped against columns), so
+    # these must be represented for later columns to line up. They are not
+    # written by this pipeline — placeholders that keep the positions honest.
+    "tiktok_video_id",      # M
+    "tiktok_published",     # N
+    "tiktok_views",         # O
+    "tiktok_likes",         # P
+    "tiktok_comments",      # Q
+    "tiktok_shares",        # R
+    "stats_updated",        # S
+    "cover",                # T — cover image webViewLink, written by publish (custom post thumbnail)
+    "cover_prompt",         # U — Nano Banana Pro cover prompt (reviewable/tweakable SoT; used verbatim by cover_gen)
 )
-QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 12
-QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:L{{row}}"
-QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:L{{max_row}}"
+QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 21
+QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:U{{row}}"
+QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:U{{max_row}}"
 
 FIELD_TO_HEADER: dict[str, str] = {
     "day":               "Day",
@@ -98,6 +111,8 @@ FIELD_TO_HEADER: dict[str, str] = {
     "openart_prompt":    "OpenArt Prompt",
     "caption":           "Caption",
     "drive_clip_link":   "Drive Clip",
+    "cover":             "Cover",
+    "cover_prompt":      "Cover Prompt",
 }
 
 # Status enum — 4 states, simplified from the old 7-state model on 2026-05-19.

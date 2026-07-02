@@ -268,14 +268,38 @@ def _close_popover(page: Page) -> None:
     time.sleep(0.3)
 
 
+def _select_radio(page: Page, template: str, label: str, kind: str,
+                  attempts: int = 3) -> None:
+    """Open the Setting popover and click the `label` radio, with retries.
+
+    The popover open can race (or a stale/unrelated dialog can be open), which
+    used to strand the bare click on its 30s default timeout. Each attempt
+    re-opens a fresh popover and waits for the specific radio to be visible
+    before clicking; on miss it closes the popover and retries."""
+    sel = template.format(label=label)
+    last: Exception | None = None
+    for _ in range(attempts):
+        try:
+            _open_setting_popover(page)
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=6_000)
+            loc.click()
+            return
+        except PWTimeout as e:
+            last = e
+            _close_popover(page)   # drop stale/wrong popover, then reopen
+            time.sleep(0.4)
+    raise RuntimeError(
+        f"{kind} radio {label!r} not selectable after {attempts} attempts "
+        f"(setting popover never yielded it): {last}")
+
+
 def _select_aspect(page: Page, label: str = "4:3") -> None:
-    _open_setting_popover(page)
-    page.locator(SEL.aspect_radio_template.format(label=label)).first.click()
+    _select_radio(page, SEL.aspect_radio_template, label, "aspect")
 
 
 def _select_resolution(page: Page, label: str = "2K") -> None:
-    _open_setting_popover(page)
-    page.locator(SEL.resolution_radio_template.format(label=label)).first.click()
+    _select_radio(page, SEL.resolution_radio_template, label, "resolution")
 
 
 def _select_model_in_picker(page: Page, label: str) -> None:

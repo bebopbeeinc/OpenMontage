@@ -274,6 +274,7 @@ queue_row.update_cells(
     kicker_vo=beats["kicker"],
     openart_prompt=prompt,
     caption=caption,
+    cover_prompt=cover_prompt,   # see step 6b
     status=queue_row.STATUS_READY_TO_REVIEW,
 )
 ```
@@ -281,6 +282,30 @@ queue_row.update_cells(
 Also write the assembled OpenArt prompt to Queue!J (`openart_prompt`)
 in the same `update_cells` call. The Queue is now the human-readable
 source of truth for the prompt that will be sent to Seedance.
+
+### 6b. Author The Cover Prompt (Queue!U `cover_prompt`)
+
+Just like the video prompt, the **cover prompt must already be in the
+sheet** so it's reviewable/tweakable from the web. Author it here:
+
+1. Craft a **cover headline** — 2–5 words, ALL CAPS, one bold idea; curiosity
+   gap + institutional-absurdity (or a shocking number). Not a flat restatement.
+   Pick a `highlight` word (the punchiest, rendered yellow), an `emotion` that is
+   always scroll-stopping — **laughing (hand over mouth) for absurd/funny, or
+   wide-eyed jaw-dropped shock for shocking/unbelievable. Never deadpan/serious**
+   (it obeys the prompt and neutralises the face). Add a `prop` only when the fact
+   has an obvious single visual subject, and pick a `style` for variety.
+2. Assemble with the cover template (single source of truth):
+
+   ```python
+   from scripts.trivia_reaction.cover_gen import build_prompt, pick_style
+   cover_prompt = build_prompt(headline, highlight, emotion, prop,
+                               style=pick_style(slug))  # or a named style
+   ```
+
+`cover_gen` uses this Queue!U prompt **verbatim**; the human tweaks it in the
+Build Cover modal. See [`cover-director.md`](cover-director.md) for the full
+recipe and the emotion→joke mapping.
 
 Set Queue!C = `Ready to review` once the human has signed off.
 
