@@ -116,6 +116,20 @@
   button.small { padding: 3px 8px; font-size: 11px; }
 
   .actions .btn-row { display: flex; gap: 6px; flex-direction: column; align-items: stretch; }
+  .actions .act-grid { display: flex; flex-direction: column; gap: 8px; min-width: 210px; }
+  .actions .act-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .actions .act-col { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .actions .act-col > button { width: 100%; }
+  .actions .act-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+                        color: var(--muted); font-weight: 600; padding-bottom: 1px; }
+  .actions .act-common { display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+                         padding-top: 8px; border-top: 1px solid var(--border); }
+
+  .cover-variants { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  .cover-variant { text-align: center; }
+  .cover-variant img { width: min(220px, 40vw); height: auto; border-radius: 8px;
+                       border: 2px solid var(--border); display: block; }
+  .cover-variant img.picked { border-color: #2ea04c; }
 
   .new-row-bar { padding: 10px 18px; border-bottom: 1px solid var(--border);
                  background: #0a0e14; display: flex; gap: 10px; align-items: center;
@@ -354,9 +368,43 @@ function actionsCell(r) {
   const generating = slug && inFlight(slug, 'generate');
   const publishing = slug && inFlight(slug, 'publish');
   const marking    = slug && inFlight(slug, 'mark_published');
+  const covering   = slug && inFlight(slug, 'cover');
 
   const reviewBtn = f.render_exists
     ? `<button class="small" onclick="openReview('${escapeHtml(slug)}', ${f.render_mtime || 0})">▷ Review</button>`
+    : '';
+
+  // Cover: needs a frame source — a local render, or a Drive link we can sync
+  // the render from (Build Cover pulls it automatically). Build first time,
+  // Rebuild after — re-running overwrites the variants and spends a fresh
+  // OpenArt credit, same as Re-generate. When a cover exists, a second button
+  // opens the variant picker / preview.
+  const hasFrameSource = f.render_exists || (r.drive_link || '').trim();
+  const coverTitle = f.render_exists
+    ? 'Generate a scroll-stopping cover image (OpenArt Nano Banana Pro)'
+    : 'Syncs the render from Drive first, then generates the cover';
+  // Cover prompt: edit the Queue!N text (mirrors the video prompt editor).
+  // Always available once a cover prompt exists (script-director seeds it).
+  const coverPromptBtn = (slug && (r.cover_prompt || '').trim())
+    ? `<button class="small" title="Review / tweak the cover image prompt (used by Build Cover)"
+         onclick="openPromptEditor('${escapeHtml(slug)}', 'cover_prompt', 'Cover prompt — OpenArt cover image')">✎ Cover prompt</button>`
+    : '';
+  const coverBtn = (slug && hasFrameSource)
+    ? `<button class="small" ${covering?'disabled':''}
+         title="${coverTitle}"
+         onclick="runBuildCover('${escapeHtml(slug)}')">
+         ${stateBadge(covering)} ${f.cover_exists ? '↻ Rebuild cover' : '★ Build cover'}
+       </button>`
+    : '';
+  const coverReviewBtn = (slug && f.cover_exists)
+    ? `<button class="small" onclick="openCoverReview('${escapeHtml(slug)}', ${f.cover_mtime || 0}, ${f.cover_variants || 0})">▣ Review cover</button>`
+    : '';
+
+  // Video prompt: review + tweak the OpenArt/Seedance prompt (Queue!J) that
+  // Re-generate feeds to the avatar clip. Shown once a prompt exists.
+  const videoPromptBtn = (slug && (r.openart_prompt || '').trim())
+    ? `<button class="small" title="Review / tweak the video (OpenArt/Seedance) prompt — used by Re-generate"
+         onclick="openPromptEditor('${escapeHtml(slug)}', 'openart_prompt', 'Video prompt — OpenArt / Seedance clip')">✎ Video prompt</button>`
     : '';
 
   // Generate: enabled on Draft, Ready to review, OR Ready to publish.
@@ -425,7 +473,20 @@ function actionsCell(r) {
        </button>`
     : '';
 
-  return `<div class="btn-row">${pullBtn}${reviewBtn}${genBtn}${pubBtn}${markBtn}</div>`;
+  // Two columns — Video | Cover — each ordered prompt → review → (re)generate.
+  // Common workflow actions (Publish/Re-publish, Mark as Published, Pull) stack
+  // below.
+  const videoCol = [videoPromptBtn, reviewBtn, genBtn].filter(Boolean).join('');
+  const coverCol = [coverPromptBtn, coverReviewBtn, coverBtn].filter(Boolean).join('');
+  const common   = [pubBtn, markBtn, pullBtn].filter(Boolean).join('');
+  const cols = (videoCol || coverCol)
+    ? `<div class="act-cols">
+         <div class="act-col">${videoCol ? '<span class="act-label">Video</span>' : ''}${videoCol}</div>
+         <div class="act-col">${coverCol ? '<span class="act-label">Cover</span>' : ''}${coverCol}</div>
+       </div>`
+    : '';
+  const commonRow = common ? `<div class="act-common">${common}</div>` : '';
+  return `<div class="act-grid">${cols}${commonRow}</div>` || '—';
 }
 
 function filesCell(r) {
@@ -435,7 +496,8 @@ function filesCell(r) {
   // We render both as stacked links so the human can grab either.
   const renderLink = (r.drive_link || '').trim();
   const clipLink = (r.drive_clip_link || '').trim();
-  if (!renderLink && !clipLink) {
+  const coverLink = (r.cover || '').trim();
+  if (!renderLink && !clipLink && !coverLink) {
     return '<span style="color: var(--muted); font-size: 11px;">—</span>';
   }
   const parts = [];
@@ -444,6 +506,9 @@ function filesCell(r) {
   }
   if (clipLink) {
     parts.push(`<a href="${escapeHtml(clipLink)}" target="_blank" rel="noopener" style="font-size:11px; color: var(--muted);">clip ↗</a>`);
+  }
+  if (coverLink) {
+    parts.push(`<a href="${escapeHtml(coverLink)}" target="_blank" rel="noopener" style="font-size:11px; color: var(--orange);">cover ↗</a>`);
   }
   return parts.join('<br>');
 }
@@ -528,11 +593,13 @@ function renderRows() {
     const klass = statusPillClass(status);
     const rowState = (r.slug && (inFlight(r.slug, 'generate') === 'running'
                                 || inFlight(r.slug, 'publish') === 'running'
-                                || inFlight(r.slug, 'mark_published') === 'running'))
+                                || inFlight(r.slug, 'mark_published') === 'running'
+                                || inFlight(r.slug, 'cover') === 'running'))
                    ? 'row-running'
                    : (r.slug && (inFlight(r.slug, 'generate') === 'queued'
                                 || inFlight(r.slug, 'publish') === 'queued'
-                                || inFlight(r.slug, 'mark_published') === 'queued'))
+                                || inFlight(r.slug, 'mark_published') === 'queued'
+                                || inFlight(r.slug, 'cover') === 'queued'))
                    ? 'row-queued' : '';
     return `
       <tr class="${rowState}">
@@ -674,6 +741,138 @@ async function runMarkPublished(slug) {
     refreshActive();
   } catch (e) {
     toast(`mark failed: ${e.message}`, 'err');
+  }
+}
+
+// Build cover — one click, no modal. Uses the saved cover prompt (edit it with
+// ✎ Cover prompt), auto frame pick, 2 variants. Syncs the render from Drive if
+// it's not local. Confirms on rebuild since it overwrites + spends a credit.
+async function runBuildCover(slug) {
+  if (!slug) return;
+  const row = allRows.find(r => r.slug === slug) || {};
+  const prompt = (row.cover_prompt || '').trim();
+  if (!prompt) { toast('add a cover prompt first (✎ Cover prompt)', 'err'); return; }
+  const rebuild = !!(row.files || {}).cover_exists;
+  if (rebuild && !confirm(`Rebuild ${slug}'s cover? This overwrites the variants and spends a new OpenArt credit.`)) return;
+  try {
+    const job = await api('api/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        kind: 'cover', slug, prompt, variants: 2,
+        drive_link: (row.drive_link || '').trim(),
+      }),
+    });
+    toast(`cover queued (${slug})`);
+    attachToJob(job.id);
+    switchTab('log');
+    refreshActive();
+  } catch (e) {
+    toast(`cover failed: ${e.message}`, 'err');
+  }
+}
+
+// Generic prompt editor — used for the video prompt (Queue!J) and the cover
+// prompt (Queue!N). Loads the current value from the cached row.
+function openPromptEditor(slug, field, title) {
+  if (!slug) return;
+  const row = allRows.find(r => r.slug === slug) || {};
+  const current = (row[field] || '');
+  const root = $('modal-root');
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="script-modal" onclick="event.stopPropagation()" style="width: min(640px, 100%);">
+        <h2>${escapeHtml(title)} — ${escapeHtml(slug)}</h2>
+        <div class="modal-meta">
+          Edit and Save writes it back to the sheet. ${field === 'openart_prompt'
+            ? 'Re-generate then uses this prompt for the avatar clip.'
+            : 'Rebuild Cover then uses this prompt verbatim.'}
+        </div>
+        <div class="field">
+          <textarea id="prompt-edit" class="tall" style="min-height:240px;">${escapeHtml(current)}</textarea>
+        </div>
+        <div class="actions-row">
+          <span class="grow"></span>
+          <button onclick="closeModal()">Cancel</button>
+          <button class="primary" onclick="savePrompt('${escapeHtml(slug)}', '${escapeHtml(field)}')">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  setTimeout(() => $('prompt-edit') && $('prompt-edit').focus(), 30);
+}
+
+async function savePrompt(slug, field) {
+  const value = $('prompt-edit').value;
+  try {
+    await api('api/save_prompt', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug, field, value}),
+    });
+    toast('prompt saved');
+    closeModal();
+    loadRows();
+  } catch (e) {
+    toast(`save failed: ${e.message}`, 'err');
+  }
+}
+
+function openCoverReview(slug, mtime=0, variants=0) {
+  if (!slug) return;
+  const t = mtime || Math.floor(Date.now()/1000);
+  const n = variants || 0;
+  const row = allRows.find(r => r.slug === slug) || {};
+  const driveCover = (row.cover || '').trim();
+  const driveBtn = driveCover
+    ? `<a href="${escapeHtml(driveCover)}" target="_blank" rel="noopener"
+         style="text-decoration:none;"><button class="small">⤓ Download (Drive)</button></a>`
+    : '<span style="color:var(--muted); font-size:11px; align-self:center;">Publish to get a Drive download link</span>';
+  let variantHtml = '';
+  for (let i = 1; i <= n; i++) {
+    variantHtml += `
+      <div class="cover-variant">
+        <img src="api/cover/${encodeURIComponent(slug)}/v/${i}?t=${t}" alt="variant ${i}">
+        <button class="small" onclick="useCoverVariant('${escapeHtml(slug)}', ${i})">Use v${i}</button>
+      </div>`;
+  }
+  const root = $('modal-root');
+  root.innerHTML = `
+    <div class="modal-backdrop" onclick="closeModal()">
+      <div class="script-modal" onclick="event.stopPropagation()" style="width: min(720px, 100%);">
+        <h2>Cover — ${escapeHtml(slug)}</h2>
+        <div class="modal-meta">
+          The canonical cover is what Publish uploads to Drive. Pick a variant to
+          make it canonical, or rebuild with a new prompt.
+        </div>
+        <div style="text-align:center; margin-bottom:14px;">
+          <img src="api/cover/${encodeURIComponent(slug)}?t=${t}" alt="cover"
+               style="width:min(300px,60vw); height:auto; border-radius:10px; border:2px solid #2ea04c;">
+          <div style="color:var(--muted); font-size:11px; margin-top:4px;">canonical</div>
+        </div>
+        ${n ? `<div class="cover-variants">${variantHtml}</div>` : ''}
+        <div class="actions-row">
+          ${driveBtn}
+          <span class="grow"></span>
+          <button onclick="closeModal()">Close</button>
+          <button class="orange" onclick="closeModal(); runBuildCover('${escapeHtml(slug)}')">↻ Rebuild</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function useCoverVariant(slug, variant) {
+  try {
+    await api('api/cover_select', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slug, variant}),
+    });
+    toast(`cover v${variant} set as canonical (${slug})`);
+    closeModal();
+    loadRows();
+  } catch (e) {
+    toast(`pick failed: ${e.message}`, 'err');
   }
 }
 

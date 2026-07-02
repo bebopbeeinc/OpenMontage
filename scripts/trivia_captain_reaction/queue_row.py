@@ -53,10 +53,12 @@ ROW_KEYS: tuple[str, ...] = (
     "openart_prompt",       # J — assembled Seedance prompt, written by script director; human-readable copy-paste source
     "caption",              # K — IG-ready post description + hashtags, written by script director
     "drive_clip_link",      # L — raw avatar-clip webViewLink (Seedance output, no captions); secondary deliverable
+    "cover",                # M — cover image webViewLink, written by publish (custom post thumbnail)
+    "cover_prompt",         # N — Nano Banana Pro cover prompt (reviewable/tweakable SoT; used verbatim by cover_gen)
 )
-QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 12
-QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:L{{row}}"
-QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:L{{max_row}}"
+QUEUE_ROW_COLUMN_COUNT = len(ROW_KEYS)  # 14
+QUEUE_ROW_RANGE = f"'{QUEUE_TAB}'!A{{row}}:N{{row}}"
+QUEUE_ROW_BULK_RANGE = f"'{QUEUE_TAB}'!A{{min_row}}:N{{max_row}}"
 
 FIELD_TO_HEADER: dict[str, str] = {
     "day":               "Day",
@@ -71,6 +73,8 @@ FIELD_TO_HEADER: dict[str, str] = {
     "openart_prompt":    "OpenArt Prompt",
     "caption":           "Caption",
     "drive_clip_link":   "Drive Clip",
+    "cover":             "Cover",
+    "cover_prompt":      "Cover Prompt",
 }
 
 # Header labels in column order — used by seed_sheet.py to lay out row 2.

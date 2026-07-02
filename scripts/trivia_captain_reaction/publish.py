@@ -67,12 +67,13 @@ def find_row(sheets, slug: str) -> tuple[int, dict]:
 
 def _upload_or_replace(
     drive, local_path: Path, drive_name: str, existing_link: str,
+    mimetype: str = "video/mp4",
 ) -> tuple[str, str]:
     """Upload `local_path` to the @archibald.travelcrush Drive folder as `drive_name`.
     If `existing_link` resolves to a Drive file id, replace that file's content
     in place (preserves the link). Returns (webViewLink, action) where action
     is "created" or "replaced"."""
-    media = MediaFileUpload(str(local_path), mimetype="video/mp4", resumable=True)
+    media = MediaFileUpload(str(local_path), mimetype=mimetype, resumable=True)
     fid = file_id_from_link(existing_link)
     if fid:
         f = drive.files().update(
@@ -115,14 +116,30 @@ def main(slug: str) -> int:
     )
     print(f"✓ clip   {clip_action}: {clip_link}")
 
-    queue_row.update_cells(
-        sheets, sheet_row,
+    updates = dict(
         status=queue_row.STATUS_READY_TO_PUBLISH,
         drive_link=render_link,
         drive_clip_link=clip_link,
     )
+
+    # Optional custom cover image — the manually-attached post thumbnail.
+    # Uploaded only when cover_gen.py has produced one; the mp4s remain the
+    # required deliverables.
+    cover = project_dir(slug) / "assets" / "images" / f"{slug}_cover.png"
+    if cover.exists():
+        cover_link, cover_action = _upload_or_replace(
+            drive, cover, f"{slug}_cover.png",
+            existing_link=(qrow.get("cover") or "").strip(),
+            mimetype="image/png",
+        )
+        updates["cover"] = cover_link
+        print(f"✓ cover  {cover_action}: {cover_link}")
+    else:
+        print(f"· no cover image at {cover.relative_to(REPO)} — skipping (optional)")
+
+    queue_row.update_cells(sheets, sheet_row, **updates)
     print(f"✓ {queue_row.QUEUE_TAB} row {sheet_row}: Status={queue_row.STATUS_READY_TO_PUBLISH}, "
-          f"both Drive links set")
+          f"Drive links set" + (" (incl. cover)" if "cover" in updates else ""))
     return 0
 
 
