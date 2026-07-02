@@ -300,6 +300,7 @@ async def _run_generate(job: Job) -> None:
     _emit(job, "review frames + verify captions before clicking Publish.")
 
     # Flip Queue!C -> Ready to publish.
+    existing = None
     try:
         ws = queue_row.build_sheets(write=True)
         existing = next(
@@ -313,6 +314,19 @@ async def _run_generate(job: Job) -> None:
             _emit(job, f"  Queue!C{existing['row']} -> {queue_row.STATUS_READY_TO_PUBLISH}")
     except Exception as e:  # noqa: BLE001
         _emit(job, f"  ⚠ Queue status update skipped: {e}")
+
+    # Cover (non-fatal): build it from the fresh render + the row's saved cover
+    # prompt, so Generate produces BOTH the video and the cover in one click. A
+    # flaky cover never fails an otherwise-good render.
+    try:
+        cover_prompt = (existing.get("cover_prompt") or "").strip() if existing else ""
+        if cover_prompt:
+            _emit(job, "=== Cover: OpenArt Nano Banana Pro ===")
+            await _generate_and_upload_cover(job, job.slug, prompt=cover_prompt, variants=2)
+        else:
+            _emit(job, "· no cover prompt on the row — skipping cover (add one via ✎ Cover prompt)")
+    except Exception as e:  # noqa: BLE001
+        _emit(job, f"  ⚠ cover step skipped (the video render is fine): {e}")
 
 
 async def _run_publish(job: Job) -> None:
@@ -383,6 +397,58 @@ async def _run_pull(job: Job) -> None:
     _emit(job, "✓ pulled from Drive — Review / Re-generate / Re-publish now available")
 
 
+async def _generate_and_upload_cover(
+    job: Job, slug: str, *, prompt: str = "", headline: str = "",
+    highlight: str = "", emotion: str = "", prop: str = "", character: str = "",
+    variants: int = 2, frame_time=None,
+):
+    """Run cover_gen for `slug` (the render must already exist locally), then
+    upload the canonical cover to Drive and persist the link + prompt to the
+    Queue. Returns the canonical Path. Raises on cover_gen failure. Shared by
+    the Cover button (_run_cover) and the Generate chain (_run_generate)."""
+    py = sys.executable
+    cmd = [py, "scripts/trivia_captain_reaction/cover_gen.py", slug, "--headless",
+           "--variants", str(int(variants))]
+    if prompt:
+        cmd += ["--prompt", prompt]
+    else:
+        cmd += ["--headline", headline]
+        for flag, val in (("--highlight", highlight), ("--emotion", emotion), ("--prop", prop)):
+            if (val or "").strip():
+                cmd += [flag, val.strip()]
+    if (character or "").strip():
+        cmd += ["--character", character.strip()]
+    if frame_time not in (None, ""):
+        cmd += ["--frame-time", str(frame_time)]
+    rc = await _run_subprocess(job, cmd, REPO)
+    if rc != 0:
+        raise RuntimeError(f"cover_gen failed (exit {rc})")
+    images_dir = project_dir(slug) / "assets" / "images"
+    canonical = images_dir / f"{slug}_cover.png"
+    if not canonical.exists():
+        raise RuntimeError(f"cover_gen reported success but {canonical} is missing")
+
+    # Upload to Drive (shareable link right away) + persist link (Queue!M) and
+    # effective prompt (Queue!N).
+    from scripts.trivia_captain_reaction import publish  # lazy: pulls google clients
+    prompt_file = images_dir / f"{slug}_cover_prompt.txt"
+    updates: dict = {}
+    if prompt_file.exists():
+        updates["cover_prompt"] = prompt_file.read_text()
+    drive, sheets = await asyncio.to_thread(publish.build_clients)
+    row = await asyncio.to_thread(
+        lambda: next((r for r in queue_row.read_queue_bulk(sheets)
+                      if (r.get("slug") or "").strip() == slug), None))
+    if row:
+        cover_link, action = await asyncio.to_thread(
+            publish._upload_or_replace, drive, canonical, f"{slug}_cover.png",
+            (row.get("cover") or "").strip(), "image/png")
+        updates["cover"] = cover_link
+        await asyncio.to_thread(queue_row.update_cells, sheets, row["row"], **updates)
+        _emit(job, f"  cover {action} on Drive → {cover_link}")
+    return canonical
+
+
 async def _run_cover(job: Job) -> None:
     """Generate the custom cover image via cover_gen.py (OpenArt Nano Banana
     Pro editing a peak-emotion frame). Writes N variants + a canonical
@@ -414,57 +480,17 @@ async def _run_cover(job: Job) -> None:
         action = await asyncio.to_thread(_drive_download, drive, fid, render)
         _emit(job, f"  render {action} from Drive ({render.stat().st_size // 1024} KB)")
 
-    py = sys.executable
-    cmd = [py, "scripts/trivia_captain_reaction/cover_gen.py", job.slug, "--headless",
-           "--variants", str(int(job.extra.get("variants", 2)))]
-    if prompt:
-        # Verbatim prompt is the reviewable/tweakable source of truth.
-        cmd += ["--prompt", prompt]
-    else:
-        cmd += ["--headline", headline]
-        for flag, key in (("--highlight", "highlight"), ("--emotion", "emotion"),
-                          ("--prop", "prop")):
-            val = (job.extra.get(key) or "").strip()
-            if val:
-                cmd += [flag, val]
-    if (job.extra.get("character") or "").strip():
-        cmd += ["--character", job.extra["character"].strip()]
-    ft = job.extra.get("frame_time")
-    if ft not in (None, ""):
-        cmd += ["--frame-time", str(ft)]
-    rc = await _run_subprocess(job, cmd, REPO)
-    if rc != 0:
-        raise RuntimeError(f"cover_gen failed (exit {rc})")
-    images_dir = project_dir(job.slug) / "assets" / "images"
-    canonical = images_dir / f"{job.slug}_cover.png"
-    if not canonical.exists():
-        raise RuntimeError(f"cover_gen reported success but {canonical} is missing")
+    canonical = await _generate_and_upload_cover(
+        job, job.slug,
+        prompt=prompt, headline=headline,
+        highlight=(job.extra.get("highlight") or ""),
+        emotion=(job.extra.get("emotion") or ""),
+        prop=(job.extra.get("prop") or ""),
+        character=(job.extra.get("character") or ""),
+        variants=int(job.extra.get("variants", 2)),
+        frame_time=job.extra.get("frame_time"),
+    )
     job.output_path = str(canonical.relative_to(REPO))
-
-    # Upload the cover to Drive immediately (so a shareable download link is
-    # available right after Build — no need to Publish the video first) and
-    # persist both the Drive link (Queue!M) and the effective prompt (Queue!N).
-    from scripts.trivia_captain_reaction import publish  # lazy: pulls google clients
-    prompt_file = images_dir / f"{job.slug}_cover_prompt.txt"
-    updates: dict = {}
-    if prompt_file.exists():
-        updates["cover_prompt"] = prompt_file.read_text()
-    try:
-        drive, sheets = await asyncio.to_thread(publish.build_clients)
-        row = await asyncio.to_thread(
-            lambda: next((r for r in queue_row.read_queue_bulk(sheets)
-                          if (r.get("slug") or "").strip() == job.slug), None))
-        if not row:
-            raise RuntimeError("no Queue row to write cover link to")
-        cover_link, action = await asyncio.to_thread(
-            publish._upload_or_replace, drive, canonical, f"{job.slug}_cover.png",
-            (row.get("cover") or "").strip(), "image/png")
-        updates["cover"] = cover_link
-        await asyncio.to_thread(queue_row.update_cells, sheets, row["row"], **updates)
-        _emit(job, f"  cover {action} on Drive → {cover_link}")
-        _emit(job, "  saved cover link → Queue!M, prompt → Queue!N")
-    except Exception as e:  # noqa: BLE001
-        _emit(job, f"  ⚠ Drive upload / sheet write skipped: {e}")
     _emit(job, f"cover ready for review: {canonical.relative_to(REPO)}")
 
 
