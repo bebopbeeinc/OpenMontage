@@ -425,7 +425,7 @@ function actionsCell(r) {
   // review' row that already had a clip/render as "Generate" and skipped the
   // overwrite warning — the "Generate + Review together" inconsistency.
   const isRegen = !!(f.clip_exists || f.render_exists);
-  const genLabel = isRegen ? 'Re-generate' : 'Generate';
+  const genLabel = isRegen ? '↻ Re-generate' : '★ Generate';
   const genClass = isRegen ? 'small' : 'orange small';
   const genBtn = canGenerate
     ? `<button class="${genClass}" ${generating?'disabled':''}
@@ -674,7 +674,7 @@ async function runSelect(prefilledDay, prefilledSlug) {
 
 async function runGenerate(slug, isRegen=false) {
   if (!slug) return;
-  if (isRegen && !confirm(`Re-generate ${slug}? This will spend a new OpenArt credit and overwrite the local clip + render. The Drive file (if any) will be replaced in place on the next Publish.`)) return;
+  if (isRegen && !confirm(`Re-generate ${slug}? This spends new OpenArt credits and overwrites the local clip, render, and cover. Drive files (if any) are replaced in place.`)) return;
   try {
     const job = await api('api/run', {
       method: 'POST',
