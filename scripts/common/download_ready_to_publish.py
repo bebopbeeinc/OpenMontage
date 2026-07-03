@@ -109,14 +109,17 @@ def _pull(drive, label: str, file_id: str, dest: Path) -> None:
 # render, which otherwise shows as 'Generate' with no Review button.
 # ---------------------------------------------------------------------------
 def pull_published_assets(render_link, clip_link, render_dest, clip_dest,
-                          *, drive=None, log=print):
-    """Download a published render (+ raw clip) from Drive into local project
-    paths. Skips any asset that already exists locally or lacks a Drive link.
-    Idempotent (size-checked by _download). Returns the labels actually pulled."""
+                          *, cover_link=None, cover_dest=None, drive=None, log=print):
+    """Download a published render (+ raw clip + cover image) from Drive into
+    local project paths. Skips any asset that already exists locally or lacks a
+    Drive link. Idempotent (size-checked by _download). Returns the labels
+    actually pulled. cover_link/cover_dest are optional — pipelines without a
+    cover column simply pass neither."""
     pulled = []
     for label, link, dest in (
         ("render", render_link, render_dest),
         ("clip", clip_link, clip_dest),
+        ("cover", cover_link, cover_dest),
     ):
         if dest is None or dest.exists():
             continue
@@ -142,23 +145,36 @@ class DriveReconciler:
     /api/rows polls can't storm Drive. Safe to call on every request."""
 
     def __init__(self, dest_for, *, ready_status="Ready to publish",
+                 statuses=None, max_inflight=None,
                  cooldown_s=300, log=print,
                  status_of=lambda r: (r.get("status") or "").strip(),
                  drive_link_of=lambda r: (r.get("drive_link") or "").strip(),
                  clip_link_of=lambda r: (r.get("drive_clip_link") or "").strip(),
-                 render_exists_of=lambda r: bool((r.get("files") or {}).get("render_exists"))):
+                 render_exists_of=lambda r: bool((r.get("files") or {}).get("render_exists")),
+                 cover_link_of=lambda r: (r.get("cover") or "").strip(),
+                 cover_exists_of=lambda r: bool((r.get("files") or {}).get("cover_exists"))):
         # Accessors default to the reaction-family row shape (status / drive_link
-        # / files.render_exists / drive_clip_link). Pipelines that name those
-        # fields differently (e.g. trivia-short's final_status / final_video_link
-        # and a top-level render_exists) pass overrides.
+        # / files.render_exists / drive_clip_link / cover / files.cover_exists).
+        # Pipelines that name those fields differently (e.g. trivia-short's
+        # final_status / final_video_link and a top-level render_exists) pass
+        # overrides. `statuses` widens which statuses get reconciled (default
+        # just {ready_status}); reaction servers include "Published" too so
+        # already-posted rows still sync locally. `max_inflight` caps concurrent
+        # pulls so a fresh checkout with dozens of published rows drains a few at
+        # a time instead of storming Drive (None = unlimited, prior behavior).
+        # dest_for may return (render, clip) or (render, clip, cover).
         self.dest_for = dest_for
         self.ready_status = ready_status
+        self.statuses = set(statuses) if statuses else {ready_status}
+        self.max_inflight = max_inflight
         self.cooldown_s = cooldown_s
         self.log = log
         self.status_of = status_of
         self.drive_link_of = drive_link_of
         self.clip_link_of = clip_link_of
         self.render_exists_of = render_exists_of
+        self.cover_link_of = cover_link_of
+        self.cover_exists_of = cover_exists_of
         self._inflight: set[str] = set()
         self._cooldown: dict[str, float] = {}
 
@@ -167,29 +183,39 @@ class DriveReconciler:
         import time
         now = time.monotonic()
         for r in rows:
-            if self.status_of(r) != self.ready_status:
+            if self.status_of(r) not in self.statuses:
                 continue
+            if self.max_inflight and len(self._inflight) >= self.max_inflight:
+                break
             slug = (r.get("slug") or "").strip()
             if not slug or slug in self._inflight:
                 continue
-            if self.render_exists_of(r):
-                continue
-            link = self.drive_link_of(r)
-            if not link:
+            render_link = self.drive_link_of(r)
+            cover_link = self.cover_link_of(r)
+            # Pull if the render is missing (has a link) OR the cover is missing
+            # (has a link) — a Published row may have its cover on Drive while its
+            # local render is present, and vice-versa.
+            need_render = (not self.render_exists_of(r)) and bool(render_link)
+            need_cover = (not self.cover_exists_of(r)) and bool(cover_link)
+            if not (need_render or need_cover):
                 continue
             if self._cooldown.get(slug, 0.0) > now:
                 continue
             self._inflight.add(slug)
-            asyncio.create_task(self._pull_one(slug, link, self.clip_link_of(r)))
+            asyncio.create_task(
+                self._pull_one(slug, render_link, self.clip_link_of(r), cover_link))
 
-    async def _pull_one(self, slug, render_link, clip_link) -> None:
+    async def _pull_one(self, slug, render_link, clip_link, cover_link="") -> None:
         import asyncio
         import time
         try:
-            render_dest, clip_dest = self.dest_for(slug)
+            dests = self.dest_for(slug)
+            render_dest, clip_dest = dests[0], dests[1]
+            cover_dest = dests[2] if len(dests) > 2 else None
             pulled = await asyncio.to_thread(
                 pull_published_assets, render_link, clip_link,
-                render_dest, clip_dest, log=self.log,
+                render_dest, clip_dest, cover_link=cover_link,
+                cover_dest=cover_dest, log=self.log,
             )
             if pulled:
                 self.log(f"[auto-reconcile] {slug}: pulled {pulled} from Drive")

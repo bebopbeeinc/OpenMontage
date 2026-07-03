@@ -498,13 +498,15 @@ async def _run_pull(job: Job) -> None:
         raise RuntimeError(f"no Queue row for slug={job.slug!r}")
     render_fid = _file_id_from_link((row.get("drive_link") or "").strip())
     clip_fid = _file_id_from_link((row.get("drive_clip_link") or "").strip())
-    if not render_fid and not clip_fid:
+    cover_fid = _file_id_from_link((row.get("cover") or "").strip())
+    if not render_fid and not clip_fid and not cover_fid:
         raise RuntimeError(f"{job.slug}: no usable Drive links on the row to pull from")
 
     drive = await asyncio.to_thread(build_drive)
     targets = [
         ("render", render_fid, project_dir(job.slug) / "renders" / f"{job.slug}.mp4"),
         ("clip", clip_fid, LIBRARY_DIR / f"{job.slug}.mp4"),
+        ("cover", cover_fid, project_dir(job.slug) / "assets" / "images" / f"{job.slug}_cover.png"),
     ]
     for label, fid, dest in targets:
         if not fid:
@@ -580,7 +582,12 @@ async def api_health():
 # Page-access reconciler: render -> renders/<slug>.mp4, clip -> library/clips.
 _reconciler = DriveReconciler(
     lambda slug: (project_dir(slug) / "renders" / f"{slug}.mp4",
-                  LIBRARY_DIR / f"{slug}.mp4"),
+                  LIBRARY_DIR / f"{slug}.mp4",
+                  project_dir(slug) / "assets" / "images" / f"{slug}_cover.png"),
+    # Sync render + clip + cover for both awaiting-publish and already-published
+    # rows (so a fresh checkout pulls everything back), a few at a time.
+    statuses={queue_row.STATUS_READY_TO_PUBLISH, queue_row.STATUS_PUBLISHED},
+    max_inflight=3,
     log=lambda m: print(m, flush=True),
 )
 
