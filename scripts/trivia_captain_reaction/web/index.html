@@ -98,6 +98,10 @@
   .state-badge.queued  { background: #1f3a5f; color: var(--running); }
   .state-badge.running { background: #14253a; color: var(--running);
                          animation: pulse 1.4s ease-in-out infinite; }
+  .sync-badge { display: inline-block; margin-top: 5px; font-size: 10px; font-weight: 600;
+                color: var(--running); background: #14253a; border: 1px solid #23415f;
+                border-radius: 10px; padding: 2px 7px; white-space: nowrap;
+                animation: pulse 1.4s ease-in-out infinite; }
 
 
   button { background: #21262d; color: var(--text); border: 1px solid var(--border);
@@ -592,9 +596,11 @@ function renderRows() {
     </td></tr>`;
     return;
   }
+  const syncingSet = new Set(active.syncing || []);
   tbody.innerHTML = allRows.map(r => {
     const status = (r.status || '').trim();
     const klass = statusPillClass(status);
+    const syncing = r.slug && syncingSet.has(r.slug);
     const rowState = (r.slug && (inFlight(r.slug, 'generate') === 'running'
                                 || inFlight(r.slug, 'publish') === 'running'
                                 || inFlight(r.slug, 'mark_published') === 'running'
@@ -609,7 +615,7 @@ function renderRows() {
       <tr class="${rowState}">
         <td class="day">${r.day || '—'}</td>
         <td class="slug">${escapeHtml(r.slug || '')}</td>
-        <td class="status"><span class="pill ${klass}">${escapeHtml(status || 'Draft')}</span></td>
+        <td class="status"><span class="pill ${klass}">${escapeHtml(status || 'Draft')}</span>${syncing ? '<div class="sync-badge">⤓ syncing from Drive…</div>' : ''}</td>
         <td class="facts">${scriptCell(r)}</td>
         <td class="caption">${captionCell(r)}</td>
         <td class="files">${filesCell(r)}</td>
@@ -1049,6 +1055,9 @@ function openReview(slug, renderMtime=0) {
 restorePanelState();
 loadRows().then(refreshActive);
 setInterval(refreshActive, 3000);
+// Periodically re-pull rows so Drive-synced assets (render/cover) surface on
+// their own after page load — skipped while a modal is open to avoid disrupting an edit.
+setInterval(() => { if (!$('modal-root').children.length) loadRows(); }, 20000);
 </script>
 </body>
 </html>

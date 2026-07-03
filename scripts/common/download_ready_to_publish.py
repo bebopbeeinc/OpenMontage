@@ -177,16 +177,24 @@ class DriveReconciler:
         self.cover_exists_of = cover_exists_of
         self._inflight: set[str] = set()
         self._cooldown: dict[str, float] = {}
+        self._sem = None  # asyncio.Semaphore, created lazily inside a running loop
+
+    def inflight_slugs(self) -> list[str]:
+        """Slugs currently being pulled from Drive (for a UI 'syncing' badge)."""
+        return sorted(self._inflight)
 
     def kick(self, rows) -> None:
         import asyncio
         import time
         now = time.monotonic()
+        # One kick queues EVERY missing row (each as a task); the semaphore caps
+        # how many actually download at once. So a single page-load /api/rows
+        # call drains the whole backlog on its own — no repeated polls needed.
+        if self.max_inflight and self._sem is None:
+            self._sem = asyncio.Semaphore(self.max_inflight)
         for r in rows:
             if self.status_of(r) not in self.statuses:
                 continue
-            if self.max_inflight and len(self._inflight) >= self.max_inflight:
-                break
             slug = (r.get("slug") or "").strip()
             if not slug or slug in self._inflight:
                 continue
@@ -212,11 +220,19 @@ class DriveReconciler:
             dests = self.dest_for(slug)
             render_dest, clip_dest = dests[0], dests[1]
             cover_dest = dests[2] if len(dests) > 2 else None
-            pulled = await asyncio.to_thread(
-                pull_published_assets, render_link, clip_link,
-                render_dest, clip_dest, cover_link=cover_link,
-                cover_dest=cover_dest, log=self.log,
-            )
+
+            async def _do():
+                return await asyncio.to_thread(
+                    pull_published_assets, render_link, clip_link,
+                    render_dest, clip_dest, cover_link=cover_link,
+                    cover_dest=cover_dest, log=self.log,
+                )
+
+            if self._sem is not None:
+                async with self._sem:   # bound concurrent downloads
+                    pulled = await _do()
+            else:
+                pulled = await _do()
             if pulled:
                 self.log(f"[auto-reconcile] {slug}: pulled {pulled} from Drive")
             self._cooldown.pop(slug, None)

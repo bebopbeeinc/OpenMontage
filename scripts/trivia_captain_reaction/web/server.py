@@ -743,6 +743,7 @@ async def api_active():
         "by_day": by_day,
         "running_count": running,
         "queued_count": queued,
+        "syncing": _reconciler.inflight_slugs(),   # rows pulling render/cover from Drive
     }
 
 
