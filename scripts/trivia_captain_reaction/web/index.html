@@ -122,6 +122,8 @@
   .actions .act-col > button { width: 100%; }
   .actions .act-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
                         color: var(--muted); font-weight: 600; padding-bottom: 1px; }
+  .actions .act-gen { display: flex; }
+  .actions .act-gen > button { width: 100%; }
   .actions .act-common { display: flex; flex-direction: column; gap: 6px; align-items: stretch;
                          padding-top: 8px; border-top: 1px solid var(--border); }
 
@@ -425,7 +427,7 @@ function actionsCell(r) {
   // review' row that already had a clip/render as "Generate" and skipped the
   // overwrite warning — the "Generate + Review together" inconsistency.
   const isRegen = !!(f.clip_exists || f.render_exists);
-  const genLabel = isRegen ? '↻ Re-generate' : '★ Generate';
+  const genLabel = isRegen ? 'Re-generate' : 'Generate';
   const genClass = isRegen ? 'small' : 'orange small';
   const genBtn = canGenerate
     ? `<button class="${genClass}" ${generating?'disabled':''}
@@ -476,7 +478,7 @@ function actionsCell(r) {
   // Two columns — Video | Cover — each ordered prompt → review → (re)generate.
   // Common workflow actions (Publish/Re-publish, Mark as Published, Pull) stack
   // below.
-  const videoCol = [videoPromptBtn, reviewBtn, genBtn].filter(Boolean).join('');
+  const videoCol = [videoPromptBtn, reviewBtn].filter(Boolean).join('');
   const coverCol = [coverPromptBtn, coverReviewBtn, coverBtn].filter(Boolean).join('');
   const common   = [pubBtn, markBtn, pullBtn].filter(Boolean).join('');
   const cols = (videoCol || coverCol)
@@ -485,8 +487,10 @@ function actionsCell(r) {
          <div class="act-col">${coverCol ? '<span class="act-label">Cover</span>' : ''}${coverCol}</div>
        </div>`
     : '';
+  // Generate spans BOTH columns — it (re)builds the video AND the cover.
+  const genRow = genBtn ? `<div class="act-gen">${genBtn}</div>` : '';
   const commonRow = common ? `<div class="act-common">${common}</div>` : '';
-  return `<div class="act-grid">${cols}${commonRow}</div>` || '—';
+  return `<div class="act-grid">${cols}${genRow}${commonRow}</div>`;
 }
 
 function filesCell(r) {
