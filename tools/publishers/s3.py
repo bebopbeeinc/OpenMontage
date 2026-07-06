@@ -69,19 +69,45 @@ class S3Publisher:
         content_type: str,
         public: bool = True,
         cache_control: str | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> str:
         """Put `data` at `s3://bucket/key` and return the object's public URL.
 
         `public=True` sets a `public-read` ACL so the object is fetchable over
         HTTPS the moment it lands (matching the existing trivia assets).
+        `metadata` becomes user metadata (`x-amz-meta-*`) on the object — used
+        to stamp the source provenance (Drive file id + mtime) so a later sync
+        can skip re-uploading an unchanged image (see head_metadata).
         """
-        extra = {"ContentType": content_type}
+        extra: dict = {"ContentType": content_type}
         if public:
             extra["ACL"] = "public-read"
         if cache_control:
             extra["CacheControl"] = cache_control
+        if metadata:
+            extra["Metadata"] = metadata
         self._client.put_object(Bucket=bucket, Key=key, Body=data, **extra)
         return f"https://{bucket}/{key}"
+
+    def head_metadata(self, bucket: str, key: str) -> Optional[dict[str, str]]:
+        """User metadata (`x-amz-meta-*`) on `s3://bucket/key`, or None.
+
+        Returns the metadata dict (keys lowercased, prefix stripped) for an
+        existing object, or None when it's safe to treat the object as "needs
+        upload": the key doesn't exist yet (404), or we lack read permission to
+        check (AccessDenied) — in which case the caller should just upload
+        rather than skip. Any other error propagates.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = self._client.head_object(Bucket=bucket, Key=key)
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("404", "NoSuchKey", "NotFound", "403", "AccessDenied"):
+                return None
+            raise
+        return resp.get("Metadata") or {}
 
 
 # Module-level singleton — lazy so importing this file is cheap and doesn't

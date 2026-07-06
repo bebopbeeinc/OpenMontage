@@ -333,7 +333,7 @@
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
   <button onclick="loadRows({force: true})" title="Re-read sheet + Drive folder listings (skips the 120s cache)">Refresh</button>
-  <button id="sync-s3-btn" onclick="syncToS3()" title="Publish every approved image on this tab to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;)">Sync approved → S3</button>
+  <button id="sync-s3-btn" onclick="syncToS3(event)" title="Publish every approved image on this tab to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;). Unchanged images are skipped. Shift-click to force re-upload all.">Sync approved → S3</button>
   <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
 </header>
 
@@ -1439,30 +1439,34 @@ async function discardImage(row, slug, kind) {
   }
 }
 
-async function syncToS3() {
+async function syncToS3(evt) {
   const btn = $('sync-s3-btn');
+  const force = !!(evt && evt.shiftKey);
   if (!confirm(
     `Publish every APPROVED image on "${currentTab}" to S3 as web-optimized ` +
-    `JPEGs (assets.tt.bebopbee.com/trivia/<country>)? Overwrites in place; ` +
-    `Drive is untouched.`
+    `JPEGs (assets.tt.bebopbee.com/trivia/<country>)?\n\n` +
+    (force
+      ? 'FORCE: re-uploads ALL approved images, even unchanged ones.'
+      : 'Unchanged images are skipped. Drive is untouched.')
   )) return;
   const label = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Syncing…';
+  btn.textContent = force ? 'Force-syncing…' : 'Syncing…';
   toast('Publishing approved images to S3…', 'ok');
   try {
     const data = await api('api/sync_s3', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({tab: currentTab}),
+      body: JSON.stringify({tab: currentTab, force}),
     });
     if (data.approved === 0) {
       toast('No approved images on this tab to sync.', 'ok');
     } else if (data.failed === 0) {
-      toast(`Synced ${data.synced} image(s) → s3://${data.bucket}/trivia/${data.country}/`, 'ok');
+      const skip = data.skipped ? `, ${data.skipped} unchanged` : '';
+      toast(`Uploaded ${data.uploaded}${skip} → s3://${data.bucket}/trivia/${data.country}/`, 'ok');
     } else {
       const first = (data.results.find(r => !r.ok) || {});
-      toast(`Synced ${data.synced}, ${data.failed} failed (e.g. ${first.number || ''}${first.kind === 'answer_image' ? 'A' : 'Q'}: ${first.error || 'error'})`, 'err');
+      toast(`Uploaded ${data.uploaded}, ${data.skipped} skipped, ${data.failed} failed (e.g. ${first.number || ''}${first.kind === 'answer_image' ? 'A' : 'Q'}: ${first.error || 'error'})`, 'err');
     }
   } catch (e) {
     toast(`S3 sync failed: ${e.message}`, 'err');

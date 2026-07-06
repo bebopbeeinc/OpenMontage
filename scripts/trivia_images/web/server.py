@@ -1521,14 +1521,26 @@ async def api_discard(payload: dict):
 # S3 sync — publish approved images as web-optimized JPEGs
 # ---------------------------------------------------------------------------
 
-def _sync_one_to_s3(code: str, number: str, kind: str) -> tuple[str, int]:
+def _sync_one_to_s3(
+    code: str, number: str, kind: str, *, force: bool = False,
+) -> tuple[str, str, int]:
     """Publish one approved image to S3 as a web-optimized JPEG.
 
     Pulls the 512×384 resized copy from Drive (falling back to the full-res
     original, which optimize_image_bytes_jpg downscales), re-encodes it to a
     quality-85 JPEG, and uploads to s3://<bucket>/trivia/<CODE>/<N><Q|A>.jpg with
-    a public-read ACL. Returns (public_url, byte_size). Raises if the image
-    isn't on Drive.
+    a public-read ACL. On upload we stamp the source Drive file id + mtime as
+    object metadata.
+
+    Skip-if-unchanged: unless `force`, we first HEAD the S3 object and skip the
+    download/encode/upload entirely when its stamped (drive-file-id, drive-mtime)
+    still match the current Drive source — an unchanged image costs one cheap
+    HEAD instead of a full re-publish. (If we can't read the object's metadata —
+    missing GetObject permission — head_metadata returns None and we upload, so
+    the skip is a pure optimization that never blocks a sync.)
+
+    Returns (status, public_url, byte_size) where status ∈ {"uploaded",
+    "skipped"} (skipped ⇒ byte_size 0). Raises if the image isn't on Drive.
     """
     from tools.publishers import s3 as s3pub
 
@@ -1536,30 +1548,44 @@ def _sync_one_to_s3(code: str, number: str, kind: str) -> tuple[str, int]:
     meta = find_resized(code, name) or find_original(code, name)
     if meta is None:
         raise RuntimeError(f"{code}/{name} not on Drive")
+    key = s3_key(code, number, kind)
+    pub = s3pub.get_client()
+
+    if not force:
+        existing = pub.head_metadata(S3_BUCKET, key)
+        if (existing is not None
+                and existing.get("drive-file-id") == meta.id
+                and existing.get("drive-mtime") == (meta.modified_time or "")):
+            return "skipped", f"https://{S3_BUCKET}/{key}", 0
+
     data, _mime, _ = get_client().download_bytes(meta.id, meta.modified_time)
     jpg = optimize_image_bytes_jpg(data, quality=S3_JPG_QUALITY)
-    url = s3pub.get_client().upload_bytes(
-        S3_BUCKET, s3_key(code, number, kind), jpg,
+    url = pub.upload_bytes(
+        S3_BUCKET, key, jpg,
         content_type="image/jpeg", public=True,
         cache_control="public, max-age=31536000",
+        metadata={"drive-file-id": meta.id, "drive-mtime": meta.modified_time or ""},
     )
-    return url, len(jpg)
+    return "uploaded", url, len(jpg)
 
 
 @app.post("/api/sync_s3")
 async def api_sync_s3(payload: dict):
     """Publish every APPROVED image on a tab to S3 as web-optimized JPEGs.
 
-    Payload: {tab}. Reads the tab fresh (so approval state is current), collects
-    every image whose `Q/A Image Approved` column is ✓, and pushes each to
-    s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85 JPEG,
-    public-read). Idempotent — re-syncing overwrites in place. Drive is
-    untouched; this is a one-way publish of the approved set.
+    Payload: {tab, force?}. Reads the tab fresh (so approval state is current),
+    collects every image whose `Q/A Image Approved` column is ✓, and pushes each
+    to s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85
+    JPEG, public-read). Images already on S3 with a matching Drive source stamp
+    are skipped unless `force` is truthy (which re-uploads everything — e.g.
+    after an encoder change). Drive is untouched; this is a one-way publish.
 
-    Returns a per-image result list plus counts so the UI can report what
-    landed and what failed without aborting the whole batch on one bad image.
+    Returns a per-image result list plus counts (uploaded / skipped / failed) so
+    the UI can report what happened without aborting the whole batch on one bad
+    image.
     """
     tab = _validate_tab(payload.get("tab"))
+    force = bool(payload.get("force"))
     code = await asyncio.to_thread(_tab_country_code, tab)
     rows = await asyncio.to_thread(read_rows, tab)
 
@@ -1587,23 +1613,27 @@ async def api_sync_s3(payload: dict):
         }
         async with sem:
             try:
-                url, size = await asyncio.to_thread(_sync_one_to_s3, rc, number, kind)
-                entry.update(ok=True, url=url, bytes=size)
+                status, url, size = await asyncio.to_thread(
+                    _sync_one_to_s3, rc, number, kind, force=force)
+                entry.update(ok=True, status=status, url=url, bytes=size)
             except Exception as e:
                 entry.update(ok=False, error=str(e))
         return entry
 
     results = await asyncio.gather(*(_one(*t) for t in targets))
-    synced = sum(1 for r in results if r["ok"])
-    failed = len(results) - synced
+    uploaded = sum(1 for r in results if r.get("status") == "uploaded")
+    skipped = sum(1 for r in results if r.get("status") == "skipped")
+    failed = sum(1 for r in results if not r["ok"])
 
     return {
         "ok": failed == 0,
         "tab": tab,
         "country": code,
         "bucket": S3_BUCKET,
+        "force": force,
         "approved": len(targets),
-        "synced": synced,
+        "uploaded": uploaded,
+        "skipped": skipped,
         "failed": failed,
         "results": results,
     }
