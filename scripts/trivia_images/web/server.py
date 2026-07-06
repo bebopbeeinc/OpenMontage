@@ -55,6 +55,7 @@ from image_optimize import (  # noqa: E402
     GAME_HEIGHT,
     GAME_WIDTH,
     optimize_image_bytes,
+    optimize_image_bytes_jpg,
 )
 from sheet_schema import (  # noqa: E402
     DATA_START_ROW,
@@ -95,6 +96,15 @@ _folder_lock = threading.Lock()
 # Listing-cache lifetime for state resolution. Safe to keep long because every
 # mutation (upload_or_replace / trash) invalidates the folder's listing.
 _STATE_LIST_TTL_S = 120.0
+
+# S3 web-asset target. Approved images are pushed as web-optimized JPEGs to
+# s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg — the public CDN the
+# game/web clients read from. Drive stays the working source of truth (full-res
+# original + lossless 512×384 PNG); S3 is the published, web-optimized copy.
+S3_BUCKET = "assets.tt.bebopbee.com"
+S3_TRIVIA_PREFIX = "trivia"
+# JPEG quality for the web assets — the web sweet spot (see optimize_image_bytes_jpg).
+S3_JPG_QUALITY = 85
 
 
 def country_folder_id(code: str) -> str:
@@ -160,6 +170,21 @@ def drive_name(number: str, kind: str) -> str:
     else:
         raise ValueError(f"unknown kind: {kind!r}")
     return f"{number}{suffix}.png"
+
+
+def s3_jpg_name(number: str, kind: str) -> str:
+    """The S3 web-asset filename for a (number, kind) image: `{N}{Q|A}.jpg`.
+
+    Same stem as drive_name() (so `12A.png` on Drive ↔ `12A.jpg` on S3), but the
+    `.jpg` extension the web-optimized copy carries.
+    """
+    return drive_name(number, kind)[:-4] + ".jpg"
+
+
+def s3_key(code: str, number: str, kind: str) -> str:
+    """S3 object key for a (country, number, kind) image:
+    `trivia/<CODE>/<N><Q|A>.jpg`."""
+    return f"{S3_TRIVIA_PREFIX}/{code}/{s3_jpg_name(number, kind)}"
 
 
 def find_original(code: str, name: str) -> Optional[FileMeta]:
@@ -1489,4 +1514,96 @@ async def api_discard(payload: dict):
         "drive_name": trashed.name,
         "file_id": trashed.id,
         "state": "none",
+    }
+
+
+# ---------------------------------------------------------------------------
+# S3 sync — publish approved images as web-optimized JPEGs
+# ---------------------------------------------------------------------------
+
+def _sync_one_to_s3(code: str, number: str, kind: str) -> tuple[str, int]:
+    """Publish one approved image to S3 as a web-optimized JPEG.
+
+    Pulls the 512×384 resized copy from Drive (falling back to the full-res
+    original, which optimize_image_bytes_jpg downscales), re-encodes it to a
+    quality-85 JPEG, and uploads to s3://<bucket>/trivia/<CODE>/<N><Q|A>.jpg with
+    a public-read ACL. Returns (public_url, byte_size). Raises if the image
+    isn't on Drive.
+    """
+    from tools.publishers import s3 as s3pub
+
+    name = drive_name(number, kind)
+    meta = find_resized(code, name) or find_original(code, name)
+    if meta is None:
+        raise RuntimeError(f"{code}/{name} not on Drive")
+    data, _mime, _ = get_client().download_bytes(meta.id, meta.modified_time)
+    jpg = optimize_image_bytes_jpg(data, quality=S3_JPG_QUALITY)
+    url = s3pub.get_client().upload_bytes(
+        S3_BUCKET, s3_key(code, number, kind), jpg,
+        content_type="image/jpeg", public=True,
+        cache_control="public, max-age=31536000",
+    )
+    return url, len(jpg)
+
+
+@app.post("/api/sync_s3")
+async def api_sync_s3(payload: dict):
+    """Publish every APPROVED image on a tab to S3 as web-optimized JPEGs.
+
+    Payload: {tab}. Reads the tab fresh (so approval state is current), collects
+    every image whose `Q/A Image Approved` column is ✓, and pushes each to
+    s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85 JPEG,
+    public-read). Idempotent — re-syncing overwrites in place. Drive is
+    untouched; this is a one-way publish of the approved set.
+
+    Returns a per-image result list plus counts so the UI can report what
+    landed and what failed without aborting the whole batch on one bad image.
+    """
+    tab = _validate_tab(payload.get("tab"))
+    code = await asyncio.to_thread(_tab_country_code, tab)
+    rows = await asyncio.to_thread(read_rows, tab)
+
+    targets: list[tuple[str, str, str]] = []
+    for r in rows:
+        rc = (r.get("country") or code).strip()
+        if r["question_drive"]["state"] == "approved":
+            targets.append((rc, r["number"], "question_image"))
+        if r["answer_drive"]["state"] == "approved":
+            targets.append((rc, r["number"], "answer_image"))
+
+    # Bounded concurrency: each image is an independent Drive-download →
+    # JPEG-encode → S3-put chain (all IO-bound, GIL released in the worker
+    # thread; DriveClient is per-thread and the boto3 client is thread-safe).
+    # A country tab can carry hundreds of approved images, so syncing them
+    # serially would hold the request open for minutes and risk a proxy/browser
+    # timeout — 8-wide keeps wall time in the tens of seconds. gather() preserves
+    # input order, so `results` still lines up with `targets`.
+    sem = asyncio.Semaphore(8)
+
+    async def _one(rc: str, number: str, kind: str) -> dict:
+        entry = {
+            "country": rc, "number": number, "kind": kind,
+            "key": s3_key(rc, number, kind),
+        }
+        async with sem:
+            try:
+                url, size = await asyncio.to_thread(_sync_one_to_s3, rc, number, kind)
+                entry.update(ok=True, url=url, bytes=size)
+            except Exception as e:
+                entry.update(ok=False, error=str(e))
+        return entry
+
+    results = await asyncio.gather(*(_one(*t) for t in targets))
+    synced = sum(1 for r in results if r["ok"])
+    failed = len(results) - synced
+
+    return {
+        "ok": failed == 0,
+        "tab": tab,
+        "country": code,
+        "bucket": S3_BUCKET,
+        "approved": len(targets),
+        "synced": synced,
+        "failed": failed,
+        "results": results,
     }

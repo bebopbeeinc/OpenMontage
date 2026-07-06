@@ -17,3 +17,4 @@ piper-tts>=1.2                   # local TTS (assemble_modular --tts-provider pi
 playwright>=1.50                 # openart_driver.py / openart_image_driver.py (also requires `playwright install chromium`)
 fastapi>=0.110                   # web/server.py review UI
 uvicorn>=0.27
+boto3>=1.18                      # S3 sync of approved trivia images (tools/publishers/s3.py) — assets.tt.bebopbee.com

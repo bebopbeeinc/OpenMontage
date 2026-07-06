@@ -49,6 +49,38 @@ def optimize_image_bytes(
     return out.getvalue()
 
 
+def optimize_image_bytes_jpg(
+    data: bytes, *, width: int = GAME_WIDTH, height: int = GAME_HEIGHT,
+    quality: int = 85,
+) -> bytes:
+    """Downscale `data` to width×height and return a web-optimized JPEG.
+
+    Same clean 4:3 downscale as `optimize_image_bytes`, but encoded as JPEG at
+    `quality` (default 85 — the web sweet spot: ~1/6 the bytes of the lossless
+    PNG at a visually indistinguishable quality for these renders). JPEG has no
+    alpha, so anything with transparency is flattened onto white. This is the
+    format the S3 web assets use (assets.tt.bebopbee.com/trivia/<country>).
+    """
+    from PIL import Image
+
+    src = Image.open(io.BytesIO(data))
+    if src.mode in ("RGBA", "LA", "P"):
+        # Flatten transparency onto white — JPEG can't carry an alpha channel.
+        src = src.convert("RGBA")
+        bg = Image.new("RGB", src.size, (255, 255, 255))
+        bg.paste(src, mask=src.split()[-1])
+        src = bg
+    elif src.mode != "RGB":
+        src = src.convert("RGB")
+
+    if src.size != (width, height):
+        src = src.resize((width, height), Image.LANCZOS)
+
+    out = io.BytesIO()
+    src.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
+    return out.getvalue()
+
+
 def optimize_file(
     src: Path, *, dest: Path | None = None,
     width: int = GAME_WIDTH, height: int = GAME_HEIGHT,
