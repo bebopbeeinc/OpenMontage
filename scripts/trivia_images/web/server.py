@@ -1307,7 +1307,8 @@ async def api_job(job_id: str):
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(404)
-    return {**job.summary(), "log": job.log}
+    # `result` carries the S3-sync summary (counts / per-country) when present.
+    return {**job.summary(), "log": job.log, "result": job.extra.get("summary")}
 
 
 @app.get("/api/jobs/{job_id}/stream")
@@ -1569,71 +1570,179 @@ def _sync_one_to_s3(
     return "uploaded", url, len(jpg)
 
 
-@app.post("/api/sync_s3")
-async def api_sync_s3(payload: dict):
-    """Publish every APPROVED image on a tab to S3 as web-optimized JPEGs.
+async def _collect_tab_targets(tab: str) -> list[tuple[str, str, str]]:
+    """Approved (country, number, kind) tuples for one tab, read fresh.
 
-    Payload: {tab, force?}. Reads the tab fresh (so approval state is current),
-    collects every image whose `Q/A Image Approved` column is ✓, and pushes each
-    to s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85
-    JPEG, public-read). Images already on S3 with a matching Drive source stamp
-    are skipped unless `force` is truthy (which re-uploads everything — e.g.
-    after an encoder change). Drive is untouched; this is a one-way publish.
-
-    Returns a per-image result list plus counts (uploaded / skipped / failed) so
-    the UI can report what happened without aborting the whole batch on one bad
-    image.
+    Reads the tab's rows and country code and returns one target per approved
+    image (Q and/or A). Runs the two blocking Google calls off-loop.
     """
-    tab = _validate_tab(payload.get("tab"))
-    force = bool(payload.get("force"))
     code = await asyncio.to_thread(_tab_country_code, tab)
     rows = await asyncio.to_thread(read_rows, tab)
-
-    targets: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str]] = []
     for r in rows:
         rc = (r.get("country") or code).strip()
+        if not rc:
+            continue
         if r["question_drive"]["state"] == "approved":
-            targets.append((rc, r["number"], "question_image"))
+            out.append((rc, r["number"], "question_image"))
         if r["answer_drive"]["state"] == "approved":
-            targets.append((rc, r["number"], "answer_image"))
+            out.append((rc, r["number"], "answer_image"))
+    return out
 
-    # Bounded concurrency: each image is an independent Drive-download →
-    # JPEG-encode → S3-put chain (all IO-bound, GIL released in the worker
-    # thread; DriveClient is per-thread and the boto3 client is thread-safe).
-    # A country tab can carry hundreds of approved images, so syncing them
-    # serially would hold the request open for minutes and risk a proxy/browser
-    # timeout — 8-wide keeps wall time in the tens of seconds. gather() preserves
-    # input order, so `results` still lines up with `targets`.
-    sem = asyncio.Semaphore(8)
 
-    async def _one(rc: str, number: str, kind: str) -> dict:
-        entry = {
-            "country": rc, "number": number, "kind": kind,
-            "key": s3_key(rc, number, kind),
+async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
+    """Background body for an S3 sync job. Streams progress via _emit().
+
+    Collects approved images across `tabs` (concurrently), dedupes by
+    (country, number, kind), then publishes each 8-wide with the
+    skip-unchanged fast path. Emits per-tab, periodic-progress, and
+    per-country lines so the Log panel shows what's happening live, and
+    stashes the final summary in job.extra["summary"] for the UI toast.
+    """
+    job.status = "running"
+    job.started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        _emit(job, f"S3 sync starting (force={force}) → s3://{S3_BUCKET}/trivia/")
+        _emit(job, f"  scanning {len(tabs)} tab(s): {', '.join(tabs)}")
+
+        # Collect approved targets across all tabs concurrently. A tab that
+        # can't be read (no COUNTRY column, transient Sheets error) is recorded
+        # and skipped rather than aborting the whole run.
+        read_sem = asyncio.Semaphore(6)
+        tab_errors: dict[str, str] = {}
+
+        async def _collect(tab: str) -> list[tuple[str, str, str]]:
+            async with read_sem:
+                try:
+                    t = await _collect_tab_targets(tab)
+                    _emit(job, f"  · {tab}: {len(t)} approved")
+                    return t
+                except Exception as e:
+                    tab_errors[tab] = str(e)
+                    _emit(job, f"  ⚠ {tab}: read failed — {e}")
+                    return []
+
+        per_tab = await asyncio.gather(*(_collect(t) for t in tabs))
+
+        # Dedupe by (country, number, kind): a country could appear on more than
+        # one tab, and the S3 key is country-scoped, so each asset ships once.
+        seen: set[tuple[str, str, str]] = set()
+        targets: list[tuple[str, str, str]] = []
+        for lst in per_tab:
+            for t in lst:
+                if t not in seen:
+                    seen.add(t)
+                    targets.append(t)
+        total = len(targets)
+        _emit(job, f"  {total} unique approved image(s) to check")
+
+        # Bounded concurrency: each image is an independent Drive-download →
+        # JPEG-encode → S3-put chain (IO-bound; DriveClient is per-thread and
+        # the boto3 client is thread-safe). The skip-unchanged HEAD keeps
+        # re-syncs cheap.
+        sem = asyncio.Semaphore(8)
+        counters = {"done": 0, "uploaded": 0, "skipped": 0, "failed": 0}
+
+        async def _one(rc: str, number: str, kind: str) -> dict:
+            entry = {"country": rc, "number": number, "kind": kind}
+            async with sem:
+                try:
+                    status, _url, _size = await asyncio.to_thread(
+                        _sync_one_to_s3, rc, number, kind, force=force)
+                    entry.update(ok=True, status=status)
+                    counters[status] += 1
+                except Exception as e:
+                    entry.update(ok=False, error=str(e))
+                    counters["failed"] += 1
+                    tag = "A" if kind == "answer_image" else "Q"
+                    _emit(job, f"  ✗ {rc}/{number}{tag}: {e}")
+            # Single-threaded event loop → these increments don't race.
+            counters["done"] += 1
+            if counters["done"] % 25 == 0 or counters["done"] == total:
+                _emit(job, f"  … {counters['done']}/{total}  "
+                           f"(↑{counters['uploaded']} ·{counters['skipped']} "
+                           f"✗{counters['failed']})")
+            return entry
+
+        results = await asyncio.gather(*(_one(*t) for t in targets))
+
+        # Per-country breakdown lines + summary.
+        by_country: dict[str, dict] = {}
+        for r in results:
+            c = by_country.setdefault(
+                r["country"], {"uploaded": 0, "skipped": 0, "failed": 0})
+            if not r["ok"]:
+                c["failed"] += 1
+            else:
+                c[r["status"]] += 1
+        for code in sorted(by_country):
+            c = by_country[code]
+            extra = f", {c['failed']} failed" if c["failed"] else ""
+            _emit(job, f"  ✓ {code}: {c['uploaded']} uploaded, "
+                       f"{c['skipped']} unchanged{extra}")
+
+        summary = {
+            "ok": counters["failed"] == 0 and not tab_errors,
+            "bucket": S3_BUCKET, "force": force,
+            "tabs": len(tabs), "countries": len(by_country),
+            "approved": total,
+            "uploaded": counters["uploaded"], "skipped": counters["skipped"],
+            "failed": counters["failed"], "tab_errors": tab_errors,
+            "by_country": by_country,
         }
-        async with sem:
+        job.extra["summary"] = summary
+        _emit(job, f"done. uploaded {counters['uploaded']}, "
+                   f"skipped {counters['skipped']}, failed {counters['failed']} "
+                   f"across {len(by_country)} countr"
+                   f"{'y' if len(by_country) == 1 else 'ies'}.")
+        if counters["failed"]:
+            job.error = f"{counters['failed']} image(s) failed"
+        elif tab_errors:
+            job.error = f"{len(tab_errors)} tab(s) unread"
+        job.status = "error" if job.error else "success"
+    except Exception as e:
+        job.status = "error"
+        job.error = str(e)
+        _emit(job, f"FAILED: {e}")
+    finally:
+        job.finished_at = datetime.now(timezone.utc).isoformat()
+        for q in log_subscribers.get(job.id, []):
             try:
-                status, url, size = await asyncio.to_thread(
-                    _sync_one_to_s3, rc, number, kind, force=force)
-                entry.update(ok=True, status=status, url=url, bytes=size)
-            except Exception as e:
-                entry.update(ok=False, error=str(e))
-        return entry
+                q.put_nowait("__END__")
+            except asyncio.QueueFull:
+                pass
 
-    results = await asyncio.gather(*(_one(*t) for t in targets))
-    uploaded = sum(1 for r in results if r.get("status") == "uploaded")
-    skipped = sum(1 for r in results if r.get("status") == "skipped")
-    failed = sum(1 for r in results if not r["ok"])
 
-    return {
-        "ok": failed == 0,
-        "tab": tab,
-        "country": code,
-        "bucket": S3_BUCKET,
-        "force": force,
-        "approved": len(targets),
-        "uploaded": uploaded,
-        "skipped": skipped,
-        "failed": failed,
-        "results": results,
-    }
+@app.post("/api/sync_s3")
+async def api_sync_s3(payload: dict):
+    """Kick off a background S3 sync job and return its id (stream its log).
+
+    Payload: {force?, tab?}. By default this syncs **all tabs at once** (every
+    country); pass `tab` to limit it to one. For each approved image (its
+    `Q/A Image Approved` column is ✓) it publishes
+    s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85 JPEG,
+    public-read). Images already on S3 with a matching Drive source stamp are
+    skipped unless `force` is truthy. Drive is untouched (one-way publish).
+
+    Runs as a Job so progress streams to the Log panel via
+    /api/jobs/{id}/stream (and survives long all-tab runs without a request
+    timeout). The final counts land in the job's `result` (see /api/jobs/{id}).
+    Returns the job summary (with `id`) immediately.
+    """
+    force = bool(payload.get("force"))
+    tab_arg = payload.get("tab")
+    # Resolve the tab list in request context so a bad tab 400s here (not
+    # silently inside the background task).
+    if tab_arg:
+        tabs = [_validate_tab(tab_arg)]
+    else:
+        tabs = [t["name"] for t in await asyncio.to_thread(_discover_tabs)]
+
+    job = Job(id=uuid.uuid4().hex[:8], kind="s3_sync", row=0,
+              slug="__s3_sync__", tab=(tab_arg or ""),
+              extra={"force": force, "scope": "tab" if tab_arg else "all"})
+    jobs[job.id] = job
+    recent_job_ids.append(job.id)
+    log_subscribers.setdefault(job.id, [])
+    asyncio.create_task(_run_s3_sync_job(job, force, tabs))
+    return job.summary()

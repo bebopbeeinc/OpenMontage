@@ -333,7 +333,7 @@
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
   <button onclick="loadRows({force: true})" title="Re-read sheet + Drive folder listings (skips the 120s cache)">Refresh</button>
-  <button id="sync-s3-btn" onclick="syncToS3(event)" title="Publish every approved image on this tab to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;). Unchanged images are skipped. Shift-click to force re-upload all.">Sync approved → S3</button>
+  <button id="sync-s3-btn" onclick="syncToS3(event)" title="Publish every approved image across ALL tabs/countries to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;). Unchanged images are skipped. Shift-click to force re-upload all.">Sync approved → S3</button>
   <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
 </header>
 
@@ -1042,7 +1042,8 @@ async function attachToJob(id) {
     try {
       const j = await api(`api/jobs/${id}`);
       $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
-      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      if (j.result) toastSyncResult(j.result);   // S3-sync job: show counts
+      else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
       else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
     } catch (e) { /* job might be gone */ }
     await loadRows();   // pick up new thumb
@@ -1073,7 +1074,8 @@ async function pollUntilDone(id, logEl) {
     logEl.scrollTop = logEl.scrollHeight;
     if (j.status === 'success' || j.status === 'error') {
       $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
-      if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      if (j.result) toastSyncResult(j.result);   // S3-sync job: show counts
+      else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
       else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
       await loadRows();
       await refreshActive();
@@ -1439,40 +1441,44 @@ async function discardImage(row, slug, kind) {
   }
 }
 
+// Turn an S3-sync job's `result` summary into a toast. Shared by the SSE 'end'
+// handler and the poll fallback so the counts show however the job finishes.
+function toastSyncResult(res) {
+  const errTabs = Object.keys(res.tab_errors || {});
+  const scope = `${res.countries} countr${res.countries === 1 ? 'y' : 'ies'}`;
+  if (res.approved === 0) {
+    toast(`No approved images to sync (scanned ${res.tabs} tab(s)).`, 'ok');
+  } else if (res.failed === 0 && errTabs.length === 0) {
+    const skip = res.skipped ? `, ${res.skipped} unchanged` : '';
+    toast(`Uploaded ${res.uploaded}${skip} across ${scope} → s3://${res.bucket}/trivia/`, 'ok');
+  } else {
+    const tabNote = errTabs.length ? `; ${errTabs.length} tab(s) unread` : '';
+    toast(`Uploaded ${res.uploaded}, ${res.skipped} skipped, ${res.failed} failed${tabNote}`, 'err');
+  }
+}
+
 async function syncToS3(evt) {
-  const btn = $('sync-s3-btn');
   const force = !!(evt && evt.shiftKey);
   if (!confirm(
-    `Publish every APPROVED image on "${currentTab}" to S3 as web-optimized ` +
-    `JPEGs (assets.tt.bebopbee.com/trivia/<country>)?\n\n` +
+    `Publish every APPROVED image across ALL tabs/countries to S3 as ` +
+    `web-optimized JPEGs (assets.tt.bebopbee.com/trivia/<country>)?\n\n` +
     (force
       ? 'FORCE: re-uploads ALL approved images, even unchanged ones.'
       : 'Unchanged images are skipped. Drive is untouched.')
   )) return;
-  const label = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = force ? 'Force-syncing…' : 'Syncing…';
-  toast('Publishing approved images to S3…', 'ok');
   try {
-    const data = await api('api/sync_s3', {
+    const job = await api('api/sync_s3', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({tab: currentTab, force}),
+      body: JSON.stringify({force}),
     });
-    if (data.approved === 0) {
-      toast('No approved images on this tab to sync.', 'ok');
-    } else if (data.failed === 0) {
-      const skip = data.skipped ? `, ${data.skipped} unchanged` : '';
-      toast(`Uploaded ${data.uploaded}${skip} → s3://${data.bucket}/trivia/${data.country}/`, 'ok');
-    } else {
-      const first = (data.results.find(r => !r.ok) || {});
-      toast(`Uploaded ${data.uploaded}, ${data.skipped} skipped, ${data.failed} failed (e.g. ${first.number || ''}${first.kind === 'answer_image' ? 'A' : 'Q'}: ${first.error || 'error'})`, 'err');
-    }
+    // Make sure the log panel is visible, then stream the job's progress.
+    if ($('main').classList.contains('panel-hidden')) togglePanel();
+    switchTab('log');
+    toast(`S3 sync started${force ? ' (force)' : ''} — watch the log`, 'ok');
+    attachToJob(job.id);
   } catch (e) {
-    toast(`S3 sync failed: ${e.message}`, 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = label;
+    toast(`S3 sync failed to start: ${e.message}`, 'err');
   }
 }
 
