@@ -1001,6 +1001,14 @@ def _run_generation_sync(job: Job, prompt: str,
         job.extra["resized_file_id"] = rmeta.id
         _emit(job, f"  ✓ resized → {GAME_WIDTH}×{GAME_HEIGHT} PNG "
                    f"({len(resized_bytes) // 1024} KB) uploaded to {code}/Resized")
+
+        # The tab's assembled-rows payload was computed before this image
+        # existed (state 'none'). Drop it so the post-generation /api/rows the
+        # UI fires on job completion re-resolves Drive state and surfaces the
+        # new thumbnail — same treatment approve/prompt-write already get
+        # (_set_approval / _write_prompts). Without this the thumb stays hidden
+        # until the 15s cache lapses or the user hits Refresh (TT-438).
+        _rows_cache_drop(job.tab)
     finally:
         # Always unlink the tempfile(s): the path we allocated, the path the
         # driver actually wrote (it may have rewritten the extension from .jpg

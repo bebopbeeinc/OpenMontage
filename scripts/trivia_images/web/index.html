@@ -1046,7 +1046,7 @@ async function attachToJob(id) {
       else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
       else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
     } catch (e) { /* job might be gone */ }
-    await loadRows();   // pick up new thumb
+    await loadRows({force: true});   // pick up new thumb — bypass row/listing caches (TT-438)
     await refreshActive();
     // If something else is still running/queued, auto-attach to it so the
     // user sees live progress across the whole batch without clicking.
@@ -1077,7 +1077,7 @@ async function pollUntilDone(id, logEl) {
       if (j.result) toastSyncResult(j.result);   // S3-sync job: show counts
       else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
       else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
-      await loadRows();
+      await loadRows({force: true});   // bypass row/listing caches so the new thumb shows (TT-438)
       await refreshActive();
       const next = await pickNextRunningJob();
       if (next) attachToJob(next);
