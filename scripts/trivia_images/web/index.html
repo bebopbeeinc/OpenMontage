@@ -500,10 +500,11 @@ function thumbCell(r, kind) {
     thumbnailLink: drive.thumbnail_link,
     cacheKey: drive.modified_time || drive.file_id || '',
     tag: drive.state,   // 'approved' or 'wip'
+    code: r.country,    // row's own country folder (mixed-country tabs)
   });
 }
 
-function renderThumb({slug, short, thumbnailLink, cacheKey, tag}) {
+function renderThumb({slug, short, thumbnailLink, cacheKey, tag, code}) {
   const v = encodeURIComponent(cacheKey);
   // Two URLs: the small server-resized JPEG for the row thumbnail
   // (thumb=1, ~30 KB), and the full-resolution version for the
@@ -518,8 +519,9 @@ function renderThumb({slug, short, thumbnailLink, cacheKey, tag}) {
   // ~480, leaving plenty of connection budget for /api/active polls.
   // thumbnailLink is accepted for forward-compat but ignored.
   void thumbnailLink;
-  // tab= resolves to the country folder server-side.
-  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}`;
+  // code= (row's own country) resolves the folder; tab= is the server fallback.
+  const codeParam = code ? `&code=${encodeURIComponent(code)}` : '';
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}${codeParam}`;
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagHtml = tag ? `<span class="thumb-tag ${tag}">${tag === 'approved' ? 'APPROVED' : 'WIP'}</span>` : '';
@@ -771,7 +773,7 @@ function selectedTargets() {
       if (!rowEligible(r, kind)) continue;
       const prompt = kind === 'question_image' ? r.prompt_q : r.prompt_r;
       const exists = hasImg(r, kind);
-      out.push({row: r.row, slug: r.slug, kind, prompt, exists});
+      out.push({row: r.row, slug: r.slug, kind, prompt, exists, country: r.country});
     }
   }
   return out;
@@ -928,7 +930,7 @@ async function runJob(row, slug, kind) {
     const job = await api('api/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({kind, row, slug, prompt, tab: currentTab}),
+      body: JSON.stringify({kind, row, slug, prompt, country: r.country, tab: currentTab}),
     });
     toast(`job ${job.id} queued (${kind})`);
     attachToJob(job.id);
@@ -964,7 +966,7 @@ async function runBatch(mode) {
       const job = await api('api/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({kind: t.kind, row: t.row, slug: t.slug, prompt: t.prompt, tab: currentTab}),
+        body: JSON.stringify({kind: t.kind, row: t.row, slug: t.slug, prompt: t.prompt, country: t.country, tab: currentTab}),
       });
       if (!firstJobId) firstJobId = job.id;
     } catch (e) {
@@ -1285,13 +1287,14 @@ function answersRefBlock(r) {
   `;
 }
 
-function modalPreviewFrame({slug, short, cacheKey, tag}) {
+function modalPreviewFrame({slug, short, cacheKey, tag, code}) {
   // Single 4:3 frame with a corner state tag. `src` is used directly (no lazy
   // data-src/IntersectionObserver) since the modal opens deliberately.
   // Click-to-zoom opens in a new tab because showModal() clobbers #modal-root
   // and would close the editor.
   const v = encodeURIComponent(cacheKey);
-  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}`;
+  const codeParam = code ? `&code=${encodeURIComponent(code)}` : '';
+  const baseSrc = `api/image/${encodeURIComponent(slug)}/${short}?v=${v}&tab=${encodeURIComponent(currentTab)}${codeParam}`;
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagLabel = tag === 'approved' ? 'APPROVED' : 'WIP';
@@ -1321,6 +1324,7 @@ function modalPreviewBlock(r, kind) {
     slug: r.slug, short,
     cacheKey: drive.modified_time || drive.file_id || '',
     tag: drive.state,
+    code: r.country,   // row's own country folder (mixed-country tabs)
   });
   return `
     ${frame}
@@ -1409,11 +1413,12 @@ async function savePrompts(row, slug) {
 async function approveImage(row, slug, kind) {
   const shortKind = kind === 'question_image' ? 'Q' : 'A';
   if (!confirm(`Approve ${slug}/${shortKind}? Marks it approved in the sheet.`)) return;
+  const r = allRows.find(x => x.row === row);
   try {
     const data = await api('api/approve', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({row, slug, kind, tab: currentTab}),
+      body: JSON.stringify({row, slug, kind, country: r && r.country, tab: currentTab}),
     });
     toast(`${data.drive_name} approved`, 'ok');
     await loadRows();
@@ -1428,11 +1433,12 @@ async function discardImage(row, slug, kind) {
     `Discard ${slug}/${shortKind}? The file is moved to the Shared Drive trash ` +
     `(recoverable for ~30 days from Drive's UI) and its approval is cleared.`
   )) return;
+  const r = allRows.find(x => x.row === row);
   try {
     const data = await api('api/discard', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({row, slug, kind, tab: currentTab}),
+      body: JSON.stringify({row, slug, kind, country: r && r.country, tab: currentTab}),
     });
     toast(`${data.drive_name} discarded`, 'ok');
     await loadRows();

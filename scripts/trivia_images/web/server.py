@@ -1372,7 +1372,7 @@ def _kind_alias(kind: str) -> str:
 
 @app.get("/api/image/{slug}/{kind}")
 async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0,
-                    v: str | None = None):
+                    v: str | None = None, code: str | None = None):
     """Stream an image for one (row slug, kind) pair, sourced from Drive.
 
     Serves the **512×384 resized** copy (what the game uses), so the UI shows
@@ -1393,12 +1393,17 @@ async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0
     if not number.isdigit():
         raise HTTPException(400, "bad slug")
     name = drive_name(number, kind)
-    # `tab` is required: it resolves the country folder. Defaulting it would
-    # mis-route — a bare number like 250 exists under several countries, so a
-    # missing tab could serve the wrong country's image. The UI always sends it.
-    if not tab:
-        raise HTTPException(400, "tab query param required")
-    code = await asyncio.to_thread(_tab_country_code, _validate_tab(tab))
+    # The row's own COUNTRY (`code`) resolves the folder; `tab` is the fallback
+    # when the client didn't send one. Defaulting neither would mis-route — a
+    # bare number like 250 exists under several countries, so serving without a
+    # country could return the wrong one. On a mixed-country tab the tab code
+    # (first data row) is wrong for other-country rows, so `code` must win.
+    resolved = str(code or "").strip()
+    if not resolved:
+        if not tab:
+            raise HTTPException(400, "code or tab query param required")
+        resolved = await asyncio.to_thread(_tab_country_code, _validate_tab(tab))
+    code = resolved
 
     # Prefer the 512×384 resized copy; fall back to the full-res original and
     # kick off a background migration so the resized exists next time.
@@ -1454,7 +1459,8 @@ async def api_approve(payload: dict):
     field = "approved_q" if kind == "question_image" else "approved_r"
     name = drive_name(number, kind)
 
-    code = await asyncio.to_thread(_tab_country_code, tab)
+    # Row's own COUNTRY wins; tab code is only the fallback (mixed-country tabs).
+    code = str(payload.get("country", "")).strip() or await asyncio.to_thread(_tab_country_code, tab)
     meta = await asyncio.to_thread(find_original, code, name)
     if meta is None:
         raise HTTPException(404, f"{code}/{name} not on Drive — generate it first")
@@ -1497,7 +1503,8 @@ async def api_discard(payload: dict):
     field = "approved_q" if kind == "question_image" else "approved_r"
     name = drive_name(number, kind)
 
-    code = await asyncio.to_thread(_tab_country_code, tab)
+    # Row's own COUNTRY wins; tab code is only the fallback (mixed-country tabs).
+    code = str(payload.get("country", "")).strip() or await asyncio.to_thread(_tab_country_code, tab)
     meta = await asyncio.to_thread(find_original, code, name)
     if meta is None:
         raise HTTPException(404, f"{code}/{name} not on Drive — nothing to discard")
