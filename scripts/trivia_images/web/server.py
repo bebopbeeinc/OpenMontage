@@ -125,7 +125,22 @@ def country_folder_id(code: str) -> str:
             return cached
         client = get_client()
         meta = client.find_or_create_folder(QUESTION_IMAGES_ROOT_ID, code)
-        client.ensure_anyone_reader(meta.id)
+        # Sharing is best-effort: if the service account lacks rights to add
+        # the anyone-with-link permission (e.g. it's only a Contributor on the
+        # Shared Drive, or the drive forbids link sharing), DON'T let that throw
+        # out of here — cache the folder id anyway. Otherwise every row that
+        # references this country re-resolves the folder and re-fails the
+        # permission call, turning one 403 into thousands of Drive calls and a
+        # multi-minute /api/rows (the images just won't be publicly viewable
+        # until sharing is fixed).
+        try:
+            client.ensure_anyone_reader(meta.id)
+        except Exception as e:  # noqa: BLE001
+            print(
+                f"[trivia-images] warning: could not share country folder "
+                f"{code!r} ({meta.id}) anyone-with-link: {e}",
+                file=sys.stderr, flush=True,
+            )
         _country_folder_ids[code] = meta.id
         return meta.id
 
@@ -689,11 +704,16 @@ def _drive_state_for(code: str, number: str, kind: str, approved: bool) -> dict:
     return out
 
 
-def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int = 1000, refresh_schema: bool = False) -> list[dict]:
+def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int = 20000, refresh_schema: bool = False) -> list[dict]:
     schema = _get_schema(tab, refresh=refresh_schema)
     # Read up to the rightmost column the schema cares about, with a
     # small cushion so an inserted column to the right of the tracked
     # range doesn't truncate the read on the next sheet edit.
+    #
+    # max_row is a generous upper bound, not the real row count: Sheets omits
+    # trailing empty rows from values.get, so a big cap costs nothing and just
+    # future-proofs against growing tabs (the "Generated Questions" bank is
+    # already ~1000 rows; the old 1000 cap silently dropped the tail).
     last_letter = _last_letter(schema.max_index() + 4)
     rng = f"{a1_tab(tab)}!A{min_row}:{last_letter}{max_row}"
     resp = _sheets_execute(
