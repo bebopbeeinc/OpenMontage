@@ -44,7 +44,7 @@ required_skills:
 # an image actually exists.
 external_state:
   - kind: google_sheet
-    id: 1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk
+    id: 1CpZzyAccYqEq6opMe2Ar-5LGZoxotSRiK9GUW8NU4U0
     tab: "US"   # default-ish; the web UI lists every COUNTRY tab matching the schema
     role: source_of_truth
     auth: service_account

@@ -22,4 +22,4 @@ from __future__ import annotations
 
 # Canonical "Question Images" Shared Drive root. Country code subfolders live
 # directly under it. (This is the folder that used to be APPROVED_FOLDER_ID.)
-QUESTION_IMAGES_ROOT_ID = "1wENmER7aQ6wk23jP6wOggc7mviLAB_pw"
+QUESTION_IMAGES_ROOT_ID = "13pNWMvCVDH9jVGMizC-PdNQD78jiuRx_"

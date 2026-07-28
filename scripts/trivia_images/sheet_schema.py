@@ -6,7 +6,9 @@ per-column names the team types ("#", "Question text", "Answer 1
 (correct)", "Question IMAGE Prompt", …). Hardcoded column indices broke
 whenever someone inserted a column to the left, so this module resolves
 field → live column letter at runtime by reading **both header rows**
-once per process. Row 2 wins when a label appears in both.
+once per process. Row 2 wins when a label appears in both. Matching is
+**case-insensitive** — the team spells headers inconsistently across
+tabs ("CATEGORY" vs "Category"), so case never decides a match.
 
 `FIELD_TO_HEADER` holds the 1-100-tab labels and the resolver requires
 all non-optional ones, so only tabs in that layout resolve. The
@@ -29,7 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SHEET_ID = "1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk"
+SHEET_ID = "1CpZzyAccYqEq6opMe2Ar-5LGZoxotSRiK9GUW8NU4U0"
 SHEET_TAB = "1-100"      # default tab if discovery hasn't named a preferred one
 HEADER_ROWS = (1, 2)    # row 1 = section banners, row 2 = per-column names
 DATA_START_ROW = 3
@@ -173,22 +175,29 @@ class SheetSchema:
         return out
 
     def _resolve_from_rows(self, rows: list[list[str]]) -> dict[str, int]:
-        # Per-row label maps. Row 2 wins over row 1 when both have the
+        # Per-row label maps. Row 2 wins over row 1 when both carry the
         # same label (rare but possible — row 2 is the authoritative
-        # per-column row).
+        # per-column row). Matching is CASE-INSENSITIVE: the team types
+        # headers inconsistently across tabs ("CATEGORY" on the metadata
+        # block of every country tab, but a stray "Category" in col A on
+        # some), so we fold case on both the sheet labels and the
+        # FIELD_TO_HEADER targets. Keys are lowercased; `seen_labels`
+        # keeps the original spelling for the error message.
         row1 = rows[0] if len(rows) >= 1 else []
         row2 = rows[1] if len(rows) >= 2 else []
         label_to_index: dict[str, int] = {}
+        seen_labels: list[str] = []
         for source in (row1, row2):
             for i, label in enumerate(source):
                 label = (label or "").strip()
                 if label:
-                    label_to_index[label] = i   # row 2 overwrites row 1
+                    label_to_index[label.lower()] = i   # row 2 overwrites row 1
+                    seen_labels.append(label)
 
         out: dict[str, int] = {}
         unresolved_required: list[str] = []
         for field, header in FIELD_TO_HEADER.items():
-            idx = label_to_index.get(header)
+            idx = label_to_index.get(header.lower())
             if idx is not None:
                 out[field] = idx
             elif field not in OPTIONAL_FIELDS:
@@ -197,7 +206,7 @@ class SheetSchema:
             raise RuntimeError(
                 f"{self._tab} header rows missing required labels: "
                 f"{', '.join(unresolved_required)}. "
-                f"Resolved labels: {sorted(label_to_index)}"
+                f"Resolved labels: {sorted(set(seen_labels))}"
             )
         return out
 
