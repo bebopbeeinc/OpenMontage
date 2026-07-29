@@ -197,17 +197,20 @@ def main() -> int:
         char = args.character.strip() or None
         workspace = CHARACTER_WORKSPACE if char else D.OPENART_WORKSPACE
 
-        saved = D.generate_image(
-            prompt=prompt,
-            model=MODEL,
-            output_paths=out_paths,
-            headless=args.headless,
-            aspect=ASPECT,
-            resolution=RESOLUTION,
-            reference_image_path=frame,
-            character=char,
-            workspace=workspace,
-        )
+        try:
+            saved = D.generate_image(
+                prompt=prompt,
+                model=MODEL,
+                output_paths=out_paths,
+                headless=args.headless,
+                aspect=ASPECT,
+                resolution=RESOLUTION,
+                reference_image_path=frame,
+                character=char,
+                workspace=workspace,
+            )
+        except D.OpenArtGenerationError as e:
+            sys.exit(f"cover generation failed: {e}")
 
     if not saved:
         sys.exit("cover generation returned no images")

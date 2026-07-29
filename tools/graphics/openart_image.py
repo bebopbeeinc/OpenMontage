@@ -212,7 +212,11 @@ class OpenArtImage(BaseTool):
         if str(DRIVER_DIR) not in sys.path:
             sys.path.insert(0, str(DRIVER_DIR))
         try:
-            from openart_image_driver import generate_image  # type: ignore
+            from openart_image_driver import (  # type: ignore
+                generate_image,
+                OpenArtGenerationError,
+                OpenArtOutOfCreditsError,
+            )
         except ImportError as e:
             return ToolResult(
                 success=False,
@@ -243,6 +247,29 @@ class OpenArtImage(BaseTool):
                 resolution=inputs.get("resolution", "2K"),
                 keep_source_ext=bool(inputs.get("keep_source_ext", True)),
                 reference_image_path=reference_image_path,
+            )
+        except OpenArtOutOfCreditsError as e:
+            # Every candidate OpenArt workspace is out of credits, including the
+            # driver's fallbacks. Unlike a content-policy block this is retryable
+            # once credits exist, so say so — callers log this straight to the UI.
+            return ToolResult(
+                success=False,
+                error=(
+                    f"OpenArt is out of credits: {e}. Add credits to a workspace "
+                    f"(or point OPENART_FALLBACK_WORKSPACES at one that has "
+                    f"them), then retry — the prompt itself is fine."
+                ),
+                duration_seconds=time.time() - start,
+                model=model,
+            )
+        except OpenArtGenerationError as e:
+            # Zero variants came back with a known reason (e.g. a content-policy
+            # block). Surface the reason verbatim — no wrapper prefix.
+            return ToolResult(
+                success=False,
+                error=str(e),
+                duration_seconds=time.time() - start,
+                model=model,
             )
         except Exception as e:
             return ToolResult(

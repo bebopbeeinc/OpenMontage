@@ -17,6 +17,11 @@ manual login.
 
 Public API:
     generate_image(prompt, model, output_paths, headless=False, ...) -> list[Path]
+      Raises OpenArtGenerationError when zero variants come back (e.g. a
+      content-policy block); the message carries the failure reason.
+      Raises OpenArtOutOfCreditsError when every candidate workspace is out of
+      credits. Credits are per-workspace, so an exhausted workspace is retried
+      in `fallback_workspaces` before that error surfaces.
 
 Smoke test:
     python scripts/trivia_images/openart_image_driver.py \
@@ -26,6 +31,7 @@ Smoke test:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import time
@@ -53,6 +59,23 @@ OPENART_SUITE_BASE = "https://openart.ai/suite/create-image"
 # characters), so we re-assert it on every run before generating. Set to ""
 # to skip the switch and use whatever team is currently active.
 OPENART_WORKSPACE = "BebopBee Art Team"
+
+# Workspaces to fall back to, in order, when the primary one is out of credits.
+# Each OpenArt workspace has its own credit pool: the "BebopBee Art Team" team
+# plan refills monthly and runs dry mid-batch (a 4:3 2K Nano Banana Pro image
+# costs ~70 credits), while the personal "R N" workspace carries the much
+# larger Wonder-plan balance. Falling back keeps a batch running instead of
+# failing every remaining row. Pass `fallback_workspaces=()` to disable.
+OPENART_FALLBACK_WORKSPACES: tuple[str, ...] = ("R N",)
+
+# Once a workspace has been seen out of credits we skip it for this long rather
+# than re-paying the switch + click + paywall round trip on every subsequent row
+# of a batch. Process-local and time-boxed, so topping the plan up self-heals
+# without a restart. Long-lived callers (the trivia-images server) benefit most.
+CREDIT_EXHAUSTED_TTL_S = 1800
+
+# workspace name -> monotonic time when it was last seen out of credits.
+_credit_exhausted: dict[str, float] = {}
 
 # Model display name -> URL slug. The slug is the source of truth; landing on
 # the slug URL preselects the model in the Model card.
@@ -114,6 +137,14 @@ class Selectors:
     reference_cdn_preview: str = (
         "img[alt='Reference'][src*='cdn.openart.ai/openart-uploads/']"
     )
+
+    # Out-of-credits paywall. CONFIRMED (2026-07-29) against the exhausted
+    # "BebopBee Art Team" workspace: clicking Generate with an insufficient
+    # balance fires NO creation POST at all — it opens a Radix dialog reading
+    # "Add more credits for your team to continue creating." That silence is
+    # why the batch stalled: the old code sat in expect_response until its 30s
+    # timeout and reported a bare Playwright TimeoutError with no reason.
+    modal: str = "[role='dialog'], [role='alertdialog']"
 
 
 SEL = Selectors()
@@ -244,6 +275,129 @@ def _select_workspace(page: Page, workspace: str) -> None:
     item.click(force=True)
     # Switching workspace reloads the suite content + asset library.
     time.sleep(2.5)
+
+
+# ---------------------------------------------------------------------------
+# Credits
+# ---------------------------------------------------------------------------
+class OpenArtOutOfCreditsError(RuntimeError):
+    """Raised when the active workspace can't afford the generation.
+
+    Deliberately NOT an `OpenArtGenerationError`: that one means OpenArt ran
+    the job and refused the result (e.g. a content-policy block), which is
+    permanent for that prompt. This one means the job never ran, and the same
+    prompt will succeed once credits exist — callers must not conflate them.
+    """
+
+
+# Phrases seen in the credit paywall dialog. The first is verbatim from the
+# team-owner variant; the rest cover the non-owner / personal-plan wordings.
+_PAYWALL_PHRASES = (
+    "add more credits",
+    "not enough credits",
+    "insufficient credits",
+    "out of credits",
+    "run out of credits",
+    "need more credits",
+    "to continue creating",
+)
+# Fallback: any dialog that talks about credits AND tries to sell something.
+# Guards against OpenArt rewording the copy above.
+_PAYWALL_UPSELL_WORDS = ("upgrade", "add to plan", "buy", "purchase", "top up", "/month")
+
+
+def _looks_like_credit_block(text: str) -> bool:
+    low = text.lower()
+    if any(p in low for p in _PAYWALL_PHRASES):
+        return True
+    return "credit" in low and any(w in low for w in _PAYWALL_UPSELL_WORDS)
+
+
+def _credit_paywall_reason(page: Page) -> Optional[str]:
+    """Return the paywall dialog's first line if one is open, else None.
+
+    Only matched on credit-specific copy, so the Setting/Model popovers (also
+    `[role='dialog']`) never false-positive.
+    """
+    dialogs = page.locator(SEL.modal)
+    for i in range(dialogs.count()):
+        try:
+            text = dialogs.nth(i).inner_text()
+        except Exception:
+            continue
+        if text and _looks_like_credit_block(text):
+            first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+            return first or "credit paywall dialog opened"
+    return None
+
+
+def _dismiss_modals(page: Page, attempts: int = 3) -> None:
+    """Escape out of any open dialog so the next attempt starts clean."""
+    for _ in range(attempts):
+        if page.locator(SEL.modal).count() == 0:
+            return
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            return
+        time.sleep(0.4)
+
+
+def _workspace_balance(page: Page) -> Optional[int]:
+    """Credit balance of the *active* workspace, or None if unreadable.
+
+    `POST /suite/api/user/current-workspace` is what the suite itself calls to
+    populate the header credit chip, and it works for both workspace kinds
+    (team plan and personal). Its `subscription_monthly_credit` is exactly the
+    number the chip renders — verified 2026-07-29: 20 for "BebopBee Art Team",
+    103700 for "R N". Note GET returns 405; it must be a POST.
+
+    Never raises — a probe failure must not block a generation that might work.
+    """
+    try:
+        resp = page.context.request.post(
+            "https://openart.ai/suite/api/user/current-workspace",
+            data={}, timeout=15_000,
+        )
+        if not resp.ok:
+            return None
+        value = json.loads(resp.text()).get("subscription_monthly_credit")
+        return int(value) if isinstance(value, (int, float)) else None
+    except Exception:
+        return None
+
+
+def _generate_cost(page: Page) -> Optional[int]:
+    """Credit cost of the pending generation, read off the Generate button.
+
+    The button renders its price inline: "Generate70(80)" = 70 charged, 80 list
+    (discounted models show both; undiscounted show one). We take the first
+    number — the amount actually charged — so we don't skip a workspace that
+    can in fact afford the job. Returns None if no price is rendered yet.
+    """
+    try:
+        text = page.locator(SEL.generate_button).first.text_content() or ""
+    except Exception:
+        return None
+    m = re.search(r"\d[\d,]*", text)
+    return int(m.group(0).replace(",", "")) if m else None
+
+
+def _mark_exhausted(workspace: Optional[str]) -> None:
+    if workspace:
+        _credit_exhausted[workspace] = time.monotonic()
+
+
+def _recently_exhausted(workspace: Optional[str]) -> bool:
+    if not workspace:
+        return False
+    seen = _credit_exhausted.get(workspace)
+    if seen is None:
+        return False
+    if time.monotonic() - seen > CREDIT_EXHAUSTED_TTL_S:
+        del _credit_exhausted[workspace]
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +640,62 @@ def _click_generate(page: Page) -> None:
     btn.click()
 
 
+# How long to wait for the creation POST after clicking Generate. The paywall
+# check runs concurrently, so an out-of-credits click fails in ~1s instead of
+# burning this whole budget.
+SUBMIT_TIMEOUT_S = 30
+
+
+def _submit_and_capture(page: Page, ws_label: str) -> dict:
+    """Click Generate and return the parsed creation-POST body.
+
+    Races two outcomes instead of blindly waiting for the POST:
+      - `POST /suite/api/forms/creations/...` fires  -> normal submit
+      - a credit paywall dialog opens                -> OpenArtOutOfCreditsError
+
+    Uses a response listener rather than `page.expect_response`, whose context
+    manager blocks for the full timeout on exit and so can't be raced.
+    """
+    captured: dict[str, object] = {}
+
+    def _on_response(response) -> None:
+        if (response.request.method == "POST"
+                and "/suite/api/forms/creations/" in response.url):
+            captured.setdefault("response", response)
+
+    page.on("response", _on_response)
+    try:
+        _click_generate(page)
+        deadline = time.time() + SUBMIT_TIMEOUT_S
+        while time.time() < deadline:
+            if "response" in captured:
+                break
+            reason = _credit_paywall_reason(page)
+            if reason:
+                raise OpenArtOutOfCreditsError(f"{ws_label}: {reason}")
+            time.sleep(0.5)
+        else:
+            _diagnose(page, "submit_no_post")
+            raise RuntimeError(
+                f"Generate clicked but no creation POST fired within "
+                f"{SUBMIT_TIMEOUT_S}s — see diagnostic above",
+            )
+    finally:
+        page.remove_listener("response", _on_response)
+
+    resp = captured["response"]
+    if not resp.ok:
+        body = resp.text()[:400]
+        # A server-side credit rejection is the same condition as the dialog —
+        # route it to the same fallback rather than failing the row.
+        if resp.status == 402 or _looks_like_credit_block(body):
+            raise OpenArtOutOfCreditsError(
+                f"{ws_label}: submit rejected (HTTP {resp.status}): {body}",
+            )
+        raise RuntimeError(f"submit POST returned HTTP {resp.status}: {body}")
+    return json.loads(resp.text())
+
+
 def _resolve_project_id(page: Page) -> str:
     """Return the active workspace's default project id.
 
@@ -494,7 +704,6 @@ def _resolve_project_id(page: Page) -> str:
     default project ("Personal Project"), which is where the suite lands new
     creations when no project is explicitly chosen.
     """
-    import json
     resp = page.context.request.get(
         "https://openart.ai/suite/api/projects?pageSize=50", timeout=15_000,
     )
@@ -507,6 +716,74 @@ def _resolve_project_id(page: Page) -> str:
     if rows and isinstance(rows[0], dict) and rows[0].get("id"):
         return rows[0]["id"]
     raise RuntimeError("no projects found for the active workspace")
+
+
+class OpenArtGenerationError(RuntimeError):
+    """Raised when OpenArt returns zero usable variants.
+
+    The message carries the best-available failure reason (e.g. a content-policy
+    block like "[google] Content Policy Violation") so callers can surface WHY
+    a generation produced nothing instead of a bare "no saved paths".
+    """
+
+
+# Fields OpenArt carries a failure reason in. CONFIRMED (2026-07-03, captured
+# from a real content-policy block): the list row has a top-level
+# `failedReason` = "[google] Content Policy Violation" plus `failedCode` =
+# "upstream_error", with `status` = "failed". There is NO top-level `error`
+# field. The rest are kept as defensive fallbacks in case OpenArt renames.
+_REASON_FIELDS = (
+    "failedReason", "failedCode",
+    "error", "errorMessage", "failureReason",
+    "statusMessage", "statusMessages", "message", "moderationReason", "reason",
+)
+# Distinctive enough to avoid false positives on benign fields (URLs, mime
+# types); "[google] Content Policy Violation" hits both "policy" and "violation".
+_REASON_SIGNALS = ("policy", "violation", "moderat", "nsfw", "safety")
+
+
+def _deep_find_reason(obj: object) -> Optional[str]:
+    """Depth-first hunt for a short string that reads like a moderation reason."""
+    if isinstance(obj, str):
+        low = obj.lower()
+        if len(obj) <= 300 and any(sig in low for sig in _REASON_SIGNALS):
+            return obj.strip()
+        return None
+    if isinstance(obj, dict):
+        for v in obj.values():
+            hit = _deep_find_reason(v)
+            if hit:
+                return hit
+    elif isinstance(obj, list):
+        for v in obj:
+            hit = _deep_find_reason(v)
+            if hit:
+                return hit
+    return None
+
+
+def _failure_reason(row: dict) -> str:
+    """Best-effort human reason for a failed resource row.
+
+    Checks known reason fields (top-level + nested under `metadata`), then falls
+    back to any moderation-looking string anywhere in the row, then to the bare
+    status. This surfaces "[google] Content Policy Violation" even before we
+    know OpenArt's exact field name for it — see the instrumentation dump in
+    `_poll_resources`, which logs the full failing row so we can pin the field.
+    """
+    containers = [row]
+    meta = row.get("metadata")
+    if isinstance(meta, dict):
+        containers.append(meta)
+    for container in containers:
+        for f in _REASON_FIELDS:
+            v = container.get(f)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    hit = _deep_find_reason(row)
+    if hit:
+        return hit
+    return (row.get("status") or "failed")
 
 
 def _poll_resources(
@@ -531,7 +808,6 @@ def _poll_resources(
       `status` ("completed"/…), `error`, and `metadata` — a completed row
       has a non-empty `url`.
     """
-    import json
     project_id = _resolve_project_id(page)
     list_url = (
         "https://openart.ai/suite/api/resources"
@@ -565,9 +841,21 @@ def _poll_resources(
                             "metadata": row.get("metadata") or {},
                         }
                     elif status in {"failed", "error"} or row.get("error"):
+                        # Instrument: the list-row `error` is usually empty on
+                        # content-policy blocks, so dump the failing row once —
+                        # that's how we discover which field actually carries the
+                        # reason (then fold it into _REASON_FIELDS). Drop the bulky
+                        # request-echo fields so the status/reason fields aren't
+                        # pushed past the truncation window.
+                        _dbg = {k: v for k, v in row.items()
+                                if k not in ("input", "params", "visualReferences")}
+                        print(
+                            f"    ✗ failed row {rid}: {json.dumps(_dbg)[:4000]}",
+                            file=sys.stderr,
+                        )
                         settled[rid] = {
                             "status": "failed",
-                            "error": row.get("error") or status or "unknown",
+                            "error": _failure_reason(row),
                         }
         except Exception:
             # Transient — try again next round
@@ -642,6 +930,7 @@ def generate_image(
     reference_image_path: Optional[Path] = None,
     workspace: Optional[str] = OPENART_WORKSPACE,
     character: Optional[str] = None,
+    fallback_workspaces: tuple[str, ...] = OPENART_FALLBACK_WORKSPACES,
 ) -> list[Path]:
     """Drive openart.ai to generate `len(output_paths)` image variants.
 
@@ -668,9 +957,19 @@ def generate_image(
         character: optional saved-character name to attach as a visual
             reference before the prompt (via _select_character). The character
             must live in the active `workspace`. None skips the step.
+        fallback_workspaces: workspaces to retry in, in order, if the primary
+            one is out of credits (defaults to `OPENART_FALLBACK_WORKSPACES`).
+            Pass `()` to disable and surface the credit failure instead.
+            Ignored when `character` is set — saved characters are
+            workspace-scoped, so switching would silently drop the character.
 
     Returns saved paths in newest-first gallery order, aligned with
     `output_paths` (output_paths[0] = newest variant).
+
+    Raises:
+        OpenArtOutOfCreditsError: every candidate workspace is out of credits.
+        OpenArtGenerationError: OpenArt ran the job but returned no usable
+            variant (e.g. a content-policy block).
     """
     if not output_paths:
         raise ValueError("output_paths must contain at least one path")
@@ -680,54 +979,105 @@ def generate_image(
     n = len(output_paths)
     target_url = _model_url(model)
 
+    # Saved characters live in one workspace, so a credit fallback would
+    # silently generate without the character. Better to fail loudly.
+    if character:
+        fallback_workspaces = ()
+
     with sync_playwright() as p, _browser(p, headless=headless) as ctx:
         page = ctx.new_page()
         _ensure_logged_in(page, target_url, headless=headless)
 
-        # Re-assert the workspace before anything else — OpenArt can silently
-        # swap the active team between runs, and the trivia-images art lives in
-        # a specific one.
-        if workspace:
-            print(f"  → ensuring workspace: {workspace}", file=sys.stderr)
-            _select_workspace(page, workspace)
+        def fill_and_submit(ws: Optional[str], precheck: bool) -> dict:
+            """Set up the form in workspace `ws` and submit. Raises
+            OpenArtOutOfCreditsError if `ws` can't afford the generation."""
+            label = ws or "active workspace"
 
-        _select_model_in_picker(page, model)
-        _select_aspect(page, aspect)
-        _select_resolution(page, resolution)
-        _close_popover(page)
+            # Re-assert the workspace before anything else — OpenArt can
+            # silently swap the active team between runs, and the trivia-images
+            # art lives in a specific one.
+            if ws:
+                print(f"  → ensuring workspace: {ws}", file=sys.stderr)
+                _select_workspace(page, ws)
 
-        # Insert the saved character as a visual reference before the prompt.
-        if character:
-            _select_character(page, character)
+            _select_model_in_picker(page, model)
+            _select_aspect(page, aspect)
+            _select_resolution(page, resolution)
+            _close_popover(page)
 
-        # Attach the reference BEFORE entering the prompt so the upload has
-        # time to settle while we fill the rest of the form. The wait inside
-        # _attach_reference_image still gates submission on the CDN URL.
-        if reference_image_path is not None:
-            _attach_reference_image(page, reference_image_path)
+            # Insert the saved character as a visual reference before the prompt.
+            if character:
+                _select_character(page, character)
 
-        _set_variant_count(page, n)
-        _enter_prompt(page, prompt)
+            # Attach the reference BEFORE entering the prompt so the upload has
+            # time to settle while we fill the rest of the form. The wait inside
+            # _attach_reference_image still gates submission on the CDN URL.
+            if reference_image_path is not None:
+                _attach_reference_image(page, reference_image_path)
 
-        print(
-            f"  → submit (model={model}, aspect={aspect}, res={resolution}, "
-            f"prompt={len(prompt)} chars, variants={n})",
-            file=sys.stderr,
-        )
+            _set_variant_count(page, n)
+            _enter_prompt(page, prompt)
 
-        # Capture the submit POST response — it contains the resourceIds we
-        # need to look up the full-res CDN URLs via /api/resources/{id}.
-        # expect_response wraps the click so we don't miss it.
-        with page.expect_response(
-            lambda r: "/suite/api/forms/creations/" in r.url and r.request.method == "POST",
-            timeout=30_000,
-        ) as resp_info:
-            _click_generate(page)
-        resp = resp_info.value
-        if not resp.ok:
-            raise RuntimeError(f"submit POST returned HTTP {resp.status}: {resp.text()[:200]}")
-        import json
-        submit_data = json.loads(resp.text())
+            # Cheap pre-check: the button renders the price and the API knows the
+            # balance, so a doomed submit can be skipped before clicking. Only
+            # ever used to jump to a fallback (`precheck` is False on the last
+            # candidate) — the paywall race in _submit_and_capture is the sole
+            # authority for actually failing a job, so a stale or incomplete
+            # balance reading can never turn a workable generation into an error.
+            balance, cost = _workspace_balance(page), _generate_cost(page)
+            if balance is not None:
+                detail = f", cost {cost}" if cost is not None else ""
+                print(f"  → credits: {balance} in {label}{detail}", file=sys.stderr)
+                if precheck and cost is not None and balance < cost:
+                    raise OpenArtOutOfCreditsError(
+                        f"{label}: {balance} credits left, this generation "
+                        f"costs {cost}",
+                    )
+
+            print(
+                f"  → submit (model={model}, aspect={aspect}, res={resolution}, "
+                f"prompt={len(prompt)} chars, variants={n})",
+                file=sys.stderr,
+            )
+            # The creation POST carries the resourceIds we need to look up the
+            # full-res CDN URLs.
+            return _submit_and_capture(page, label)
+
+        candidates: list[Optional[str]] = [workspace or None]
+        candidates += [w for w in fallback_workspaces if w and w != workspace]
+
+        submit_data: dict | None = None
+        for i, ws in enumerate(candidates):
+            is_last = i == len(candidates) - 1
+            if not is_last and _recently_exhausted(ws):
+                print(
+                    f"  → skipping {ws}: seen out of credits in the last "
+                    f"{CREDIT_EXHAUSTED_TTL_S // 60}min",
+                    file=sys.stderr,
+                )
+                continue
+            try:
+                submit_data = fill_and_submit(ws, precheck=not is_last)
+                break
+            except OpenArtOutOfCreditsError as e:
+                _mark_exhausted(ws)
+                if is_last:
+                    tried = ", ".join(repr(c or "active workspace") for c in candidates)
+                    raise OpenArtOutOfCreditsError(
+                        f"{e} — no workspace has credits (tried {tried})",
+                    ) from e
+                print(
+                    f"  ⚠ out of credits — {e}\n"
+                    f"  ↪ retrying in workspace {candidates[i + 1]!r}",
+                    file=sys.stderr,
+                )
+                # Drop the paywall dialog and reload so the next attempt fills a
+                # clean form (the reference image re-uploads under the new
+                # workspace's user id).
+                _dismiss_modals(page)
+                _goto_suite(page, target_url)
+
+        assert submit_data is not None  # loop either breaks with data or raises
         resource_ids = submit_data.get("resourceIds") or []
         history_id = submit_data.get("historyId")
         if not resource_ids:
@@ -741,9 +1091,12 @@ def generate_image(
         resolved = _poll_resources(page, resource_ids, GENERATION_TIMEOUT_S * max(1, n))
 
         saved: list[Path] = []
+        failures: list[str] = []
         for (rid, info), dest in zip(resolved, output_paths):
             if info.get("status") != "ok":
-                print(f"  ✗ {rid}: {info.get('status')} ({info.get('error')})", file=sys.stderr)
+                reason = info.get("error") or info.get("status") or "unknown"
+                print(f"  ✗ {rid}: {info.get('status')} ({reason})", file=sys.stderr)
+                failures.append(reason)
                 continue
             url = info["url"]
             if keep_source_ext:
@@ -756,6 +1109,15 @@ def generate_image(
             print(f"  ✓ saved {dest}  ({dims}, {meta.get('format','?')})", file=sys.stderr)
         if len(saved) < n:
             print(f"  ⚠ {n - len(saved)} variant(s) did not save successfully", file=sys.stderr)
+        if not saved:
+            # Nothing usable came back — carry WHY up to the caller instead of a
+            # bare empty list. Every caller already treats empty as fatal; this
+            # just attaches the reason (e.g. a content-policy block). Partial
+            # multi-variant success still returns normally above.
+            raise OpenArtGenerationError(
+                "; ".join(dict.fromkeys(failures))
+                or "generation failed (no variants returned)"
+            )
         return saved
 
 
@@ -787,6 +1149,10 @@ def _main() -> int:
     ap.add_argument("--workspace", default=OPENART_WORKSPACE,
                     help="OpenArt team to activate before generating "
                          "(default %(default)r; pass '' to keep the active one)")
+    ap.add_argument("--fallback-workspace", default=",".join(OPENART_FALLBACK_WORKSPACES),
+                    help="comma-separated workspaces to retry in when the "
+                         "primary is out of credits (default %(default)r; "
+                         "pass '' to disable and fail instead)")
     args = ap.parse_args()
 
     if args.probe:
@@ -808,6 +1174,9 @@ def _main() -> int:
         resolution=args.resolution,
         reference_image_path=args.reference,
         workspace=args.workspace,
+        fallback_workspaces=tuple(
+            w.strip() for w in args.fallback_workspace.split(",") if w.strip()
+        ),
     )
     for s in saved:
         print(f"saved: {s}")
