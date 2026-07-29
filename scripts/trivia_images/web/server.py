@@ -1234,7 +1234,11 @@ async def api_tabs(refresh: int = 0):
         raise HTTPException(500, f"tab discovery failed: {e}")
     names = [t["name"] for t in tabs]
     default = SHEET_TAB if SHEET_TAB in names else (names[0] if names else SHEET_TAB)
-    return {"tabs": tabs, "default": default}
+    # sheet_id travels with the tabs (which carry the per-tab gid) so the UI can
+    # build its "Sheet ↗" deep link from server truth on first paint. It used to
+    # be hardcoded in index.html and silently kept pointing at the pre-repoint
+    # workbook — see sheet_schema.SHEET_ID for the canonical value.
+    return {"tabs": tabs, "default": default, "sheet_id": SHEET_ID}
 
 
 @app.get("/api/rows")

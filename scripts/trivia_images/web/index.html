@@ -326,9 +326,13 @@
   <h1>Trivia Images</h1>
   <div class="tab-strip" id="tab-strip"></div>
   <div class="meta" id="meta">loading…</div>
+  <!-- Both hrefs are populated by renderDriveLinks() from /api/tabs + /api/health.
+       They were hardcoded, which left them pointing at the old workbook and the
+       old Drive folder after the repoint — a wrong link is worse than a dead one,
+       so there is deliberately no fallback id baked in here. -->
   <div class="drive-links">
-    <a id="sheet-link" href="https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=516450971#gid=516450971" target="_blank" rel="noopener">Sheet ↗</a>
-    <a href="https://drive.google.com/drive/folders/1wENmER7aQ6wk23jP6wOggc7mviLAB_pw" target="_blank" rel="noopener">Question Images ↗</a>
+    <a id="sheet-link" target="_blank" rel="noopener">Sheet ↗</a>
+    <a id="images-link" target="_blank" rel="noopener">Question Images ↗</a>
   </div>
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
@@ -826,6 +830,11 @@ async function loadRows({force = false} = {}) {
       api(`api/rows?${tabQuery()}${refreshSuffix}`),
     ]);
     allRows = data;
+    // /api/health is the authority for both ids (it reads them straight from
+    // sheet_schema / drive_config), so refresh the header links from it.
+    if (health.sheet_id) sheetId = health.sheet_id;
+    if (health.question_images_root_id) questionImagesRootId = health.question_images_root_id;
+    renderDriveLinks();
     $('meta').textContent = `${allRows.length} row(s) · tab=${currentTab} · sa=${health.sa_present ? 'ok' : 'MISSING'}`;
     loadingRows = false;
     populateFilterDropdowns();
@@ -852,9 +861,40 @@ function renderTabStrip() {
   // renamed, or removed in Sheets after this session started.
   const refreshBtn = `<button title="Re-discover tabs from sheet" onclick="refreshTabs()" style="padding: 6px 10px;">↻</button>`;
   strip.innerHTML = tabButtons + refreshBtn;
-  const gid = tabGid(currentTab);
-  if (gid) {
-    $('sheet-link').href = `https://docs.google.com/spreadsheets/d/1Kh9Ai9-sKyyK1q24jVkQqeIz-Y-0rdNVIjPc2EF8hPk/edit?gid=${gid}#gid=${gid}`;
+  renderDriveLinks();
+}
+
+// Sheet + Drive ids, always from the server (/api/tabs and /api/health) so they
+// track sheet_schema.SHEET_ID and drive_config.QUESTION_IMAGES_ROOT_ID instead
+// of drifting when those are repointed.
+let sheetId = '';
+let questionImagesRootId = '';
+
+function renderDriveLinks() {
+  const sheetLink = $('sheet-link');
+  if (sheetLink) {
+    if (sheetId) {
+      const gid = tabGid(currentTab);
+      // Deep-link to the active tab when we know its gid; the workbook root is
+      // still a useful link when we don't.
+      sheetLink.href = gid
+        ? `https://docs.google.com/spreadsheets/d/${sheetId}/edit?gid=${gid}#gid=${gid}`
+        : `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
+      sheetLink.removeAttribute('title');
+    } else {
+      sheetLink.removeAttribute('href');
+      sheetLink.title = 'sheet id unavailable — server unreachable?';
+    }
+  }
+  const imagesLink = $('images-link');
+  if (imagesLink) {
+    if (questionImagesRootId) {
+      imagesLink.href = `https://drive.google.com/drive/folders/${questionImagesRootId}`;
+      imagesLink.removeAttribute('title');
+    } else {
+      imagesLink.removeAttribute('href');
+      imagesLink.title = 'folder id unavailable — server unreachable?';
+    }
   }
 }
 
@@ -862,6 +902,7 @@ async function loadTabs(refresh = false) {
   try {
     const data = await api(refresh ? 'api/tabs?refresh=1' : 'api/tabs');
     availableTabs = data.tabs || [];
+    if (data.sheet_id) sheetId = data.sheet_id;
     if (!tabNames().includes(currentTab)) {
       currentTab = data.default || (availableTabs[0] && availableTabs[0].name) || '';
     }
