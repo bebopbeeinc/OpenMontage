@@ -28,12 +28,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
-from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (
     FileResponse,
-    RedirectResponse,
     Response,
     StreamingResponse,
 )
@@ -245,43 +243,62 @@ def migrate_resized(code: str, name: str, original_meta: FileMeta) -> FileMeta:
     return meta   # inherits public from the Resized folder
 
 
-# File IDs already made anyone-with-link readable, so we don't re-check sharing
-# on every request (the check is idempotent but still a Drive round-trip).
-_public_ids: set[str] = set()
-_public_lock = threading.Lock()
+# Per-file anyone-with-link sharing used to be granted here so the browser could
+# fetch bytes straight off Drive's public CDN. /api/image now proxies the bytes
+# itself (see its docstring for why the CDN redirect had to go), so no per-file
+# permission write is needed on the request path. The country/Resized folders
+# are still shared link-readable by country_folder_id / resized_folder_id, which
+# is what the S3 sync and the game consume.
 
 
-def ensure_public(file_id: str) -> None:
-    """Grant anyone-with-link read on a Drive file (cached per process).
+# Row-thumbnail render: 256×192 keeps the 4:3 shape at the size the grid
+# actually paints (94×70 CSS px, so 256 covers 2× DPR). JPEG q80 lands at
+# ~15-25 KB — a third of what Google's sz=w256 render returned.
+THUMB_WIDTH, THUMB_HEIGHT, THUMB_QUALITY = 256, 192, 80
 
-    Lets the browser fetch it straight from Google's CDN (see _cdn_url) instead
-    of streaming through this server. The trivia image assets are intentionally
-    public — see the /api/image redirect path.
+# Rendered thumbnails, keyed by (file_id, modified_time) so a regenerated image
+# (files.update keeps the id, bumps the time) misses and re-renders. Bounded and
+# cleared wholesale — it's a render cache, not a source of truth.
+_thumb_cache: dict[tuple[str, str], bytes] = {}
+_thumb_cache_lock = threading.Lock()
+_THUMB_CACHE_MAX = 512
+
+
+def _thumb_bytes(meta: FileMeta) -> bytes:
+    """256×192 JPEG for `meta`, rendered once per (file_id, modified_time).
+
+    The underlying download is itself cached by DriveClient.download_bytes on the
+    same key, so a cache miss here costs one Drive fetch at most.
     """
-    with _public_lock:
-        if file_id in _public_ids:
-            return
-    get_client().ensure_anyone_reader(file_id)
-    with _public_lock:
-        _public_ids.add(file_id)
+    key = (meta.id, meta.modified_time)
+    with _thumb_cache_lock:
+        hit = _thumb_cache.get(key)
+    if hit is not None:
+        return hit
+    data, _mime, _ = get_client().download_bytes(
+        meta.id, meta.modified_time, mime_hint=meta.mime_type,
+    )
+    jpg = optimize_image_bytes_jpg(
+        data, width=THUMB_WIDTH, height=THUMB_HEIGHT, quality=THUMB_QUALITY,
+    )
+    with _thumb_cache_lock:
+        if len(_thumb_cache) >= _THUMB_CACHE_MAX:
+            _thumb_cache.clear()
+        _thumb_cache[key] = jpg
+    return jpg
 
 
-def _cdn_url(file_id: str, *, thumb: bool, version: str | None = None) -> str:
-    """Public Drive CDN URL for a file. `thumbnail` serves a CDN-resized image
-    (Google does the downscale), so even a full-res original is cheap to fetch.
+def _image_etag(meta: FileMeta, thumb: bool) -> str:
+    """Validator for an image response. Contains the served file's own
+    modified_time, so regenerating an image necessarily changes it."""
+    return f'W/"{meta.id}.{meta.modified_time}.{"t" if thumb else "f"}"'
 
-    `version` is appended as an otherwise-ignored query param so the browser
-    keys its cache on it. This matters because upload_or_replace reuses the
-    file_id when re-rendering an image (files.update), so the CDN URL is
-    byte-identical across edits. Without a version token the browser serves the
-    stale cached bytes — clearing the cache was the only way to see the new
-    image (refresh fetched fresh metadata but redirected to the same CDN URL).
-    Pass the row's modified_time so a re-render produces a fresh cache key."""
-    size = 256 if thumb else 1024
-    url = f"https://drive.google.com/thumbnail?id={file_id}&sz=w{size}"
-    if version:
-        url += f"&v={quote(str(version), safe='')}"
-    return url
+
+def _if_none_match(request: Request, etag: str) -> bool:
+    header = request.headers.get("if-none-match")
+    if not header:
+        return False
+    return etag in {part.strip() for part in header.split(",")}
 
 
 # Names with an in-flight background migration, so concurrent /api/image
@@ -1391,9 +1408,9 @@ def _kind_alias(kind: str) -> str:
 
 
 @app.get("/api/image/{slug}/{kind}")
-async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0,
-                    v: str | None = None, code: str | None = None):
-    """Stream an image for one (row slug, kind) pair, sourced from Drive.
+async def api_image(request: Request, slug: str, kind: str, tab: str | None = None,
+                    thumb: int = 0, v: str | None = None, code: str | None = None):
+    """Serve an image for one (row slug, kind) pair, sourced from Drive.
 
     Serves the **512×384 resized** copy (what the game uses), so the UI shows
     exactly what ships. Falls back to the full-res original when a resized copy
@@ -1402,9 +1419,24 @@ async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0
     The image lives in the country folder; `tab` (the query param the UI sends)
     resolves to the COUNTRY code. 404 when the country folder has no such file.
 
-    Pass `?thumb=1` to get a downsized JPEG (~256 px on longest edge, ~30 KB)
-    suitable for the row thumbnails. The full-resolution path is used for the
-    click-to-zoom modal.
+    Pass `?thumb=1` to get a downsized JPEG (~256 px wide, ~20 KB) suitable for
+    the row thumbnails. The full-resolution path is used for the click-to-zoom
+    modal.
+
+    Bytes are proxied through this server rather than 302-redirected to Drive's
+    public CDN. The redirect looked cheaper but made regenerated images
+    unviewable: `drive.google.com/thumbnail?id=…` bounces to
+    `lh3.googleusercontent.com/d/<id>=w256`, which **drops every query param we
+    add** and is served with `Cache-Control: private, max-age=86400`. Since
+    upload_or_replace reuses the file_id, that terminal URL is identical before
+    and after a regeneration, so Chromium served day-old bytes from disk cache
+    for 24h — reproduced with `fromDiskCache=True` and byte-identical pixels.
+    No cache-busting token can fix it, because the cache key belongs to Google.
+    Proxying puts the cache key back under our control: `Cache-Control:
+    no-cache` + an ETag carrying the served file's own modified_time, so the
+    browser revalidates cheaply (304, no bytes) and can never show a stale
+    image. `v` is still accepted for backwards compatibility but no longer
+    load-bearing.
     """
     if "/" in slug or ".." in slug or not slug.startswith("q"):
         raise HTTPException(400, "bad slug")
@@ -1428,7 +1460,6 @@ async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0
     # Prefer the 512×384 resized copy; fall back to the full-res original and
     # kick off a background migration so the resized exists next time.
     target = await asyncio.to_thread(find_resized, code, name)
-    from_resized = target is not None   # resized files inherit public from the folder
     if target is None:
         ometa = await asyncio.to_thread(find_original, code, name)
         if ometa is None:
@@ -1436,21 +1467,30 @@ async def api_image(slug: str, kind: str, tab: str | None = None, thumb: int = 0
         target = ometa
         _schedule_resized_migration(code, name, target)
 
-    # Serve straight from Google's CDN: 302 to the Drive CDN URL so the browser
-    # fetches the image directly (the CDN does any downscaling via `?sz=`) and
-    # this server stays out of the byte path. Resized files inherit public
-    # access from the Resized folder; an original served via fallback needs to
-    # be made public itself.
-    if not from_resized:
-        await asyncio.to_thread(ensure_public, target.id)
-    return RedirectResponse(
-        _cdn_url(target.id, thumb=bool(thumb), version=v),
-        status_code=302,
-        headers={
-            "Cache-Control": "private, max-age=600",
-            "X-Drive-File-Id": target.id,
-        },
-    )
+    # `no-cache` means "revalidate before reuse", not "don't store": the browser
+    # keeps the bytes and sends If-None-Match, so the steady state is a 304 with
+    # an empty body, and a regenerated image lands immediately because its ETag
+    # changed. `private` keeps any shared proxy (the oauth proxy in front of
+    # this server) from serving one user's image to another.
+    is_thumb = bool(thumb)
+    etag = _image_etag(target, is_thumb)
+    headers = {
+        "Cache-Control": "private, no-cache",
+        "ETag": etag,
+        "X-Drive-File-Id": target.id,
+    }
+    if _if_none_match(request, etag):
+        return Response(status_code=304, headers=headers)
+
+    if is_thumb:
+        body = await asyncio.to_thread(_thumb_bytes, target)
+        media_type = "image/jpeg"
+    else:
+        body, media_type, _ = await asyncio.to_thread(
+            get_client().download_bytes, target.id, target.modified_time,
+            mime_hint=target.mime_type,
+        )
+    return Response(content=body, media_type=media_type, headers=headers)
 
 
 @app.post("/api/approve")

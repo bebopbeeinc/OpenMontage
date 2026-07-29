@@ -506,12 +506,14 @@ function thumbCell(r, kind) {
 
 function renderThumb({slug, short, thumbnailLink, cacheKey, tag, code}) {
   const v = encodeURIComponent(cacheKey);
-  // Two URLs: the small server-resized JPEG for the row thumbnail
-  // (thumb=1, ~30 KB), and the full-resolution version for the
-  // click-to-zoom modal. Both go through /api/image — Drive's
-  // thumbnail_link CDN 429s SA-owned files in shared drives, and the
-  // proxy gives us a single reliable path with a 10-minute bytes cache
-  // backing both sizes.
+  // Two URLs: the small server-rendered JPEG for the row thumbnail
+  // (thumb=1, ~20 KB), and the full-resolution version for the
+  // click-to-zoom modal. Both go through /api/image, which serves the bytes
+  // itself under an ETag. Handing the browser a Drive CDN URL instead is what
+  // made regenerated images show stale for 24h — Google's final
+  // lh3.googleusercontent.com URL drops our cache-busting token and is
+  // immutable per file_id, which upload_or_replace reuses. See the api_image
+  // docstring in server.py.
   //
   // `data-src` (instead of `src`) holds the URL until the
   // IntersectionObserver promotes it as the row nears the viewport —
@@ -525,9 +527,9 @@ function renderThumb({slug, short, thumbnailLink, cacheKey, tag, code}) {
   const thumbSrc = `${baseSrc}&thumb=1`;
   const fullSrc = baseSrc;
   const tagHtml = tag ? `<span class="thumb-tag ${tag}">${tag === 'approved' ? 'APPROVED' : 'WIP'}</span>` : '';
-  // referrerpolicy=no-referrer: /api/image 302-redirects to Google's Drive CDN,
-  // which returns 429 (anti-hotlink) when a cross-origin Referer is present.
-  // Sending no Referer makes the CDN serve the image.
+  // referrerpolicy=no-referrer is vestigial now that /api/image is same-origin
+  // (it mattered when the request ended up at Google's CDN, which 429s
+  // cross-origin referred embeds). Harmless, so left in place.
   return `<div class="thumb">${tagHtml}<img data-src="${thumbSrc}" referrerpolicy="no-referrer" alt="${escapeHtml(slug)}/${short}" loading="lazy" decoding="async" data-full="${fullSrc}" onclick="showModal(this.dataset.full)" /></div>`;
 }
 
@@ -1195,11 +1197,9 @@ function switchTab(tab) {
 
 function showModal(src) {
   const root = $('modal-root');
-  // The image is served via /api/image, which 302-redirects to Drive's public
-  // CDN. We let a plain <img src> follow the redirect (a cross-origin fetch()
-  // would be blocked by CORS reading Google's CDN response). The asset is the
-  // ~270 KB 512×384 copy, so it arrives quickly — a spinner until onload is
-  // enough; no streaming-progress UI needed.
+  // The image is served by /api/image straight from this server (same origin,
+  // ETag-revalidated). The asset is the ~220 KB 512×384 copy, so it arrives
+  // quickly — a spinner until onload is enough; no streaming-progress UI needed.
   root.innerHTML = `
     <div class="modal-backdrop" onclick="this.remove()">
       <div class="modal-spinner"></div>
@@ -1210,8 +1210,7 @@ function showModal(src) {
   const spinner = backdrop.querySelector('.modal-spinner');
   const status = backdrop.querySelector('.modal-status');
   const img = document.createElement('img');
-  // No Referer: the /api/image redirect lands on Google's Drive CDN, which
-  // 429s cross-origin referred embeds (see grid thumbnail note).
+  // Vestigial (see grid thumbnail note) — /api/image is same-origin now.
   img.referrerPolicy = 'no-referrer';
   img.onload = () => {
     if (!backdrop.isConnected) return;
