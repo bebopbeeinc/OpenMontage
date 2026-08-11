@@ -78,6 +78,12 @@ FIELD_TO_HEADER: dict[str, str] = {
     # had an image approved simply won't carry them yet.
     "approved_q":        "Q Image Approved",
     "approved_r":        "A Image Approved",
+    # Public URL of the published S3 web asset, written back by the web tool's
+    # "Sync approved → S3" run. The URL is derivable from (COUNTRY, #, Q|A) —
+    # these columns exist so downstream consumers don't have to rebuild it.
+    # Created on the first sync that publishes a row, so also OPTIONAL.
+    "url_q":             "Q Image URL",
+    "url_r":             "A Image URL",
 }
 
 # Optional fields — resolver returns None for these if the header label
@@ -95,6 +101,8 @@ OPTIONAL_FIELDS: frozenset[str] = frozenset({
     "answer_2", "answer_3", "answer_4",
     # Created lazily on first approve — absent on tabs not yet touched.
     "approved_q", "approved_r",
+    # Created lazily on the first S3 sync that publishes a row.
+    "url_q", "url_r",
 })
 
 

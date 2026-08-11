@@ -342,6 +342,7 @@ ROW_FIELDS = [
     "answer_correct", "answer_2", "answer_3", "answer_4",
     "response_correct", "response_incorrect", "hint",
     "prompt_q", "prompt_r", "approved_q", "approved_r",
+    "url_q", "url_r",
 ]
 
 # Defaults for OpenArt — match scripts/trivia_images/generate.py.
@@ -355,7 +356,11 @@ sys.path.insert(0, str(REPO))
 
 
 JobKind = Literal["question_image", "answer_image"]
-JobStatus = Literal["queued", "running", "success", "error"]
+JobStatus = Literal["queued", "running", "success", "error", "cancelled"]
+
+# Statuses a job never leaves. Anything else is still in flight and should
+# count against the queue / keep the UI polling.
+TERMINAL_STATUSES = ("success", "error", "cancelled")
 
 
 @dataclass
@@ -781,6 +786,11 @@ def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int 
             "prompt_q": f["prompt_q"],
             "prompt_r": f["prompt_r"],
             "question_complete": f["complete"] == "✓",
+            # Published S3 URLs as they currently stand in the sheet ('' when
+            # the columns don't exist yet). The S3 sync diffs against these so
+            # a re-sync of unchanged rows costs no Sheets writes.
+            "url_q": f["url_q"],
+            "url_r": f["url_r"],
             "question_drive": q_drive,
             "answer_drive": a_drive,
         })
@@ -820,21 +830,22 @@ def _tab_country_code(tab: str) -> str:
 
 
 # Serializes the read-width → append-header → refresh sequence in
-# _ensure_approval_column. Without it, approving Q and A on a tab that has
-# never had approval columns can race: both reads see the same row-2 width and
-# both write their header into the SAME column. Process-wide because the
-# endpoints run on a thread pool (asyncio.to_thread).
-_approval_col_lock = threading.Lock()
+# _ensure_column. Without it, creating two columns on a tab that carries
+# neither can race: both reads see the same row-2 width and both write their
+# header into the SAME column. Process-wide because the endpoints run on a
+# thread pool (asyncio.to_thread), and one lock across all lazy columns
+# (approval + URL) because they all append at "current width of row 2".
+_new_col_lock = threading.Lock()
 
 
-def _ensure_approval_column(tab: str, field: str) -> str:
-    """Column letter for an approval field, creating the column if absent.
+def _ensure_column(tab: str, field: str) -> str:
+    """Column letter for a lazily-created field, creating the column if absent.
 
     The `Q/A Image Approved` columns don't exist on a tab until its first
-    approve. When missing, we append the header label into row 2 at the first
-    free column, refresh the schema, and return the new letter. Resolving by
-    header label (not fixed index) keeps inserts/reorders safe, same as every
-    other column.
+    approve, and the `Q/A Image URL` columns until its first S3 sync. When
+    missing, we append the header label into row 2 at the first free column,
+    refresh the schema, and return the new letter. Resolving by header label
+    (not fixed index) keeps inserts/reorders safe, same as every other column.
     """
     schema = _get_schema(tab)
     try:
@@ -842,7 +853,7 @@ def _ensure_approval_column(tab: str, field: str) -> str:
     except KeyError:
         pass
     label = FIELD_TO_HEADER[field]
-    with _approval_col_lock:
+    with _new_col_lock:
         # Re-check under the lock: another approve (e.g. the sibling Q/A field)
         # may have created this column — or shifted row-2 width — while we waited.
         try:
@@ -875,7 +886,7 @@ def _set_approval(tab: str, row: int, field: str, value: str) -> str:
 
     Returns the column letter written. Creates the column on first use.
     """
-    letter = _ensure_approval_column(tab, field)
+    letter = _ensure_column(tab, field)
     _sheets_execute(
         lambda sheets: sheets.spreadsheets().values().update(
             spreadsheetId=SHEET_ID,
@@ -888,6 +899,33 @@ def _set_approval(tab: str, row: int, field: str, value: str) -> str:
     # for this tab so the next fetch reflects it instead of a stale snapshot.
     _rows_cache_drop(tab)
     return letter
+
+
+def _set_approvals_bulk(tab: str, items: list[tuple[int, str]], value: str = "✓") -> dict[str, str]:
+    """Write `value` into the approval column for many (row, field) pairs.
+
+    One batchUpdate for the whole set instead of one PUT per row, so approving
+    a screenful of images costs a single Sheets round-trip. Columns are created
+    on first use, same as _set_approval. Returns {field: column letter}.
+    """
+    letters: dict[str, str] = {}
+    for _row, field in items:
+        if field not in letters:
+            letters[field] = _ensure_column(tab, field)
+    data = [
+        {"range": f"{a1_tab(tab)}!{letters[field]}{row}", "values": [[value]]}
+        for row, field in items
+    ]
+    _sheets_execute(
+        lambda sheets: sheets.spreadsheets().values().batchUpdate(
+            spreadsheetId=SHEET_ID,
+            body={"valueInputOption": "RAW", "data": data},
+        )
+    )
+    # Approval state just changed for these rows — drop the cached /api/rows
+    # payload so the next fetch reflects it instead of a stale snapshot.
+    _rows_cache_drop(tab)
+    return letters
 
 
 def _last_letter(idx: int) -> str:
@@ -1061,6 +1099,13 @@ def _run_generation_sync(job: Job, prompt: str,
 async def _worker(job: Job) -> None:
     # Queue behind any in-flight job — Chromium can only run one at a time.
     async with worker_lock:
+        # Cancellation is cooperative: /api/cancel_all flips queued jobs to
+        # "cancelled" while they're parked here, and each one drains without
+        # doing any work when its turn comes. There's no way to interrupt the
+        # job that already holds the lock — it's blocked in a worker thread
+        # driving Playwright — so cancel only ever applies to the queue.
+        if job.status == "cancelled":
+            return
         await _run_job(job)
 
 
@@ -1336,18 +1381,55 @@ async def api_active():
     polling every job individually. Includes both queued and running.
     """
     active: dict[str, dict[str, str]] = {}
-    queue_position = 0
     for jid in recent_job_ids:
         job = jobs.get(jid)
-        if job is None or job.status in ("success", "error"):
+        if job is None or job.status in TERMINAL_STATUSES:
             continue
         active.setdefault(job.slug, {})[job.kind] = job.status
-        if job.status == "queued":
-            queue_position += 1
+    # Counts scan the full job map, not `recent_job_ids` — that deque is
+    # capped at 200, so a big batch enqueue would report "200 queued" while
+    # hundreds more sat behind it. The badge map above stays deque-scoped
+    # (the UI only paints rows it can see); the counts must be honest.
     return {
         "active": active,
         "running_count": sum(1 for j in jobs.values() if j.status == "running"),
-        "queued_count": queue_position,
+        "queued_count": sum(1 for j in jobs.values() if j.status == "queued"),
+    }
+
+
+@app.post("/api/cancel_all")
+async def api_cancel_all():
+    """Drop every queued job. The in-flight job is left to finish.
+
+    Jobs are asyncio tasks parked on `worker_lock`; flipping them to
+    "cancelled" makes `_worker` skip them when the lock frees up. The job
+    holding the lock is blocked in a thread driving Playwright/OpenArt and
+    can't be interrupted — the caller gets it back in `still_running` so the
+    UI can say so instead of pretending the machine went quiet.
+    """
+    cancelled: list[dict] = []
+    still_running: list[dict] = []
+    now = datetime.now(timezone.utc).isoformat()
+    for job in jobs.values():
+        if job.status == "queued":
+            job.status = "cancelled"
+            job.finished_at = now
+            _emit(job, "CANCELLED: dropped from the queue before it started")
+            # Release anyone streaming this job's log — a cancelled job never
+            # reaches _run_job's finally, so nothing else sends the sentinel
+            # and the SSE connection would keepalive forever.
+            for q in log_subscribers.get(job.id, []):
+                try:
+                    q.put_nowait("__END__")
+                except asyncio.QueueFull:
+                    pass
+            cancelled.append({"id": job.id, "kind": job.kind, "slug": job.slug})
+        elif job.status == "running":
+            still_running.append({"id": job.id, "kind": job.kind, "slug": job.slug})
+    return {
+        "cancelled": len(cancelled),
+        "cancelled_jobs": cancelled,
+        "still_running": still_running,
     }
 
 
@@ -1371,7 +1453,7 @@ async def api_job_stream(job_id: str):
 
     async def gen():
         try:
-            if job.status in ("success", "error"):
+            if job.status in TERMINAL_STATUSES:
                 yield "event: end\ndata: already-finished\n\n"
                 return
             while True:
@@ -1513,6 +1595,12 @@ async def api_approve(payload: dict):
         row = int(payload["row"])
     except (KeyError, ValueError, TypeError):
         raise HTTPException(400, "row must be an integer")
+    # `row` and `slug` are independent inputs — nothing downstream cross-checks
+    # them, so a mismatched pair like {row: 2, slug: "q1"} would pass the Drive
+    # check on 1Q.png and then write ✓ into a header row. Bound the write to the
+    # data range, same guard as /api/prompts.
+    if row < DATA_START_ROW:
+        raise HTTPException(400, f"row must be >= {DATA_START_ROW} (data rows)")
     slug = str(payload.get("slug", "")).strip()
     if not slug or not slug.startswith("q"):
         raise HTTPException(400, "slug required (e.g. 'q1')")
@@ -1539,6 +1627,93 @@ async def api_approve(payload: dict):
         "drive_name": name,
         "approved_column": letter,
         "state": "approved",
+    }
+
+
+@app.post("/api/approve_batch")
+async def api_approve_batch(payload: dict):
+    """Approve many images in one call — backs the batch bar's "Approve".
+
+    Payload: {tab, items: [{row, slug, kind, country}, ...]} — any length. Each
+    item is validated and checked against Drive exactly like /api/approve, but
+    an item whose file isn't in the country folder lands in `skipped` instead of
+    failing the whole call — one missing image can't strand the rest of the
+    batch. Already-approved rows are harmless (writing ✓ over ✓ is a no-op),
+    so unlike /api/approve there's no 409 path.
+
+    All sheet writes go out as a single batchUpdate.
+    """
+    tab = _validate_tab(payload.get("tab"))
+    raw = payload.get("items")
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, "items must be a non-empty list")
+    # Deliberately no size cap. Cost doesn't scale with item count in any way a
+    # cap would help: the whole set is one batchUpdate, and Drive is one folder
+    # listing per distinct country. The natural ceiling is 2 × the tab's row
+    # count (both kinds on every row), and a hardcoded number below that just
+    # breaks select-all as tabs grow — which is exactly what a 500 cap did to
+    # the ~1000-row "Generated Questions" bank.
+    approved: list[dict] = []
+    skipped: list[dict] = []
+    pending: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    # One folder listing per distinct country, reused for every item in it.
+    # Same source as find_original() — hoisted out of the loop so a 2000-item
+    # batch doesn't make 2000 thread hops for what is a cached dict lookup.
+    listings: dict[str, dict] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(400, "each item must be an object")
+        try:
+            row = int(item["row"])
+        except (KeyError, ValueError, TypeError):
+            raise HTTPException(400, "each item needs an integer row")
+        # Same guard as /api/approve: row and slug are independent inputs, so a
+        # mismatched pair could otherwise write ✓ into a header row. Malformed
+        # input fails the whole call (like a bad slug does) rather than landing
+        # in `skipped` — `skipped` is for real data conditions, not bad payloads.
+        if row < DATA_START_ROW:
+            raise HTTPException(
+                400, f"row {row} must be >= {DATA_START_ROW} (data rows)"
+            )
+        slug = str(item.get("slug", "")).strip()
+        number = slug[1:] if slug.startswith("q") else ""
+        if not number.isdigit():
+            raise HTTPException(400, f"bad slug: {slug!r}")
+        kind = _kind_alias(str(item.get("kind", "")).strip())
+        key = (row, kind)
+        if key in seen:
+            continue          # same (row, kind) sent twice — one write is enough
+        seen.add(key)
+        field = "approved_q" if kind == "question_image" else "approved_r"
+        name = drive_name(number, kind)
+        # Row's own COUNTRY wins; tab code is only the fallback (mixed-country tabs).
+        code = str(item.get("country", "")).strip() or await asyncio.to_thread(_tab_country_code, tab)
+        if code not in listings:
+            listings[code] = await asyncio.to_thread(
+                lambda c=code: get_client().list_folder(
+                    country_folder_id(c), ttl_s=_STATE_LIST_TTL_S,
+                )
+            )
+        meta = listings[code].get(name)
+        if meta is None:
+            skipped.append({
+                "row": row, "slug": slug, "kind": kind,
+                "reason": f"{code}/{name} not on Drive",
+            })
+            continue
+        pending.append((row, field))
+        approved.append({"row": row, "slug": slug, "kind": kind, "drive_name": name})
+
+    if pending:
+        await asyncio.to_thread(_set_approvals_bulk, tab, pending)
+    return {
+        "ok": True,
+        "tab": tab,
+        "approved_count": len(approved),
+        "skipped_count": len(skipped),
+        "approved": approved,
+        "skipped": skipped,
     }
 
 
@@ -1649,23 +1824,88 @@ def _sync_one_to_s3(
     return "uploaded", url, len(jpg)
 
 
-async def _collect_tab_targets(tab: str) -> list[tuple[str, str, str]]:
-    """Approved (country, number, kind) tuples for one tab, read fresh.
+def _public_url(code: str, number: str, kind: str) -> str:
+    """Public https URL of a published image. Pure function of the key."""
+    return f"https://{S3_BUCKET}/{s3_key(code, number, kind)}"
 
-    Reads the tab's rows and country code and returns one target per approved
-    image (Q and/or A). Runs the two blocking Google calls off-loop.
+
+# Max value ranges per Sheets batchUpdate. One range per cell means a
+# first-time backfill of a big tab is thousands of ranges in a single request
+# — chunking keeps any one request small enough to stay well inside the API's
+# payload limit and to fail in a bounded, retryable way.
+URL_WRITE_CHUNK = 500
+
+
+def _write_s3_urls(tab: str, items: list[tuple[int, str, str]]) -> int:
+    """Write published S3 URLs into one tab's `Q/A Image URL` columns.
+
+    `items` is [(row, field, url), ...] with field ∈ {'url_q', 'url_r'}. The
+    columns are created on first use (same lazy row-2 append as the approval
+    columns), then the set goes out as batchUpdates of URL_WRITE_CHUNK ranges
+    — so a steady-state sync is one Sheets write per tab, and a first-time
+    backfill is a handful rather than one call per image.
+
+    USER_ENTERED (not RAW) so Sheets renders the cell as a clickable link.
+    Returns the number of cells written.
+    """
+    if not items:
+        return 0
+    letters: dict[str, str] = {}
+    for _row, field, _url in items:
+        if field not in letters:
+            letters[field] = _ensure_column(tab, field)
+    data = [
+        {"range": f"{a1_tab(tab)}!{letters[field]}{row}", "values": [[url]]}
+        for row, field, url in items
+    ]
+    for i in range(0, len(data), URL_WRITE_CHUNK):
+        chunk = data[i:i + URL_WRITE_CHUNK]
+        _sheets_execute(
+            lambda sheets, c=chunk: sheets.spreadsheets().values().batchUpdate(
+                spreadsheetId=SHEET_ID,
+                body={"valueInputOption": "USER_ENTERED", "data": c},
+            )
+        )
+    # The rows' URL cells just changed — drop this tab's cached /api/rows
+    # payload so the next fetch reflects them.
+    _rows_cache_drop(tab)
+    return len(items)
+
+
+async def _collect_tab_targets(tab: str) -> list[dict]:
+    """Approved image entries for one tab, read fresh.
+
+    One entry per approved image (Q and/or A):
+      {"tab", "row", "country", "number", "kind", "field", "url_now"}
+
+    Entries keep their **sheet row** (and tab) so the sync can write the
+    published URL back to the row it came from. `country` is the row's own
+    COUNTRY value, falling back to the tab's code only when the cell is blank
+    — a mixed tab (the Generated Questions bank carries rows from several
+    countries) therefore publishes and writes each row under its own country.
+    `url_now` is what the URL column already holds ('' when the column doesn't
+    exist yet); the writeback diffs against it and skips unchanged cells.
+
+    Runs the two blocking Google calls off-loop.
     """
     code = await asyncio.to_thread(_tab_country_code, tab)
     rows = await asyncio.to_thread(read_rows, tab)
-    out: list[tuple[str, str, str]] = []
+    out: list[dict] = []
     for r in rows:
         rc = (r.get("country") or code).strip()
         if not rc:
             continue
-        if r["question_drive"]["state"] == "approved":
-            out.append((rc, r["number"], "question_image"))
-        if r["answer_drive"]["state"] == "approved":
-            out.append((rc, r["number"], "answer_image"))
+        for kind, state_key, field in (
+            ("question_image", "question_drive", "url_q"),
+            ("answer_image", "answer_drive", "url_r"),
+        ):
+            if r[state_key]["state"] != "approved":
+                continue
+            out.append({
+                "tab": tab, "row": r["row"], "country": rc,
+                "number": r["number"], "kind": kind, "field": field,
+                "url_now": (r.get(field) or "").strip(),
+            })
     return out
 
 
@@ -1674,9 +1914,11 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
 
     Collects approved images across `tabs` (concurrently), dedupes by
     (country, number, kind), then publishes each 8-wide with the
-    skip-unchanged fast path. Emits per-tab, periodic-progress, and
-    per-country lines so the Log panel shows what's happening live, and
-    stashes the final summary in job.extra["summary"] for the UI toast.
+    skip-unchanged fast path. Finally writes each published image's public
+    URL back into its source row's `Q/A Image URL` column, one batchUpdate
+    per tab. Emits per-tab, periodic-progress, and per-country lines so the
+    Log panel shows what's happening live, and stashes the final summary in
+    job.extra["summary"] for the UI toast.
     """
     job.status = "running"
     job.started_at = datetime.now(timezone.utc).isoformat()
@@ -1690,7 +1932,7 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
         read_sem = asyncio.Semaphore(6)
         tab_errors: dict[str, str] = {}
 
-        async def _collect(tab: str) -> list[tuple[str, str, str]]:
+        async def _collect(tab: str) -> list[dict]:
             async with read_sem:
                 try:
                     t = await _collect_tab_targets(tab)
@@ -1702,16 +1944,19 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
                     return []
 
         per_tab = await asyncio.gather(*(_collect(t) for t in tabs))
+        entries = [e for lst in per_tab for e in lst]
 
         # Dedupe by (country, number, kind): a country could appear on more than
         # one tab, and the S3 key is country-scoped, so each asset ships once.
+        # `entries` keeps every occurrence, though — the URL writeback has to
+        # reach all of them, including the duplicate row on a second tab.
         seen: set[tuple[str, str, str]] = set()
         targets: list[tuple[str, str, str]] = []
-        for lst in per_tab:
-            for t in lst:
-                if t not in seen:
-                    seen.add(t)
-                    targets.append(t)
+        for e in entries:
+            t = (e["country"], e["number"], e["kind"])
+            if t not in seen:
+                seen.add(t)
+                targets.append(t)
         total = len(targets)
         _emit(job, f"  {total} unique approved image(s) to check")
 
@@ -1745,6 +1990,40 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
 
         results = await asyncio.gather(*(_one(*t) for t in targets))
 
+        # --- URL writeback -------------------------------------------------
+        # Every image that is now on S3 (uploaded this run OR skipped because
+        # it was already current) gets its public URL written back to the row
+        # it came from. A FAILED image is deliberately excluded: the sheet must
+        # never advertise a URL we couldn't confirm is published.
+        published = {
+            (r["country"], r["number"], r["kind"])
+            for r in results if r["ok"]
+        }
+        by_tab: dict[str, list[tuple[int, str, str]]] = {}
+        for e in entries:
+            if (e["country"], e["number"], e["kind"]) not in published:
+                continue
+            url = _public_url(e["country"], e["number"], e["kind"])
+            if e["url_now"] == url:
+                continue        # already correct — don't burn a write
+            by_tab.setdefault(e["tab"], []).append((e["row"], e["field"], url))
+
+        urls_written = 0
+        url_errors: dict[str, str] = {}
+        for tab_name in sorted(by_tab):
+            items = by_tab[tab_name]
+            try:
+                n = await asyncio.to_thread(_write_s3_urls, tab_name, items)
+                urls_written += n
+                _emit(job, f"  ✎ {tab_name}: wrote {n} URL(s)")
+            except Exception as e:
+                # A sheet write failing doesn't unpublish anything — the images
+                # are on S3 either way, so we record it and finish the run.
+                url_errors[tab_name] = str(e)
+                _emit(job, f"  ⚠ {tab_name}: URL writeback failed — {e}")
+        if not by_tab:
+            _emit(job, "  ✎ URL columns already current — nothing to write")
+
         # Per-country breakdown lines + summary.
         by_country: dict[str, dict] = {}
         for r in results:
@@ -1761,23 +2040,28 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
                        f"{c['skipped']} unchanged{extra}")
 
         summary = {
-            "ok": counters["failed"] == 0 and not tab_errors,
+            "ok": (counters["failed"] == 0 and not tab_errors
+                   and not url_errors),
             "bucket": S3_BUCKET, "force": force,
             "tabs": len(tabs), "countries": len(by_country),
             "approved": total,
             "uploaded": counters["uploaded"], "skipped": counters["skipped"],
             "failed": counters["failed"], "tab_errors": tab_errors,
+            "urls_written": urls_written, "url_errors": url_errors,
             "by_country": by_country,
         }
         job.extra["summary"] = summary
         _emit(job, f"done. uploaded {counters['uploaded']}, "
                    f"skipped {counters['skipped']}, failed {counters['failed']} "
                    f"across {len(by_country)} countr"
-                   f"{'y' if len(by_country) == 1 else 'ies'}.")
+                   f"{'y' if len(by_country) == 1 else 'ies'}; "
+                   f"{urls_written} URL(s) written to the sheet.")
         if counters["failed"]:
             job.error = f"{counters['failed']} image(s) failed"
         elif tab_errors:
             job.error = f"{len(tab_errors)} tab(s) unread"
+        elif url_errors:
+            job.error = f"{len(url_errors)} tab(s) failed URL writeback"
         job.status = "error" if job.error else "success"
     except Exception as e:
         job.status = "error"
@@ -1802,6 +2086,11 @@ async def api_sync_s3(payload: dict):
     s3://assets.tt.bebopbee.com/trivia/<COUNTRY>/<N><Q|A>.jpg (quality-85 JPEG,
     public-read). Images already on S3 with a matching Drive source stamp are
     skipped unless `force` is truthy. Drive is untouched (one-way publish).
+
+    Each published image's public URL is then written back to its source row's
+    `Q Image URL` / `A Image URL` column (created on first sync). Cells that
+    already hold the right URL aren't rewritten, and an image that failed to
+    upload never gets a URL written.
 
     Runs as a Job so progress streams to the Log panel via
     /api/jobs/{id}/stream (and survives long all-tab runs without a request

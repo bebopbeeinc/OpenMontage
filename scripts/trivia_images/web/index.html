@@ -207,6 +207,7 @@
   .status-running { color: var(--running); }
   .status-success { color: var(--accent); }
   .status-error { color: var(--err); }
+  .status-cancelled { color: var(--muted); text-decoration: line-through; }
 
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.85);
                     display: flex; align-items: center; justify-content: center;
@@ -337,7 +338,7 @@
   <div class="spacer"></div>
   <button id="toggle-panel-btn" onclick="togglePanel()">Hide log</button>
   <button onclick="loadRows({force: true})" title="Re-read sheet + Drive folder listings (skips the 120s cache)">Refresh</button>
-  <button id="sync-s3-btn" onclick="syncToS3(event)" title="Publish every approved image across ALL tabs/countries to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;). Unchanged images are skipped. Shift-click to force re-upload all.">Sync approved → S3</button>
+  <button id="sync-s3-btn" onclick="syncToS3(event)" title="Publish every approved image across ALL tabs/countries to S3 as web-optimized JPEGs (assets.tt.bebopbee.com/trivia/&lt;country&gt;), then write each published URL back to its row's Q/A Image URL column. Unchanged images are skipped. Shift-click to force re-upload all.">Sync approved → S3</button>
   <a href="/" style="margin-left:8px; color: var(--muted); text-decoration: none;">← launcher</a>
 </header>
 
@@ -369,8 +370,17 @@
       <button class="warn small" id="batch-regen" disabled onclick="runBatch('regen')">
         Re-gen (0 existing)
       </button>
+      <button class="primary small" id="batch-approve" disabled onclick="approveSelected()"
+              title="Mark every selected image that's still WIP as approved in the sheet. Already-approved and missing images are skipped.">
+        Approve (0 WIP)
+      </button>
       <button class="small" onclick="clearSelection()">Clear</button>
       <span id="queue-status" class="count" style="margin-left:auto;"></span>
+      <button class="danger small" id="cancel-queue" style="display:none;"
+              onclick="cancelQueue()"
+              title="Drop every queued job. The job currently generating can't be interrupted — it finishes on its own.">
+        Cancel queue
+      </button>
     </div>
 
     <table>
@@ -428,6 +438,7 @@ let allRows = [];           // every row from the sheet
 let visibleRows = [];       // after filters
 // Selections are per-kind: a row can be selected for Q only, A only, or both.
 const selected = { question_image: new Set(), answer_image: new Set() };
+let batchApproveInFlight = false;   // see approveSelected()
 let active = {};            // {slug: {kind: status}} from /api/active
 let activeJobId = null;
 let activeEvt = null;
@@ -451,6 +462,12 @@ try {
 } catch (e) {}
 
 function tabQuery() { return `tab=${encodeURIComponent(currentTab)}`; }
+
+// Statuses a job never leaves. Must match TERMINAL_STATUSES in server.py —
+// the poll fallback loops until this says the job is done, so a status
+// missing here spins forever.
+const TERMINAL_STATUSES = ['success', 'error', 'cancelled'];
+const isTerminal = (s) => TERMINAL_STATUSES.includes(s);
 
 async function api(path, opts={}) {
   const r = await fetch(path, opts);
@@ -767,9 +784,11 @@ function clearSelection() {
   renderRows();
 }
 
-// Returns a list of {row, slug, kind, prompt, exists} pairs for everything
-// currently selected across both kinds. `exists` = the target image is
-// already on disk (so this would be a re-gen).
+// Returns a list of {row, slug, kind, prompt, exists, state} pairs for
+// everything currently selected across both kinds. `exists` = the target image
+// is already on Drive (so this would be a re-gen); `state` is that image's
+// Drive/sheet status ('approved' | 'wip' | 'none') — what the Approve batch
+// filters on.
 function selectedTargets() {
   const out = [];
   for (const kind of ['question_image', 'answer_image']) {
@@ -778,8 +797,10 @@ function selectedTargets() {
       if (!r) continue;
       if (!rowEligible(r, kind)) continue;
       const prompt = kind === 'question_image' ? r.prompt_q : r.prompt_r;
+      const drive = kind === 'question_image' ? r.question_drive : r.answer_drive;
+      const state = (drive && drive.state) || 'none';
       const exists = hasImg(r, kind);
-      out.push({row: r.row, slug: r.slug, kind, prompt, exists, country: r.country});
+      out.push({row: r.row, slug: r.slug, kind, prompt, exists, state, country: r.country});
     }
   }
   return out;
@@ -799,10 +820,15 @@ function updateBatchBar() {
   }
   const missing = targets.filter(t => !t.exists).length;
   const existing = targets.filter(t => t.exists).length;
+  // Only WIP images are approvable — 'approved' is already done, 'none' has
+  // nothing to approve. Same rule the per-row Approve button uses.
+  const wip = targets.filter(t => t.state === 'wip').length;
   $('batch-gen').textContent = `Generate (${missing} missing)`;
   $('batch-regen').textContent = `Re-gen (${existing} existing)`;
+  $('batch-approve').textContent = `Approve (${wip} WIP)`;
   $('batch-gen').disabled = missing === 0;
   $('batch-regen').disabled = existing === 0;
+  $('batch-approve').disabled = wip === 0 || batchApproveInFlight;
 
   // Master header checkboxes reflect "all eligible in view selected".
   const eligibleQInView = visibleRows.filter(r => rowEligible(r, 'question_image'));
@@ -1057,7 +1083,7 @@ async function attachToJob(id) {
 
   // If the job is already terminal, no point opening an SSE — just
   // stop here. Auto-attach kicks in below for live jobs.
-  if (preStatus === 'success' || preStatus === 'error') {
+  if (isTerminal(preStatus)) {
     if (!seeded) {
       log.innerHTML = '<span class="log-empty">(job finished with no log lines)</span>';
     }
@@ -1089,6 +1115,7 @@ async function attachToJob(id) {
       $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
       if (j.result) toastSyncResult(j.result);   // S3-sync job: show counts
       else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else if (j.status === 'cancelled') toast(`job ${id} cancelled`, 'ok');
       else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
     } catch (e) { /* job might be gone */ }
     await loadRows({force: true});   // pick up new thumb — bypass row/listing caches (TT-438)
@@ -1117,10 +1144,11 @@ async function pollUntilDone(id, logEl) {
     }
     lastLen = lines.length;
     logEl.scrollTop = logEl.scrollHeight;
-    if (j.status === 'success' || j.status === 'error') {
+    if (isTerminal(j.status)) {
       $('panel-meta').textContent = `${j.status}${j.finished_at ? ' · ' + new Date(j.finished_at).toLocaleTimeString() : ''}`;
       if (j.result) toastSyncResult(j.result);   // S3-sync job: show counts
       else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
+      else if (j.status === 'cancelled') toast(`job ${id} cancelled`, 'ok');
       else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
       await loadRows({force: true});   // bypass row/listing caches so the new thumb shows (TT-438)
       await refreshActive();
@@ -1193,6 +1221,11 @@ async function refreshActive() {
     const r = data.running_count, q = data.queued_count;
     if (r || q) qs.textContent = `${r} running · ${q} queued`;
     else qs.textContent = '';
+    // Only offer Cancel when there's actually a queue to drop — the running
+    // job isn't cancellable, so a lone running job leaves the button hidden.
+    const cancelBtn = $('cancel-queue');
+    cancelBtn.style.display = q ? '' : 'none';
+    cancelBtn.textContent = `Cancel queue (${q})`;
     if (changed) renderRows();
     activePollDelay = (r || q) ? ACTIVE_POLL_BUSY_MS : ACTIVE_POLL_IDLE_MS;
   } catch (e) { /* ignore poll failures */ }
@@ -1467,6 +1500,49 @@ async function approveImage(row, slug, kind) {
   }
 }
 
+// Approve every selected image that's still WIP, in one server round-trip.
+// Guarded by batchApproveInFlight rather than only the disabled attribute —
+// renderRows() re-enables the button on every repaint, and a double-click
+// mid-flight would otherwise fire a second batch.
+async function approveSelected() {
+  if (batchApproveInFlight) return;
+  const targets = selectedTargets().filter(t => t.state === 'wip');
+  if (!targets.length) {
+    toast('no WIP images in selection', 'err');
+    return;
+  }
+  const nQ = targets.filter(t => t.kind === 'question_image').length;
+  const nA = targets.length - nQ;
+  if (!confirm(
+    `Approve ${targets.length} image(s) — ${nQ} Q · ${nA} A? ` +
+    `Marks them approved in the sheet.`
+  )) return;
+
+  batchApproveInFlight = true;
+  $('batch-approve').disabled = true;
+  $('batch-approve').textContent = `Approving ${targets.length}…`;
+  try {
+    const data = await api('api/approve_batch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        tab: currentTab,
+        items: targets.map(t => ({row: t.row, slug: t.slug, kind: t.kind, country: t.country})),
+      }),
+    });
+    const skipped = data.skipped_count
+      ? ` · ${data.skipped_count} skipped (not on Drive)` : '';
+    toast(`${data.approved_count} approved${skipped}`, data.skipped_count ? 'err' : 'ok');
+    if (data.skipped_count) console.warn('approve_batch skipped', data.skipped);
+    clearSelection();
+  } catch (e) {
+    toast(`approve failed: ${e.message}`, 'err');
+  } finally {
+    batchApproveInFlight = false;
+    await loadRows();   // repaints tags/buttons and re-syncs the batch bar
+  }
+}
+
 async function discardImage(row, slug, kind) {
   const shortKind = kind === 'question_image' ? 'Q' : 'A';
   if (!confirm(
@@ -1491,15 +1567,59 @@ async function discardImage(row, slug, kind) {
 // handler and the poll fallback so the counts show however the job finishes.
 function toastSyncResult(res) {
   const errTabs = Object.keys(res.tab_errors || {});
+  const urlErrTabs = Object.keys(res.url_errors || {});
   const scope = `${res.countries} countr${res.countries === 1 ? 'y' : 'ies'}`;
+  // URL writeback counts as its own outcome: the images can all publish fine
+  // and the sheet still not get its links, which is exactly the failure the
+  // column was added to make visible.
+  const urls = res.urls_written ? `; ${res.urls_written} URL(s) → sheet` : '';
   if (res.approved === 0) {
     toast(`No approved images to sync (scanned ${res.tabs} tab(s)).`, 'ok');
-  } else if (res.failed === 0 && errTabs.length === 0) {
+  } else if (res.failed === 0 && errTabs.length === 0 && urlErrTabs.length === 0) {
     const skip = res.skipped ? `, ${res.skipped} unchanged` : '';
-    toast(`Uploaded ${res.uploaded}${skip} across ${scope} → s3://${res.bucket}/trivia/`, 'ok');
+    toast(`Uploaded ${res.uploaded}${skip} across ${scope} → s3://${res.bucket}/trivia/${urls}`, 'ok');
   } else {
     const tabNote = errTabs.length ? `; ${errTabs.length} tab(s) unread` : '';
-    toast(`Uploaded ${res.uploaded}, ${res.skipped} skipped, ${res.failed} failed${tabNote}`, 'err');
+    const urlNote = urlErrTabs.length ? `; ${urlErrTabs.length} tab(s) failed URL writeback` : '';
+    toast(`Uploaded ${res.uploaded}, ${res.skipped} skipped, ${res.failed} failed${tabNote}${urlNote}`, 'err');
+  }
+}
+
+async function cancelQueue() {
+  // Read the live count rather than trusting the last poll — a batch can
+  // grow between ticks and the confirm should quote what's really there.
+  let queued = 0, running = 0;
+  try {
+    const snap = await api('api/active');
+    queued = snap.queued_count; running = snap.running_count;
+  } catch (e) {
+    toast(`couldn't read the queue: ${e.message}`, 'err');
+    return;
+  }
+  if (!queued) { toast('nothing queued', 'ok'); await refreshActive(); return; }
+  if (!confirm(
+    `Cancel ${queued} queued job(s)?\n\n` +
+    (running
+      ? 'The job currently generating cannot be interrupted — it will finish ' +
+        'and write its image. Everything behind it is dropped.'
+      : 'Nothing is generating right now, so the queue drops immediately.') +
+    '\n\nDrive and the sheet are untouched. Cancelled rows can be re-queued ' +
+    'from the table at any time.'
+  )) return;
+  const btn = $('cancel-queue');
+  btn.disabled = true;
+  try {
+    const res = await api('api/cancel_all', {method: 'POST'});
+    const tail = res.still_running.length
+      ? ` · ${res.still_running.map(j => j.slug).join(', ')} still finishing`
+      : '';
+    toast(`Cancelled ${res.cancelled} queued job(s)${tail}`, 'ok');
+  } catch (e) {
+    toast(`cancel failed: ${e.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+    await refreshActive();
+    if (activeTab === 'jobs') loadJobs();
   }
 }
 
@@ -1508,6 +1628,8 @@ async function syncToS3(evt) {
   if (!confirm(
     `Publish every APPROVED image across ALL tabs/countries to S3 as ` +
     `web-optimized JPEGs (assets.tt.bebopbee.com/trivia/<country>)?\n\n` +
+    `Each published image's URL is written back to its row's ` +
+    `"Q/A Image URL" column.\n\n` +
     (force
       ? 'FORCE: re-uploads ALL approved images, even unchanged ones.'
       : 'Unchanged images are skipped. Drive is untouched.')
