@@ -89,6 +89,79 @@ class S3Publisher:
         self._client.put_object(Bucket=bucket, Key=key, Body=data, **extra)
         return f"https://{bucket}/{key}"
 
+    # ----- CDN invalidation -----
+
+    # A regenerated image reuses its object key, so replacing the object isn't
+    # enough: the CloudFront distribution in front of this bucket keeps serving
+    # the copy it already has until the cached entry expires. Query strings are
+    # not part of that distribution's cache key, so `?v=2` can't force a refetch
+    # — an explicit invalidation is the only way to push a changed image out.
+    #
+    # Beyond this many keys, invalidate the whole prefix with one wildcard path
+    # instead of listing every key: CloudFront bills per path (1,000/month free)
+    # and caps a request at 3,000 non-wildcard paths, so a big re-publish is
+    # both cheaper and simpler as a single "/trivia/*".
+    _WILDCARD_ABOVE = 50
+
+    def invalidate_cdn(
+        self,
+        keys: list[str],
+        *,
+        distribution_id: Optional[str] = None,
+        wildcard_prefix: str = "trivia",
+    ) -> str:
+        """Invalidate `keys` on the CloudFront distribution fronting the bucket.
+
+        Returns a short human-readable status string; never raises. The caller
+        (the trivia-images S3 sync) treats this as best-effort: the objects are
+        already replaced on S3 either way, so a failed invalidation must not
+        fail the publish — it only means viewers may see a stale image until the
+        cached copy expires.
+
+        The distribution id comes from `distribution_id`, else the
+        `TRIVIA_CDN_DISTRIBUTION_ID` env var (repo .env is loaded in __init__).
+        With neither set this is a no-op, so the sync behaves exactly as before
+        until the id is configured.
+        """
+        import os
+        import time
+
+        if not keys:
+            return "nothing to invalidate"
+        dist = distribution_id or os.environ.get("TRIVIA_CDN_DISTRIBUTION_ID", "")
+        if not dist:
+            return ("skipped — set TRIVIA_CDN_DISTRIBUTION_ID to enable "
+                    "(viewers may see a cached copy until it expires)")
+
+        if len(keys) > self._WILDCARD_ABOVE:
+            paths = [f"/{wildcard_prefix}/*"]
+        else:
+            paths = sorted({"/" + k.lstrip("/") for k in keys})
+
+        import boto3
+
+        try:
+            cf = boto3.client("cloudfront")
+            resp = cf.create_invalidation(
+                DistributionId=dist,
+                InvalidationBatch={
+                    "Paths": {"Quantity": len(paths), "Items": paths},
+                    # Unique per call — CloudFront treats a repeated reference as
+                    # a retry of the same batch and returns the original.
+                    "CallerReference": f"trivia-images-{time.time():.6f}",
+                },
+            )
+            inv = resp.get("Invalidation", {})
+            return (f"invalidated {len(paths)} path(s) "
+                    f"({'wildcard' if len(keys) > self._WILDCARD_ABOVE else 'per-key'}"
+                    f", {len(keys)} object(s)) id={inv.get('Id', '?')}")
+        except Exception as e:  # noqa: BLE001
+            name = type(e).__name__
+            if "AccessDenied" in str(e) or "NotAuthorized" in str(e):
+                return (f"DENIED — the IAM user needs cloudfront:CreateInvalidation "
+                        f"on distribution {dist} ({name})")
+            return f"failed: {name}: {str(e)[:160]}"
+
     def head_metadata(self, bucket: str, key: str) -> Optional[dict[str, str]]:
         """User metadata (`x-amz-meta-*`) on `s3://bucket/key`, or None.
 

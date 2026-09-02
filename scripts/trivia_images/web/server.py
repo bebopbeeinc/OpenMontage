@@ -103,6 +103,19 @@ S3_BUCKET = "assets.tt.bebopbee.com"
 S3_TRIVIA_PREFIX = "trivia"
 # JPEG quality for the web assets — the web sweet spot (see optimize_image_bytes_jpg).
 S3_JPG_QUALITY = 85
+# Cache lifetime stamped on every published object.
+#
+# Deliberately SHORT. The object key is a pure function of (country, number,
+# kind), so a regenerated image reuses its URL — mutable content behind an
+# immutable URL. With the year-long max-age this used to carry, anyone who had
+# opened an image URL kept seeing the pre-regeneration picture from their own
+# browser cache for a year, with no way to bust it: this bucket fronts a
+# CloudFront distribution that ignores query strings, so `?v=2` is served from
+# the same cache entry. One hour bounds that staleness. The real fix is
+# invalidating the changed keys on upload (see S3Publisher.invalidate_cdn in
+# tools/publishers/s3.py, wired into _run_s3_sync_job) — once that's
+# live and proven, this can go back up.
+S3_CACHE_CONTROL = "public, max-age=3600"
 
 
 def country_folder_id(code: str) -> str:
@@ -1818,7 +1831,7 @@ def _sync_one_to_s3(
     url = pub.upload_bytes(
         S3_BUCKET, key, jpg,
         content_type="image/jpeg", public=True,
-        cache_control="public, max-age=31536000",
+        cache_control=S3_CACHE_CONTROL,
         metadata={"drive-file-id": meta.id, "drive-mtime": meta.modified_time or ""},
     )
     return "uploaded", url, len(jpg)
@@ -1990,6 +2003,24 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
 
         results = await asyncio.gather(*(_one(*t) for t in targets))
 
+        # --- CDN invalidation ----------------------------------------------
+        # An image that changed keeps its object key, so replacing the object
+        # doesn't dislodge the copy CloudFront (and every browser that already
+        # fetched it) is holding. Invalidate exactly the keys we re-uploaded.
+        # Best-effort by design: the bytes are on S3 regardless, so a denied or
+        # unconfigured invalidation is reported, not fatal.
+        uploaded_keys = [
+            s3_key(r["country"], r["number"], r["kind"])
+            for r in results if r.get("ok") and r.get("status") == "uploaded"
+        ]
+        cdn_status = "nothing to invalidate"
+        if uploaded_keys:
+            from tools.publishers import s3 as s3pub
+
+            cdn_status = await asyncio.to_thread(
+                s3pub.get_client().invalidate_cdn, uploaded_keys)
+            _emit(job, f"  ⟳ CDN: {cdn_status}")
+
         # --- URL writeback -------------------------------------------------
         # Every image that is now on S3 (uploaded this run OR skipped because
         # it was already current) gets its public URL written back to the row
@@ -2047,6 +2078,7 @@ async def _run_s3_sync_job(job: Job, force: bool, tabs: list[str]) -> None:
             "approved": total,
             "uploaded": counters["uploaded"], "skipped": counters["skipped"],
             "failed": counters["failed"], "tab_errors": tab_errors,
+            "cache_control": S3_CACHE_CONTROL, "cdn": cdn_status,
             "urls_written": urls_written, "url_errors": url_errors,
             "by_country": by_country,
         }
