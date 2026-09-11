@@ -44,7 +44,13 @@ from playwright.sync_api import (
 REPO = Path(__file__).resolve().parents[2]
 STATE_FILE = REPO / ".playwright" / "openart-state.json"
 
-OPENART_SUITE_BASE = "https://openart.ai/suite/animate-video"
+# The 2026-09 UI refresh split the video suite into one tool per URL prefix:
+# `/suite/animate-video/<slug>` is now the Frame-to-Video tool (start/end frame
+# images, no character references) and `/suite/create-video/<slug>` is Text to
+# Video — the only one that exposes saved characters. Landing on the wrong
+# prefix leaves the form without the references chip and the character picker
+# times out.
+OPENART_SUITE_BASE = "https://openart.ai/suite/create-video"
 
 # The OpenArt account belongs to more than one team. Saved characters
 # (ellie.travelcrush, Captain Archibald, …) live in the personal "R N"
@@ -59,7 +65,7 @@ OPENART_WORKSPACE = "R N"
 MODEL_SLUGS: dict[str, str] = {
     "Seedance 2.0":   "byte-plus-seedance-2",
     "HappyHorse":     "happyhorse",
-    "Kling 3.0 Omni": "kling-3-0-omni",
+    "Kling 3.0 Omni": "kling-3-omni",
 }
 
 
@@ -92,6 +98,18 @@ LOGIN_TIMEOUT_S = 300
 # Selectors — adjust these as the OpenArt UI evolves.
 # Prefer role/text locators over hashed class names.
 # ---------------------------------------------------------------------------
+# OpenArt's 2026-08 UI refresh moved every icon's identity from `aria-label`
+# to `data-icon` (`svg[aria-label]` now matches nothing), breaking the workspace
+# switcher and the Model card here exactly as it did in the image driver — the
+# header UI is shared between the Animate-Video and Create-Image suites. Icon
+# names are unchanged, so match either attribute and keep working if the
+# account is flipped back via the header's "Previous version" toggle.
+def _icon(name: str, contains: bool = False) -> str:
+    """CSS matching an OpenArt icon by name on either the old or new UI."""
+    op = "*=" if contains else "="
+    return f"svg[data-icon{op}'{name}'], svg[aria-label{op}'{name}']"
+
+
 @dataclass(frozen=True)
 class Selectors:
     # Signed-out signals. OpenArt serves anonymous users a marketing layout
@@ -113,27 +131,34 @@ class Selectors:
 
     # The "Setting" card (Output: Auto | 720p | 5s) opens a popover with
     # aspect-ratio + resolution radios and a duration slider.
-    setting_card: str = "div.group:has-text('Setting'):has-text('Output')"
-
-    # The Mode Selector radiogroup at the top of the form lets us pick
-    # between "Start/End Frame" (needs 2 images) and "Text with Reference"
-    # (references are optional but unlock per-segment characters).
-    mode_selector: str = "[role='radiogroup'][aria-label='Mode Selector']"
-    mode_text_with_reference: str = (
-        "[role='radiogroup'][aria-label='Mode Selector'] [role='radio']:has-text('Text with Reference')"
+    # The refresh dropped the card's "Setting" text label (it now reads
+    # "Output" over the summary), so the new form is matched by its icon.
+    setting_card: str = (
+        f"div.group:has-text('Output'):has({_icon('Setting')}), "
+        f"div.group:has-text('Setting'):has-text('Output')"
     )
+
+    # The old "Mode Selector" radiogroup (Start/End Frame vs Text with
+    # Reference) is gone. The active tool is now named in the form's header
+    # (an <h1> reading "Text to Video" / "Frame to Video"); clicking that
+    # header opens a tool picker dialog listing "Create Video" (Frame to
+    # Video, Text to Video) plus the Video Tools. Picking one navigates to
+    # that tool's URL and can swap the model, so we re-assert the model after.
+    tool_header: str = "header h1"
+    tool_picker_option_template: str = "[role='dialog'] >> text=/^{label}$/"
+    # The tool we need: only Text to Video exposes saved characters.
+    text_to_video_label: str = "Text to Video"
 
     # Model card on the form (icon = ModelXxx, text = "Model<name>"). Clicking
     # opens a [role='dialog'] with a list of available models.
-    model_card: str = "div.group:has-text('Model'):has(svg[aria-label*='Model'])"
+    model_card: str = f"div.group:has-text('Model'):has({_icon('Model', contains=True)})"
 
-    # Inside the form, after Text-with-Reference is active, two pill buttons
-    # gate the references type: "Upload Media" (custom file) and "Characters"
-    # (saved characters). Clicking the "Characters" pill highlights it.
-    references_characters_pill: str = "button:has-text('Characters')"
-    # Then the "Add visual references" chip is a clickable purple area that
-    # opens a side panel for browsing references.
+    # The in-form "Upload Media" / "Characters" pills are gone. The
+    # "Add visual references" chip under the prompt now opens a small menu
+    # ("From Brand Kit" / "From Creations"); "From Creations" is the one that
+    # opens the reference side panel with the saved character library.
     add_references_trigger: str = "text=/Add visual references/"
+    references_from_creations: str = "text=/From Creations/"
 
     # Side panel top-level tab. After "Add visual references" the panel
     # defaults to the Image tab; switch to Characters & Worlds first.
@@ -353,7 +378,7 @@ def _select_workspace(page: Page, workspace: str) -> None:
     # There are a couple of chevron-dialog buttons in the header (workspace and
     # project switchers); match them all and disambiguate by behaviour.
     triggers = page.locator(
-        "button[aria-haspopup='dialog']:has(svg[aria-label='ArrowDownBold'])"
+        f"button[aria-haspopup='dialog']:has({_icon('ArrowDownBold')})"
     )
     try:
         triggers.first.wait_for(timeout=15_000)
@@ -411,6 +436,42 @@ def _select_workspace(page: Page, workspace: str) -> None:
     time.sleep(2.5)
 
 
+def _ensure_text_to_video(page: Page) -> None:
+    """Ensure the form's active tool is "Text to Video".
+
+    The form header names the current tool; clicking it opens a picker
+    dialog. Only Text to Video exposes saved characters — Frame to Video
+    asks for start/end frame images instead, and its form has neither the
+    references chip nor the character picker.
+    """
+    header = page.locator(SEL.tool_header).first
+    try:
+        header.wait_for(timeout=15_000)
+    except PWTimeout:
+        _diagnose(page, "tool_header_missing")
+        raise
+    current = (header.text_content() or "").strip()
+    if current == SEL.text_to_video_label:
+        return
+    print(f"  → switching tool: {current!r} → {SEL.text_to_video_label!r}", file=sys.stderr)
+    header.click(force=True)
+    time.sleep(1.0)
+    option = page.locator(
+        SEL.tool_picker_option_template.format(label=SEL.text_to_video_label),
+    ).first
+    try:
+        option.wait_for(timeout=10_000)
+    except PWTimeout:
+        _diagnose(page, "tool_picker_missing")
+        raise RuntimeError(
+            f"could not open the tool picker to switch from {current!r} to "
+            f"{SEL.text_to_video_label!r} — see .playwright/diag_tool_picker_missing.png",
+        )
+    option.click(force=True)
+    # Picking a tool navigates to its URL and re-renders the whole form.
+    time.sleep(3.0)
+
+
 def _select_character(page: Page, character_name: str) -> None:
     """Pick a saved character from My Library → Characters → <name>.
 
@@ -433,40 +494,39 @@ def _select_character(page: Page, character_name: str) -> None:
                 f"See .playwright/char_fail_{label}.png",
             ) from e
 
-    # 1. Activate "Characters" pill in the form (one of two pills under the
-    #    prompt: "Upload Media" vs "Characters"). Click the one whose text is
-    #    EXACTLY "Characters" (avoids matching "Characters & Worlds" or sidebar).
-    def click_chars_pill():
-        chars = page.locator("button").filter(has_text=re.compile(r"^Characters$")).first
-        chars.wait_for(timeout=10_000)
-        chars.click(force=True)
-        time.sleep(0.6)
-    step("1_chars_pill", click_chars_pill)
-
-    # 2. Click "Add visual references" chip (opens side panel — defaults to
-    #    the Image tab).
+    # 1. Click the "Add visual references" chip, then "From Creations" in the
+    #    menu it opens — that's what puts up the reference side panel. (The
+    #    other entry, "From Brand Kit", browses brand assets, not characters.)
     def click_avr():
         avr = page.locator(SEL.add_references_trigger).first
         avr.wait_for(timeout=10_000)
         avr.click(force=True)
-        # Wait for side panel to render — Characters & Worlds tab is the
-        # most stable signal that the panel is up.
+        time.sleep(1.0)
+        from_creations = page.locator(SEL.references_from_creations).first
+        try:
+            from_creations.wait_for(timeout=5_000)
+            from_creations.click(force=True)
+        except PWTimeout:
+            # Some form states open the panel directly, with no menu.
+            pass
+        # Wait for the side panel to render — the Characters & Worlds tab is
+        # the most stable signal that the panel is up.
         page.locator(SEL.side_panel_cw_tab).first.wait_for(timeout=15_000)
-    step("2_add_visual_references", click_avr)
+    step("1_add_visual_references", click_avr)
 
-    # 3a. Switch to Characters & Worlds top tab (panel opens on Image tab).
+    # 2. Switch to Characters & Worlds top tab (panel may open on Image tab).
     def click_cw_tab():
         page.locator(SEL.side_panel_cw_tab).first.click(force=True)
         # Wait for sub-filters to render.
         page.locator(SEL.side_panel_my_library).first.wait_for(timeout=10_000)
         time.sleep(0.5)
-    step("3a_cw_tab", click_cw_tab)
+    step("2_cw_tab", click_cw_tab)
 
-    # 3b. Source = My Library
+    # 3. Source = My Library
     def click_my_library():
         page.locator(SEL.side_panel_my_library).first.click(force=True)
         time.sleep(0.8)
-    step("3b_my_library", click_my_library)
+    step("3_my_library", click_my_library)
 
     # 4. Category = Characters (sub-tab next to World shots)
     def click_chars_subtab():
@@ -525,6 +585,9 @@ def _upload_reference_image(page: Page, image_path: Path) -> None:
             ) from e
 
     # 1. Activate the "Upload Media" pill (sibling of "Characters").
+    #    NOTE: the 2026-09 refresh removed both pills; no caller passes
+    #    `reference_image` today, so this path is untested against the new
+    #    form and needs re-probing before it's used again.
     def click_upload_pill():
         pill = page.locator("button").filter(
             has_text=re.compile(r"^Upload Media$")).first
@@ -999,17 +1062,12 @@ def generate_clip(
             print(f"  → ensuring workspace: {workspace}", file=sys.stderr)
             _select_workspace(page, workspace)
 
-        # Switch input mode to "Text with Reference" — references are
-        # optional, but on this UI it's the path that exposes saved
-        # characters. Note: clicking this mode silently swaps the model
-        # to the user's last-used reference-capable one (often Wan 2.7);
-        # we re-assert the desired model immediately after.
-        try:
-            page.locator(SEL.mode_text_with_reference).first.click(timeout=5_000)
-            time.sleep(1.0)
-        except PWTimeout:
-            pass
-
+        # Make sure we're on the Text-to-Video tool. The URL normally lands
+        # us there, but OpenArt silently redirects an unknown slug to the
+        # last-used tool — which may be Frame to Video, whose form has no
+        # character references at all. Switching tools can swap the model, so
+        # we re-assert the model immediately after.
+        _ensure_text_to_video(page)
         _select_model_in_picker(page, model)
 
         if reference_image:
