@@ -14,7 +14,8 @@ google-auth>=2.30                # service-account auth for Sheets/Drive
 google-auth-httplib2>=0.2
 faster-whisper>=1.0              # transcribe.py — CPU int8 word-level timestamps
 piper-tts>=1.2                   # local TTS (assemble_modular --tts-provider piper)
-playwright>=1.50                 # openart_driver.py / openart_image_driver.py (also requires `playwright install chromium`)
+playwright>=1.50                 # social_stats/tiktok_stats.py + the archived *_playwright.py OpenArt drivers
+                                 # (also requires `playwright install chromium`)
 fastapi>=0.110                   # web/server.py review UI
 uvicorn>=0.27
 boto3>=1.18                      # S3 sync of approved trivia images (tools/publishers/s3.py) — assets.tt.bebopbee.com

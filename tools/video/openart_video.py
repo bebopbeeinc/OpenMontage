@@ -1,11 +1,12 @@
-"""OpenArt video generation via Playwright browser automation.
+"""OpenArt video generation via the OpenArt MCP API.
 
-Wraps the Playwright driver at scripts/common/openart_driver.py as a
+Wraps the MCP driver at scripts/common/openart_driver.py as a
 registered BaseTool so it is discoverable through the registry and routable
 through video_selector.
 
 Models exposed as a parameter (no provider lock-in): Seedance 2.0, HappyHorse.
-Add new entries by extending KNOWN_MODELS here AND MODEL_SLUGS in the driver.
+Add new entries by extending KNOWN_MODELS here AND MODEL_IDS in
+scripts/common/openart_api.py.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from tools.base_tool import (
 
 REPO = Path(__file__).resolve().parents[2]
 DRIVER_DIR = REPO / "scripts" / "common"
-STATE_FILE = REPO / ".playwright" / "openart-state.json"
+TOKEN_FILE = REPO / ".openart" / "mcp-token.json"
 
 
 class OpenArtVideo(BaseTool):
@@ -45,14 +46,14 @@ class OpenArtVideo(BaseTool):
     determinism = Determinism.STOCHASTIC
     runtime = ToolRuntime.HYBRID
 
-    dependencies = ["python:playwright", "cmd:ffmpeg"]
+    dependencies = ["python:requests", "cmd:ffmpeg"]
     install_instructions = (
-        "OpenArt is browser-automated, not API-based.\n"
-        "  1. pip install playwright && playwright install chromium\n"
-        "  2. brew install ffmpeg (used to strip audio when audio_on=False)\n"
-        "  3. First run is headed (headless=False) so you can log in at\n"
-        "     openart.ai. The session persists at .playwright/openart-state.json\n"
-        "     and subsequent runs can be headless."
+        "OpenArt is reached through its hosted MCP API (OAuth, no API key).\n"
+        "  1. python scripts/common/openart_mcp.py --login\n"
+        "  2. Approve the consent screen in the browser that opens.\n"
+        "  3. brew install ffmpeg (used to strip audio when audio_on=False)\n"
+        "The refresh token persists at .openart/mcp-token.json, so this is a\n"
+        "one-time step per machine and every later run is headless."
     )
     agent_skills: list[str] = []
 
@@ -65,9 +66,13 @@ class OpenArtVideo(BaseTool):
     # Model display name -> URL slug. Source of truth for which models the
     # driver knows how to drive. Keep in sync with MODEL_SLUGS in
     # scripts/common/openart_driver.py.
+    # HappyHorse used to live here. It was only ever reachable through the web
+    # UI and has no route on the MCP API, so it is gone rather than silently
+    # mapped onto a different generator.
     KNOWN_MODELS: list[str] = [
         "Seedance 2.0",
-        "HappyHorse",
+        "Seedance 2.0 Fast",
+        "Kling 3.0 Omni",
     ]
 
     supports = {
@@ -135,10 +140,10 @@ class OpenArtVideo(BaseTool):
     resume_support = ResumeSupport.NONE
     idempotency_key_fields = ["prompt", "model", "duration_s", "character"]
     side_effects = [
-        "opens a Chromium browser (headed on first run)",
+        "spends OpenArt credits from the active workspace",
         "writes video file(s) to output_path(s)",
-        "may prompt for manual OpenArt login on first run",
-        "persists session state at .playwright/openart-state.json",
+        "uploads character stills / reference images to the workspace library",
+        "may switch the account's active OpenArt workspace",
         "remuxes downloaded mp4 to strip audio when audio_on=False",
     ]
     user_visible_verification = [
@@ -148,13 +153,15 @@ class OpenArtVideo(BaseTool):
 
     def get_status(self) -> ToolStatus:
         try:
-            import playwright  # noqa: F401
+            import requests  # noqa: F401
         except ImportError:
             return ToolStatus.UNAVAILABLE
         import shutil
         if shutil.which("ffmpeg") is None:
             return ToolStatus.UNAVAILABLE
-        if STATE_FILE.exists():
+        # Without a stored token nothing can run unattended, but the fix is one
+        # interactive command — degraded, not unavailable.
+        if TOKEN_FILE.exists():
             return ToolStatus.AVAILABLE
         return ToolStatus.DEGRADED
 

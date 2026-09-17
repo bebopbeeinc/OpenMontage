@@ -1,6 +1,6 @@
-"""OpenArt image generation via Playwright browser automation.
+"""OpenArt image generation via the OpenArt MCP API.
 
-Wraps the Playwright driver at scripts/trivia_images/openart_image_driver.py
+Wraps the MCP driver at scripts/trivia_images/openart_image_driver.py
 as a registered BaseTool so it is discoverable through the registry and
 routable through image_selector.
 
@@ -36,7 +36,7 @@ from tools.base_tool import (
 
 REPO = Path(__file__).resolve().parents[2]
 DRIVER_DIR = REPO / "scripts" / "trivia_images"
-STATE_FILE = REPO / ".playwright" / "openart-state.json"
+TOKEN_FILE = REPO / ".openart" / "mcp-token.json"
 
 
 class OpenArtImage(BaseTool):
@@ -50,13 +50,13 @@ class OpenArtImage(BaseTool):
     determinism = Determinism.STOCHASTIC
     runtime = ToolRuntime.HYBRID
 
-    dependencies = ["python:playwright"]
+    dependencies = ["python:requests"]
     install_instructions = (
-        "OpenArt is browser-automated, not API-based.\n"
-        "  1. pip install playwright && playwright install chromium\n"
-        "  2. First run is headed (headless=False) so you can log in at\n"
-        "     openart.ai. The session persists at .playwright/openart-state.json\n"
-        "     and subsequent runs can be headless."
+        "OpenArt is reached through its hosted MCP API (OAuth, no API key).\n"
+        "  1. python scripts/common/openart_mcp.py --login\n"
+        "  2. Approve the consent screen in the browser that opens.\n"
+        "The refresh token persists at .openart/mcp-token.json, so this is a\n"
+        "one-time step per machine and every later run is headless."
     )
     agent_skills: list[str] = []
 
@@ -67,15 +67,16 @@ class OpenArtImage(BaseTool):
         "illustration",
     ]
 
-    # Model display name -> URL slug. Source of truth for which models the
-    # driver knows how to drive. Keep in sync with MODEL_SLUGS in
-    # scripts/trivia_images/openart_image_driver.py.
+    # Model display names this tool exposes. Keep in sync with MODEL_IDS in
+    # scripts/common/openart_api.py, which maps them to MCP model ids.
+    # "Nano Banana" (the original) was dropped: it has no route on the MCP API.
     KNOWN_MODELS: list[str] = [
         "Nano Banana Pro",
         "Nano Banana 2",
-        "Nano Banana",
+        "Nano Banana 2 Lite",
         "GPT Image 2",
         "Seedream 4.5",
+        "Seedream 5 Pro",
     ]
 
     supports = {
@@ -147,10 +148,10 @@ class OpenArtImage(BaseTool):
     resume_support = ResumeSupport.NONE
     idempotency_key_fields = ["prompt", "model", "aspect", "resolution"]
     side_effects = [
-        "opens a Chromium browser (headed on first run)",
+        "spends OpenArt credits from the active workspace",
         "writes image file(s) to output_path(s)",
-        "may prompt for manual OpenArt login on first run",
-        "persists session state at .playwright/openart-state.json",
+        "uploads any reference image to the OpenArt workspace library",
+        "may switch the account's active OpenArt workspace",
     ]
     user_visible_verification = [
         "inspect saved image(s) under output_path",
@@ -159,13 +160,12 @@ class OpenArtImage(BaseTool):
 
     def get_status(self) -> ToolStatus:
         try:
-            import playwright  # noqa: F401
+            import requests  # noqa: F401
         except ImportError:
             return ToolStatus.UNAVAILABLE
-        # Driver can run headed and prompt for login on first use, so absence
-        # of saved state is degraded (not unavailable) — the user can still
-        # complete the flow interactively.
-        if STATE_FILE.exists():
+        # Without a stored token nothing can run unattended, but the fix is one
+        # interactive command — degraded, not unavailable.
+        if TOKEN_FILE.exists():
             return ToolStatus.AVAILABLE
         return ToolStatus.DEGRADED
 
@@ -208,7 +208,7 @@ class OpenArtImage(BaseTool):
             reference_image_path = ref
 
         # Import the driver lazily so registry discovery doesn't pay the
-        # cost of importing playwright at startup.
+        # cost of importing the MCP client (and requests) at startup.
         if str(DRIVER_DIR) not in sys.path:
             sys.path.insert(0, str(DRIVER_DIR))
         try:

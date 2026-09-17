@@ -10,7 +10,7 @@ count; you choose between two production modes declared in the manifest:
   using the saved `ellie.travelcrush` character, drops the mp4 into
   `scripts/trivia_reaction/library/clips/<slug>.mp4`, and tells you go.
 - `automated_openart` — `scripts/trivia_reaction/openart_generate.py`
-  drives the OpenArt UI via Playwright and downloads the variants
+  calls the OpenArt MCP API and downloads the variants
   directly.
 
 ## Prerequisites
@@ -19,8 +19,8 @@ count; you choose between two production modes declared in the manifest:
 |---|---|---|
 | Artifact | `projects/trivia-reaction/<slug>/artifacts/brief.json` | Slug, Day |
 | Artifact | `projects/trivia-reaction/<slug>/artifacts/script.json` | OpenArt prompt, character, duration |
-| Script | `scripts/trivia_reaction/openart_generate.py` | Playwright driver wrapper |
-| Driver | `scripts/common/openart_driver.py` | Shared OpenArt Playwright driver |
+| Script | `scripts/trivia_reaction/openart_generate.py` | MCP driver wrapper |
+| Driver | `scripts/common/openart_driver.py` | Shared OpenArt MCP driver |
 | Library | `scripts/trivia_reaction/library/clips/` | Gitignored — final mp4s land here |
 | Schema | `schemas/artifacts/asset_manifest.schema.json` | Artifact validation |
 
@@ -40,12 +40,26 @@ Announce the chosen mode before doing any work.
 ### 2. Verify The OpenArt Character Exists
 
 The user maintains the `ellie.travelcrush` character in OpenArt's
-"My Library → Characters" page. This is a one-time setup; we don't
-verify it programmatically — but if the driver's
-`_select_character(page, "ellie.travelcrush")` fails (character not
-found in the picker), STOP and ask the user to create it before
-retrying. Do NOT silently fall back to a different character or to
-a text-only describe-her prompt.
+"My Library → Characters" page, but the MCP API cannot address it by
+name — the driver resolves `character="ellie.travelcrush"` through
+`character_library/ellie-travelcrush/` instead. Check it resolves:
+
+```bash
+python scripts/common/openart_characters.py
+```
+
+If it isn't listed, re-export before retrying:
+
+```bash
+python scripts/common/openart_character_export.py --write --pointers \
+  --only "ellie.travelcrush"
+```
+
+She is stored as a `refs.json` pointer whose asset belongs to the **R N**
+workspace, which is why this pipeline generates there — a pointer only
+resolves in its owning workspace. If the driver raises a character
+error, STOP and fix the library. Do NOT silently fall back to a
+different character or to a text-only describe-her prompt.
 
 ### 3a. Manual OpenArt Branch
 

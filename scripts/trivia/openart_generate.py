@@ -51,6 +51,10 @@ class SegmentSpec:
 
 
 SEGMENTS = [
+    # NOTE: HappyHorse has no route on OpenArt's MCP API (it was a web-UI-only
+    # model), and the API's duration floor is 4s, so this spec will raise
+    # OpenArtModelUnavailableError. Pick a listed model + >=4s duration, or
+    # generate reactions by hand in the OpenArt UI, before running this segment.
     SegmentSpec("reaction", LIBRARY_BASE / "reactions", "reaction_filename", "reaction_prompt", "HappyHorse",     3),
     SegmentSpec("body",     LIBRARY_BASE / "bodies",    "body_filename",     "body_prompt",     "Seedance 2.0",  8),
     SegmentSpec("closer",   LIBRARY_BASE / "closers",   "closer_filename",   "closer_prompt",   "Seedance 2.0",  4,

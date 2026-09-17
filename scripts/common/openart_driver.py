@@ -1,1021 +1,69 @@
 #!/usr/bin/env python
-"""Playwright driver for openart.ai video generation.
+"""OpenArt video generation over the MCP API.
 
-Drives the OpenArt UI to generate a single clip from a prompt with a chosen
-model + duration, then downloads the result.
+Drop-in replacement for the Playwright driver that used to live here (kept at
+`openart_driver_playwright.py` for reference — nothing dispatches to it). Same
+public API, no browser:
 
-Auth: persistent storage state at .playwright/openart-state.json. First run is
-headed and waits up to 5 minutes for the human to log in; subsequent runs reuse
-the saved cookies/localStorage.
+    generate_clip(prompt, model, duration_s, output_paths, ...) -> list[Path]
+    download_resource(resource_id, output_path, ...)            -> Path
 
-The selectors live in `SELECTORS` at the top so they can be tuned without
-touching the flow logic. They use Playwright role/text locators where possible
-because OpenArt's class names are hashed and unstable.
+Two behaviour changes the signatures can't show:
 
-Public API:
-    generate_clip(prompt, model, duration_s, output_path, headless=False) -> Path
+  * `character=` no longer selects an OpenArt saved character. The MCP surface
+    has no tool that resolves saved characters by name, so the identity
+    reference now comes from local stills in `character_library/<slug>/` and
+    rides along as element2video references. See
+    `scripts/common/openart_characters.py` for the layout and the one-time
+    export step.
+  * "HappyHorse" has no MCP route at all and raises
+    OpenArtModelUnavailableError rather than quietly running a different
+    generator.
+
+Auth is a one-time OAuth consent per machine:
+
+    python scripts/common/openart_mcp.py --login
 
 Standalone smoke test:
-    python scripts/common/openart_driver.py \\
-      --prompt "test" --model "Seedance 2.0" --duration 8 \\
+    python scripts/common/openart_driver.py \
+      --prompt "test" --model "Seedance 2.0" --duration 8 \
       --out scripts/trivia/library/_smoketest.mp4
-
-Interactive probe (open OpenArt, login, then pause for DOM inspection):
-    python scripts/common/openart_driver.py --probe
 """
 from __future__ import annotations
 
 import argparse
-import os
-import re
+import subprocess
 import sys
-import time
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
-
-from playwright.sync_api import (
-    Page,
-    Playwright,
-    TimeoutError as PWTimeout,
-    sync_playwright,
-)
+from typing import Optional
 
 REPO = Path(__file__).resolve().parents[2]
-STATE_FILE = REPO / ".playwright" / "openart-state.json"
+COMMON = REPO / "scripts" / "common"
+if str(COMMON) not in sys.path:
+    sys.path.insert(0, str(COMMON))
 
-# The 2026-09 UI refresh split the video suite into one tool per URL prefix:
-# `/suite/animate-video/<slug>` is now the Frame-to-Video tool (start/end frame
-# images, no character references) and `/suite/create-video/<slug>` is Text to
-# Video — the only one that exposes saved characters. Landing on the wrong
-# prefix leaves the form without the references chip and the character picker
-# times out.
-OPENART_SUITE_BASE = "https://openart.ai/suite/create-video"
+import openart_api as api  # noqa: E402
+import openart_characters as characters  # noqa: E402
+from openart_api import (  # noqa: E402,F401 - re-exported for callers
+    OpenArtAuthError,
+    OpenArtGenerationError,
+    OpenArtModelUnavailableError,
+    OpenArtOutOfCreditsError,
+    OpenArtRateLimitError,
+)
 
-# The OpenArt account belongs to more than one team. Saved characters
-# (ellie.travelcrush, Captain Archibald, …) live in the personal "R N"
-# workspace, but OpenArt persists the active team per session and it can
-# silently swap to another team (e.g. "BebopBee Art Team"), whose library
-# has different characters — making the intended character invisible and the
-# character picker time out. We re-assert the workspace on every run.
+# Saved characters used to live in the personal "R N" workspace, which is why
+# the video driver defaults there while the image driver defaults to the team.
 OPENART_WORKSPACE = "R N"
 
-# Model display name -> URL slug on the Suite. The slug is the source of truth
-# for which generator runs; OpenArt has no in-page model picker on these URLs.
-MODEL_SLUGS: dict[str, str] = {
-    "Seedance 2.0":   "byte-plus-seedance-2",
-    "HappyHorse":     "happyhorse",
-    "Kling 3.0 Omni": "kling-3-omni",
-}
+# Vertical, to match every trivia surface.
+ASPECT = "9:16"
 
+# Video is slow; Seedance at 1080p can sit in the queue for several minutes.
+GENERATION_TIMEOUT_S = 1800
 
-def _model_url(model: str) -> str:
-    try:
-        slug = MODEL_SLUGS[model]
-    except KeyError as e:
-        raise ValueError(
-            f"unknown model {model!r}. known: {list(MODEL_SLUGS)}",
-        ) from e
-    return f"{OPENART_SUITE_BASE}/{slug}"
-
-# How long we'll wait for a generation job to finish, per model.
-# Seedance 8s clips usually land in 60-180s; HappyHorse 3s in 30-90s, but a
-# 15s Seedance 2.0 clip under load has been observed taking ~744s — past the
-# old 600s ceiling, which silently timed out a clip that had actually
-# completed. Be generous; we exit early the moment the history endpoint
-# reports `completed`/`failed`, so a high ceiling costs nothing on the happy
-# path and only protects against queue backlogs.
-GENERATION_TIMEOUT_S = 1200
-
-# Polling interval while waiting for the new clip to appear.
-POLL_INTERVAL_S = 3
-
-# How long to wait on the login page (headed) before giving up.
-LOGIN_TIMEOUT_S = 300
-
-
-# ---------------------------------------------------------------------------
-# Selectors — adjust these as the OpenArt UI evolves.
-# Prefer role/text locators over hashed class names.
-# ---------------------------------------------------------------------------
-# OpenArt's 2026-08 UI refresh moved every icon's identity from `aria-label`
-# to `data-icon` (`svg[aria-label]` now matches nothing), breaking the workspace
-# switcher and the Model card here exactly as it did in the image driver — the
-# header UI is shared between the Animate-Video and Create-Image suites. Icon
-# names are unchanged, so match either attribute and keep working if the
-# account is flipped back via the header's "Previous version" toggle.
-def _icon(name: str, contains: bool = False) -> str:
-    """CSS matching an OpenArt icon by name on either the old or new UI."""
-    op = "*=" if contains else "="
-    return f"svg[data-icon{op}'{name}'], svg[aria-label{op}'{name}']"
-
-
-@dataclass(frozen=True)
-class Selectors:
-    # Signed-out signals. OpenArt serves anonymous users a marketing layout
-    # whose CTA labels drift over time, so we OR several stable affordances
-    # rather than trust a single button label. (A previous single marker,
-    # "Sign up to create for FREE", silently stopped matching when OpenArt
-    # changed the copy — login detection then false-positived and the run
-    # failed downstream at the workspace switcher instead of here.)
-    # Any of these present => not authenticated.
-    signed_out_markers: tuple[str, ...] = (
-        "button:has-text('Sign up to create for FREE')",
-        "button:has-text('Get for free')",
-        "a:has-text('Login')",
-        "button:has-text('Login')",
-    )
-
-    # The prompt input is a TipTap/ProseMirror contenteditable div, NOT a textarea.
-    prompt_editor: str = "div.tiptap.ProseMirror[contenteditable='true']"
-
-    # The "Setting" card (Output: Auto | 720p | 5s) opens a popover with
-    # aspect-ratio + resolution radios and a duration slider.
-    # The refresh dropped the card's "Setting" text label (it now reads
-    # "Output" over the summary), so the new form is matched by its icon.
-    setting_card: str = (
-        f"div.group:has-text('Output'):has({_icon('Setting')}), "
-        f"div.group:has-text('Setting'):has-text('Output')"
-    )
-
-    # The old "Mode Selector" radiogroup (Start/End Frame vs Text with
-    # Reference) is gone. The active tool is now named in the form's header
-    # (an <h1> reading "Text to Video" / "Frame to Video"); clicking that
-    # header opens a tool picker dialog listing "Create Video" (Frame to
-    # Video, Text to Video) plus the Video Tools. Picking one navigates to
-    # that tool's URL and can swap the model, so we re-assert the model after.
-    tool_header: str = "header h1"
-    tool_picker_option_template: str = "[role='dialog'] >> text=/^{label}$/"
-    # The tool we need: only Text to Video exposes saved characters.
-    text_to_video_label: str = "Text to Video"
-
-    # Model card on the form (icon = ModelXxx, text = "Model<name>"). Clicking
-    # opens a [role='dialog'] with a list of available models.
-    model_card: str = f"div.group:has-text('Model'):has({_icon('Model', contains=True)})"
-
-    # The in-form "Upload Media" / "Characters" pills are gone. The
-    # "Add visual references" chip under the prompt now opens a small menu
-    # ("From Brand Kit" / "From Creations"); "From Creations" is the one that
-    # opens the reference side panel with the saved character library.
-    add_references_trigger: str = "text=/Add visual references/"
-    references_from_creations: str = "text=/From Creations/"
-
-    # Side panel top-level tab. After "Add visual references" the panel
-    # defaults to the Image tab; switch to Characters & Worlds first.
-    side_panel_cw_tab: str = "button:has-text('Characters & Worlds')"
-    # Sub-filters within Characters & Worlds.
-    # "My Library" filters to user-saved references; "Characters" sub-tab is
-    # followed by "World shots" in the DOM, which gives us a unique xpath.
-    side_panel_my_library: str = "button:has-text('My Library')"
-    side_panel_chars_subtab: str = (
-        "xpath=//button[normalize-space()='Characters']"
-        "[following-sibling::button[normalize-space()='World shots']]"
-    )
-
-    # NOTE: the audio switch is found dynamically in `_find_audio_switch`
-    # because there can be multiple `[role='switch']` buttons on the page
-    # (Audio, Auto Polish, etc.) and the structure varies by model.
-
-    # Video-count picker (number of variants per submit). Two icon buttons
-    # flank a div displaying the current count.
-    count_decrease: str = "button[aria-label='Decrease video count']"
-    count_increase: str = "button[aria-label='Increase video count']"
-
-    # Inside the Setting popover (a [role='dialog']):
-    aspect_radio_template: str = "[role='dialog'] [role='radio']:has-text('{label}')"
-    resolution_radio_template: str = "[role='dialog'] [role='radio']:has-text('{label}')"
-    # The Duration row exposes the slider thumb as [role='slider'].
-    duration_slider: str = "[role='dialog'] [role='slider']"
-
-    # Generate button has a stable data attribute. We also key on "enabled"
-    # before clicking; OpenArt disables it until the form is valid.
-    generate_button: str = "button[data-generate-btn='true']"
-
-
-SEL = Selectors()
-
-
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
-def _is_signed_out(page: Page) -> bool:
-    return any(page.locator(sel).count() > 0 for sel in SEL.signed_out_markers)
-
-
-def _goto_suite(page: Page, target_url: str) -> None:
-    """Navigate to a Suite URL. The Suite keeps a long-poll connection so
-    `networkidle` never fires; we settle for `domcontentloaded` and then
-    wait briefly for either the signed-out marker or a textarea to render."""
-    page.goto(target_url, wait_until="domcontentloaded", timeout=60_000)
-    # Give React a beat; we'll check signed-in state on the next call.
-    settle = ", ".join((*SEL.signed_out_markers, "textarea", "button:has-text('Generate')"))
-    try:
-        page.wait_for_selector(settle, timeout=15_000)
-    except PWTimeout:
-        pass
-
-
-def _ensure_logged_in(page: Page, target_url: str, headless: bool = False) -> None:
-    """Navigate to target_url and ensure we're authenticated.
-
-    Headless runs can't show a login window, so manual re-auth is impossible —
-    we fail fast with the headed re-auth command instead of blocking for
-    LOGIN_TIMEOUT_S on a login that can never complete.
-    """
-    _goto_suite(page, target_url)
-    if not _is_signed_out(page):
-        return
-    if headless:
-        raise RuntimeError(
-            "OpenArt session is logged out and this is a headless run — "
-            "can't log in without a browser window. Refresh auth with:\n"
-            "  python scripts/common/openart_driver.py --probe\n"
-            "log in, confirm the suite loads authenticated, then re-run.",
-        )
-    print(
-        f"\n⚠ Not logged in. Please log in manually in the browser window. "
-        f"I'll wait up to {LOGIN_TIMEOUT_S}s.\n",
-        file=sys.stderr,
-    )
-    deadline = time.time() + LOGIN_TIMEOUT_S
-    while time.time() < deadline:
-        time.sleep(2)
-        if not _is_signed_out(page):
-            print("✓ login detected", file=sys.stderr)
-            _goto_suite(page, target_url)
-            return
-    raise RuntimeError("login timed out")
-
-
-# ---------------------------------------------------------------------------
-# Generation flow — Setting popover (aspect + resolution radios, duration slider)
-# ---------------------------------------------------------------------------
-def _open_setting_popover(page: Page) -> None:
-    """Click the Setting card to open its popover. Idempotent.
-
-    Tests "popover is open" by looking for a Setting-specific child (the
-    9:16 aspect radio). Checking `[role='dialog']` count is too broad: the
-    character picker side panel and the model picker also register as
-    dialogs, and if one of those is still attached we'd return early
-    without opening the Setting popover — leaving `_select_aspect` to
-    time out on a wrong-dialog locator.
-
-    If a non-Setting dialog is open, press Escape to close it first, then
-    click the Setting card. The same selector is used to confirm the
-    Setting popover successfully opened.
-    """
-    setting_marker = "[role='dialog'] [role='radio']:has-text('9:16')"
-    if page.locator(setting_marker).count() > 0:
-        return
-    # A different dialog (character side panel, model picker) may be attached.
-    if page.locator("[role='dialog']").count() > 0:
-        page.keyboard.press("Escape")
-        time.sleep(0.4)
-    page.locator(SEL.setting_card).first.click()
-    try:
-        page.locator(setting_marker).first.wait_for(timeout=5_000)
-    except PWTimeout:
-        # Capture state for debug, then re-raise so the caller surfaces the failure.
-        try:
-            page.screenshot(path=str(REPO / ".playwright" / "setting_popover_open_fail.png"),
-                            full_page=True)
-        except Exception:
-            pass
-        raise
-    time.sleep(0.3)
-
-
-def _close_popover(page: Page) -> None:
-    if page.locator("[role='dialog']").count() == 0:
-        return
-    page.keyboard.press("Escape")
-    try:
-        page.locator("[role='dialog']").first.wait_for(state="detached", timeout=3_000)
-    except PWTimeout:
-        pass
-    time.sleep(0.3)
-
-
-def _select_aspect(page: Page, label: str = "9:16") -> None:
-    _open_setting_popover(page)
-    page.locator(SEL.aspect_radio_template.format(label=label)).first.click()
-
-
-def _select_resolution(page: Page, label: str = "480p") -> None:
-    _open_setting_popover(page)
-    page.locator(SEL.resolution_radio_template.format(label=label)).first.click()
-
-
-def _set_duration(page: Page, seconds: int) -> None:
-    """Drive the Radix duration slider via keyboard.
-
-    aria-valuemin / aria-valuemax bound the slider; we focus the thumb,
-    Home → vmin, then ArrowRight (target - vmin) times.
-    """
-    _open_setting_popover(page)
-    slider = page.locator(SEL.duration_slider).first
-    slider.wait_for(timeout=5_000)
-    vmin = int(slider.get_attribute("aria-valuemin") or "0")
-    vmax = int(slider.get_attribute("aria-valuemax") or "100")
-    if seconds < vmin or seconds > vmax:
-        raise ValueError(
-            f"duration {seconds}s out of slider range [{vmin}, {vmax}] for this model",
-        )
-    slider.focus()
-    page.keyboard.press("Home")
-    for _ in range(seconds - vmin):
-        page.keyboard.press("ArrowRight")
-    actual = int(slider.get_attribute("aria-valuenow") or "0")
-    if actual != seconds:
-        slider.focus()
-        page.keyboard.press("End")
-        for _ in range(vmax - seconds):
-            page.keyboard.press("ArrowLeft")
-
-
-def _select_model_in_picker(page: Page, label: str) -> None:
-    """Open the Model card popover and click the option matching `label`.
-
-    Idempotent: skips clicking if the card already shows `label`.
-    OpenArt's URL slug picks an initial model, but other actions
-    (e.g. switching mode to Text-with-Reference) can silently swap it,
-    so we always re-assert the model after mode changes.
-    """
-    card = page.locator(SEL.model_card).first
-    try:
-        card.wait_for(timeout=10_000)
-    except PWTimeout:
-        # Most common reasons this fires: page is showing a sign-out/verify
-        # interstitial we don't detect, or OpenArt's DOM moved. Dump the page
-        # so the operator can see what was actually on screen.
-        _diagnose(page, "model_card_timeout")
-        raise
-    current = (card.text_content() or "").strip()
-    if label in current:
-        return
-    card.click(force=True)
-    dlg = page.get_by_role("dialog").first
-    dlg.wait_for(timeout=5_000)
-    dlg.locator(f"text=/^{re.escape(label)}/").first.click(force=True)
-    # Dialog usually auto-closes after a model pick.
-    time.sleep(1.5)
-
-
-def _select_workspace(page: Page, workspace: str) -> None:
-    """Ensure the named OpenArt team/workspace is the active one.
-
-    The workspace switcher is a Radix popover in the header: the trigger is a
-    `button[aria-haspopup='dialog']` showing an avatar + the current workspace
-    name + an ArrowDownBold chevron; clicking it opens a `[role='dialog']`
-    titled "Workspaces" with one `<button>` per workspace.
-
-    Idempotent: if the switcher already shows `workspace`, do nothing. Diagnoses
-    each failure with a screenshot under .playwright/.
-    """
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # There are a couple of chevron-dialog buttons in the header (workspace and
-    # project switchers); match them all and disambiguate by behaviour.
-    triggers = page.locator(
-        f"button[aria-haspopup='dialog']:has({_icon('ArrowDownBold')})"
-    )
-    try:
-        triggers.first.wait_for(timeout=15_000)
-    except PWTimeout:
-        page.screenshot(path=str(out_dir / "ws_fail_no_trigger.png"), full_page=True)
-        raise RuntimeError(
-            "workspace switcher not found — OpenArt header may have changed. "
-            "See .playwright/ws_fail_no_trigger.png",
-        )
-
-    # Fast path: the active workspace name is rendered inside its trigger label
-    # (with the avatar initial prepended, e.g. "RR N"), so a containment test
-    # against any switcher trigger tells us we're already there.
-    n = triggers.count()
-    for i in range(n):
-        if workspace in (triggers.nth(i).text_content() or ""):
-            return
-
-    # Open the Workspaces popover. The first chevron trigger is the workspace
-    # one, but fall back to the others if the "Workspaces" dialog doesn't show.
-    dlg = None
-    for i in range(n):
-        triggers.nth(i).click(force=True)
-        time.sleep(0.8)
-        cand = page.get_by_role("dialog").filter(has_text="Workspaces").first
-        if cand.count() > 0:
-            dlg = cand
-            break
-        try:
-            page.keyboard.press("Escape")
-            time.sleep(0.3)
-        except Exception:
-            pass
-    if dlg is None:
-        page.screenshot(path=str(out_dir / "ws_fail_no_menu.png"), full_page=True)
-        raise RuntimeError(
-            "could not open the Workspaces switcher — "
-            "see .playwright/ws_fail_no_menu.png",
-        )
-
-    item = dlg.get_by_role("button").filter(
-        has=page.get_by_text(workspace, exact=True),
-    ).first
-    try:
-        item.wait_for(timeout=10_000)
-    except PWTimeout:
-        names = dlg.locator("button p").all_text_contents()
-        page.screenshot(path=str(out_dir / "ws_fail_no_item.png"), full_page=True)
-        raise RuntimeError(
-            f"workspace {workspace!r} not offered (saw {names!r}) — check the "
-            f"name. See .playwright/ws_fail_no_item.png",
-        )
-    item.click(force=True)
-    # Switching workspace reloads the suite content + character library.
-    time.sleep(2.5)
-
-
-def _ensure_text_to_video(page: Page) -> None:
-    """Ensure the form's active tool is "Text to Video".
-
-    The form header names the current tool; clicking it opens a picker
-    dialog. Only Text to Video exposes saved characters — Frame to Video
-    asks for start/end frame images instead, and its form has neither the
-    references chip nor the character picker.
-    """
-    header = page.locator(SEL.tool_header).first
-    try:
-        header.wait_for(timeout=15_000)
-    except PWTimeout:
-        _diagnose(page, "tool_header_missing")
-        raise
-    current = (header.text_content() or "").strip()
-    if current == SEL.text_to_video_label:
-        return
-    print(f"  → switching tool: {current!r} → {SEL.text_to_video_label!r}", file=sys.stderr)
-    header.click(force=True)
-    time.sleep(1.0)
-    option = page.locator(
-        SEL.tool_picker_option_template.format(label=SEL.text_to_video_label),
-    ).first
-    try:
-        option.wait_for(timeout=10_000)
-    except PWTimeout:
-        _diagnose(page, "tool_picker_missing")
-        raise RuntimeError(
-            f"could not open the tool picker to switch from {current!r} to "
-            f"{SEL.text_to_video_label!r} — see .playwright/diag_tool_picker_missing.png",
-        )
-    option.click(force=True)
-    # Picking a tool navigates to its URL and re-renders the whole form.
-    time.sleep(3.0)
-
-
-def _select_character(page: Page, character_name: str) -> None:
-    """Pick a saved character from My Library → Characters → <name>.
-
-    Diagnoses which step fails by saving a screenshot of the page state on
-    each failure.
-    """
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    def step(label: str, action) -> None:
-        try:
-            action()
-        except Exception as e:
-            try:
-                page.screenshot(path=str(out_dir / f"char_fail_{label}.png"), full_page=True)
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"_select_character failed at step {label!r}: {e}. "
-                f"See .playwright/char_fail_{label}.png",
-            ) from e
-
-    # 1. Click the "Add visual references" chip, then "From Creations" in the
-    #    menu it opens — that's what puts up the reference side panel. (The
-    #    other entry, "From Brand Kit", browses brand assets, not characters.)
-    def click_avr():
-        avr = page.locator(SEL.add_references_trigger).first
-        avr.wait_for(timeout=10_000)
-        avr.click(force=True)
-        time.sleep(1.0)
-        from_creations = page.locator(SEL.references_from_creations).first
-        try:
-            from_creations.wait_for(timeout=5_000)
-            from_creations.click(force=True)
-        except PWTimeout:
-            # Some form states open the panel directly, with no menu.
-            pass
-        # Wait for the side panel to render — the Characters & Worlds tab is
-        # the most stable signal that the panel is up.
-        page.locator(SEL.side_panel_cw_tab).first.wait_for(timeout=15_000)
-    step("1_add_visual_references", click_avr)
-
-    # 2. Switch to Characters & Worlds top tab (panel may open on Image tab).
-    def click_cw_tab():
-        page.locator(SEL.side_panel_cw_tab).first.click(force=True)
-        # Wait for sub-filters to render.
-        page.locator(SEL.side_panel_my_library).first.wait_for(timeout=10_000)
-        time.sleep(0.5)
-    step("2_cw_tab", click_cw_tab)
-
-    # 3. Source = My Library
-    def click_my_library():
-        page.locator(SEL.side_panel_my_library).first.click(force=True)
-        time.sleep(0.8)
-    step("3_my_library", click_my_library)
-
-    # 4. Category = Characters (sub-tab next to World shots)
-    def click_chars_subtab():
-        sub = page.locator(SEL.side_panel_chars_subtab).first
-        sub.wait_for(timeout=10_000)
-        sub.click(force=True)
-        time.sleep(1.5)
-    step("4_chars_subtab", click_chars_subtab)
-
-    # 5. Click the named character.
-    def click_character():
-        name = page.locator(f"text=/{re.escape(character_name)}/").first
-        name.wait_for(timeout=15_000)
-        card = name.locator("xpath=ancestor::*[descendant::img][1]").first
-        card.click(force=True)
-        time.sleep(1.5)
-    step("5_character", click_character)
-
-    # 6. Best-effort confirm + close.
-    for label in ("Add", "Confirm", "Done", "Apply"):
-        try:
-            btn = page.locator(f"button:has-text('{label}')")
-            if btn.count() > 0 and btn.first.is_visible():
-                btn.first.click(force=True, timeout=2_000)
-                break
-        except Exception:
-            pass
-    try:
-        page.keyboard.press("Escape")
-        time.sleep(0.5)
-    except Exception:
-        pass
-
-
-def _upload_reference_image(page: Page, image_path: Path) -> None:
-    """Attach a local image as a visual reference ("Upload Media" pill).
-
-    Used to put real content (e.g. a game splash screen) into the scene so
-    the model renders it in-camera instead of compositing in post.
-    Diagnoses failures with screenshots like _select_character.
-    """
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    def step(label: str, action) -> None:
-        try:
-            action()
-        except Exception as e:
-            try:
-                page.screenshot(path=str(out_dir / f"upload_fail_{label}.png"), full_page=True)
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"_upload_reference_image failed at step {label!r}: {e}. "
-                f"See .playwright/upload_fail_{label}.png",
-            ) from e
-
-    # 1. Activate the "Upload Media" pill (sibling of "Characters").
-    #    NOTE: the 2026-09 refresh removed both pills; no caller passes
-    #    `reference_image` today, so this path is untested against the new
-    #    form and needs re-probing before it's used again.
-    def click_upload_pill():
-        pill = page.locator("button").filter(
-            has_text=re.compile(r"^Upload Media$")).first
-        pill.wait_for(timeout=10_000)
-        pill.click(force=True)
-        time.sleep(0.8)
-    step("1_upload_pill", click_upload_pill)
-
-    # 2. Hand the file over. Prefer a hidden <input type=file>; fall back
-    #    to a file-chooser triggered by the references chip.
-    def set_file():
-        inputs = page.locator("input[type='file']")
-        if inputs.count() > 0:
-            inputs.first.set_input_files(str(image_path))
-        else:
-            with page.expect_file_chooser(timeout=10_000) as fc:
-                page.locator(SEL.add_references_trigger).first.click(force=True)
-            fc.value.set_files(str(image_path))
-        # Video references need server-side metadata extraction before the
-        # form is submittable ("Video metadata is required" 400 otherwise).
-        # Wait long for videos, short for images, then snapshot the form
-        # state for diagnosis.
-        is_video = image_path.suffix.lower() in (".mp4", ".mov", ".webm", ".m4v")
-        time.sleep(20.0 if is_video else 4.0)
-        # If a confirm/trim dialog appeared for the video, accept it.
-        if is_video:
-            for label in ("Confirm", "Done", "Apply", "Save", "Add"):
-                try:
-                    btn = page.locator(f"[role='dialog'] button:has-text('{label}')")
-                    if btn.count() > 0 and btn.first.is_visible():
-                        btn.first.click(force=True, timeout=2_000)
-                        time.sleep(2.0)
-                        break
-                except Exception:
-                    pass
-        try:
-            page.screenshot(path=str(out_dir / "upload_state.png"))
-        except Exception:
-            pass
-    step("2_set_file", set_file)
-
-
-def _find_audio_switch(page: Page):
-    """Return the Audio toggle, or None if this model has no audio control.
-
-    There may be multiple `[role='switch']` buttons on the page (Audio,
-    Auto Polish, …) and some models (e.g. HappyHorse) don't have an Audio
-    card at all. We pick the switch whose enclosing card text contains
-    "Audio" but not "Polish"; returning None is a valid outcome.
-    """
-    # Brief wait to let the form settle. We don't *require* a switch.
-    time.sleep(0.5)
-    for sw in page.locator("button[role='switch']").all():
-        try:
-            card = sw.locator("xpath=ancestor::div[contains(@class,'group')][1]")
-            if card.count() == 0:
-                continue
-            text = (card.first.text_content() or "").strip()
-            if "Audio" in text and "Polish" not in text:
-                return sw
-        except Exception:
-            continue
-    return None
-
-
-def _set_audio(page: Page, on: bool) -> None:
-    """Toggle the Audio switch to the desired state. No-op when the model
-    has no Audio control (e.g. HappyHorse never generates audio).
-    """
-    sw = _find_audio_switch(page)
-    if sw is None:
-        return
-    target = "true" if on else "false"
-    for attempt in range(3):
-        actual = (sw.get_attribute("aria-checked") or "").lower()
-        if actual == target:
-            return
-        sw.click(force=True)
-        time.sleep(0.4)
-    actual = (sw.get_attribute("aria-checked") or "").lower()
-    if actual != target:
-        raise RuntimeError(
-            f"audio toggle would not stick: wanted {target!r}, got {actual!r}",
-        )
-
-
-def _set_variant_count(page: Page, target: int) -> None:
-    """Click +/- on the video-count picker until it shows `target`.
-
-    The picker reads its current value from the div between the two buttons.
-    """
-    if target < 1:
-        raise ValueError(f"variant count must be ≥ 1, got {target}")
-    # Read current count.
-    container = page.locator(f"div:has(> {SEL.count_decrease}):has(> {SEL.count_increase})").first
-    container.wait_for(timeout=5_000)
-    text = container.text_content() or ""
-    digits = re.findall(r"\d+", text)
-    current = int(digits[0]) if digits else 1
-    delta = target - current
-    if delta == 0:
-        return
-    btn = page.locator(SEL.count_increase if delta > 0 else SEL.count_decrease).first
-    for _ in range(abs(delta)):
-        btn.click()
-        time.sleep(0.15)
-
-
-def _enter_prompt(page: Page, prompt: str) -> None:
-    """Fill the TipTap/ProseMirror contenteditable.
-
-    `locator.fill()` doesn't trigger React's `onInput` for TipTap, so the
-    Generate button stays disabled. We use real keyboard events instead.
-    """
-    box = page.locator(SEL.prompt_editor).first
-    box.click()
-    page.keyboard.press("ControlOrMeta+A")
-    page.keyboard.press("Backspace")
-    page.keyboard.insert_text(prompt)
-    # Some React forms validate on blur — Tab away from the editor.
-    page.keyboard.press("Tab")
-    # Give React a beat to update form state.
-    time.sleep(0.5)
-
-
-def _diagnose(page: Page, where: str) -> None:
-    """Dump editor text + a screenshot to .playwright/ for debugging."""
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        editor_text = page.locator(SEL.prompt_editor).first.text_content() or ""
-    except Exception as e:
-        editor_text = f"<err: {e}>"
-    try:
-        btn = page.locator(SEL.generate_button).first
-        btn_disabled = btn.get_attribute("disabled")
-        btn_text = (btn.text_content() or "").strip()
-    except Exception as e:
-        btn_disabled = f"<err: {e}>"
-        btn_text = ""
-    try:
-        page.screenshot(path=str(out_dir / f"diag_{where}.png"), full_page=True)
-    except Exception:
-        pass
-    print(f"\n--- DIAG {where} ---", file=sys.stderr)
-    print(f"  editor text length: {len(editor_text)}", file=sys.stderr)
-    print(f"  editor text preview: {editor_text[:200]!r}", file=sys.stderr)
-    print(f"  generate button disabled attr: {btn_disabled!r}", file=sys.stderr)
-    print(f"  generate button text: {btn_text!r}", file=sys.stderr)
-    print(f"  screenshot: {out_dir / f'diag_{where}.png'}", file=sys.stderr)
-
-
-def _click_generate(page: Page) -> None:
-    """Click Generate. Wait until OpenArt enables the button (form valid)."""
-    btn = page.locator(SEL.generate_button).first
-    btn.wait_for(timeout=15_000)
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if btn.is_enabled():
-            break
-        time.sleep(0.3)
-    else:
-        _diagnose(page, "generate_disabled")
-        raise RuntimeError(
-            "Generate button still disabled — see diagnostic above and "
-            ".playwright/diag_generate_disabled.png",
-        )
-    btn.click()
-
-
-def _resolve_project_id(page: Page) -> str:
-    """Return the active workspace's default project id.
-
-    Resources are scoped per project: the list endpoint requires a
-    `projectId` query param (see `_poll_resources`). We pick the workspace's
-    default project ("Personal Project"), which is where the suite lands new
-    creations when no project is explicitly chosen.
-    """
-    import json
-    resp = page.context.request.get(
-        "https://openart.ai/suite/api/projects?pageSize=50", timeout=15_000,
-    )
-    if not resp.ok:
-        raise RuntimeError(f"could not list projects: HTTP {resp.status}")
-    rows = json.loads(resp.text()).get("data") or []
-    for r in rows:
-        if isinstance(r, dict) and r.get("isDefault"):
-            return r["id"]
-    if rows and isinstance(rows[0], dict) and rows[0].get("id"):
-        return rows[0]["id"]
-    raise RuntimeError("no projects found for the active workspace")
-
-
-def _resolve_project_id_from_history(page: Page, history_id: str) -> tuple[str | None, str | None]:
-    """Return (project_id, status) for a submission from its history record.
-
-    The history record (`/suite/api/history/{id}`) is the authoritative,
-    workspace-agnostic source: it carries the real `project_id` the creation
-    landed in (set at submit time) and a `status` that flips to
-    `completed`/`failed`. We use it instead of `_resolve_project_id` because
-    OpenArt can silently swap the *active* team between submit and poll, after
-    which `_resolve_project_id` (which picks the active workspace's isDefault
-    project) points at the wrong project and the just-submitted variant is
-    invisible — the exact bug that timed out completed clips.
-    """
-    import json
-    try:
-        resp = page.context.request.get(
-            f"https://openart.ai/suite/api/history/{history_id}", timeout=15_000,
-        )
-        if not resp.ok:
-            return None, None
-        h = json.loads(resp.text()).get("history") or {}
-        return h.get("project_id"), (h.get("status") or "").lower() or None
-    except Exception:
-        return None, None
-
-
-def _poll_resources(
-    page: Page,
-    resource_ids: list[str],
-    timeout_s: int,
-    history_id: str | None = None,
-    project_id: str | None = None,
-) -> list[tuple[str, dict]]:
-    """Poll the project-scoped resources LIST endpoint until each id settles.
-
-    Returns one tuple per id in the same order as `resource_ids`:
-        (resource_id, {"status": "ok", "url": <full-res CDN URL>, "metadata": {...}})
-        (resource_id, {"status": "failed", "error": "<reason>"})
-        (resource_id, {"status": "timeout"})
-
-    Project resolution (the part that bit us): the resources LIST endpoint is
-    project-scoped, so we must know which project the creation landed in. In
-    priority order we use:
-      1. an explicit `project_id` arg (caller already knows it), else
-      2. `history_id` → the history record's `project_id` (authoritative;
-         survives a silent active-team swap between submit and poll), else
-      3. `_resolve_project_id(page)` — the active workspace's isDefault
-         project (legacy fallback; wrong if the team swapped under us).
-    When a `history_id` is given we also read its `status`: a `failed` history
-    settles every variant as failed immediately instead of waiting out the
-    full timeout.
-
-    Why the LIST endpoint and not GET `/suite/api/resources/{id}`:
-      OpenArt removed (or locked) the per-id resource route — it now returns
-      `403 {"error":"Forbidden"}` for ids the session itself just created.
-      The suite UI never calls it; it fetches
-      `GET /suite/api/resources?folderIdNull=true&limit=N&projectId=<id>`,
-      a newest-first list. Our just-submitted variants are the newest rows,
-      so we page the list and match by `id`. Each row carries `url`,
-      `status` ("completed"/…), `error`, and `metadata` — a completed row
-      has a non-empty `url`.
-
-    Why the POST submit's authoritative `resourceIds` still matter:
-      The old DOM-polling gallery approach could mis-attribute pre-existing
-      gallery items to the current submission. Matching the list rows by the
-      exact ids the submit returned keeps that disambiguation.
-    """
-    import json
-    wanted = set(resource_ids)
-    settled: dict[str, dict] = {}
-    deadline = time.time() + timeout_s
-    last_progress = -1
-    resolved_pid = project_id  # may stay None until history/fallback resolves it
-
-    while len(settled) < len(wanted) and time.time() < deadline:
-        progress = len(settled)
-        if progress != last_progress:
-            print(f"    resolved {progress}/{len(resource_ids)}", file=sys.stderr)
-            last_progress = progress
-
-        # Consult the history record for the authoritative project id + status.
-        if history_id:
-            pid, hstatus = _resolve_project_id_from_history(page, history_id)
-            if pid:
-                resolved_pid = pid
-            if hstatus == "failed":
-                for rid in wanted - set(settled):
-                    settled[rid] = {"status": "failed", "error": "history status=failed"}
-                break
-
-        # Legacy fallback: active workspace's default project.
-        if not resolved_pid:
-            try:
-                resolved_pid = _resolve_project_id(page)
-            except Exception:
-                resolved_pid = None
-
-        if resolved_pid:
-            list_url = (
-                "https://openart.ai/suite/api/resources"
-                f"?folderIdNull=true&limit=50&projectId={resolved_pid}"
-            )
-            try:
-                resp = page.context.request.get(list_url, timeout=15_000)
-                if resp.ok:
-                    rows = json.loads(resp.text()).get("data") or []
-                    by_id = {r.get("id"): r for r in rows if isinstance(r, dict)}
-                    for rid in list(wanted - set(settled)):
-                        row = by_id.get(rid)
-                        if row is None:
-                            continue  # not yet on the newest page — keep polling
-                        status = (row.get("status") or "").lower()
-                        url = row.get("url")
-                        if url and status not in {"failed", "error"}:
-                            settled[rid] = {
-                                "status": "ok",
-                                "url": url,
-                                "metadata": row.get("metadata") or {},
-                            }
-                        elif status in {"failed", "error"} or row.get("error"):
-                            settled[rid] = {
-                                "status": "failed",
-                                "error": row.get("error") or status or "unknown",
-                            }
-            except Exception:
-                # Transient — try again next round
-                pass
-        if len(settled) < len(wanted):
-            time.sleep(POLL_INTERVAL_S)
-
-    for rid in resource_ids:
-        settled.setdefault(rid, {"status": "timeout"})
-    return [(rid, settled[rid]) for rid in resource_ids]
-
-
-def _download_via_context(page: Page, url: str, output_path: Path) -> Path:
-    """Download via the browser's authenticated request context.
-
-    OpenArt's CDN signs URLs against the session, so a bare HTTP GET 403s.
-    Using `page.context.request` carries cookies + auth headers.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    resp = page.context.request.get(url, timeout=120_000)
-    if not resp.ok:
-        raise RuntimeError(f"download failed: HTTP {resp.status} for {url}")
-    output_path.write_bytes(resp.body())
-    return output_path
-
-
-def _strip_audio_in_place(path: Path) -> None:
-    """Remux the file to drop any audio track. Pure stream copy — fast.
-
-    OpenArt's API ignores the form's audio toggle for some models (Wan 2.7
-    in particular), so videos arrive with audio even when the UI shows it
-    off. Strip after download so the on-disk file matches the UI state.
-    """
-    import subprocess
-    # Tmp file must keep the extension or ffmpeg can't pick the muxer.
-    tmp = path.with_name(f".muted_{path.name}")
-    cmd = [
-        "ffmpeg", "-y", "-loglevel", "error",
-        "-i", str(path),
-        "-an",            # drop audio
-        "-c:v", "copy",   # no re-encode
-        "-movflags", "+faststart",
-        str(tmp),
-    ]
-    subprocess.run(cmd, check=True)
-    tmp.replace(path)
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-@contextmanager
-def _browser(p: Playwright, headless: bool):
-    """Persistent context with stored auth state."""
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    storage_state = str(STATE_FILE) if STATE_FILE.exists() else None
-    browser = p.chromium.launch(headless=headless)
-    context = browser.new_context(
-        storage_state=storage_state,
-        accept_downloads=True,
-        viewport={"width": 1440, "height": 900},
-    )
-    try:
-        yield context
-    finally:
-        try:
-            context.storage_state(path=str(STATE_FILE))
-        except Exception:
-            pass
-        context.close()
-        browser.close()
-
-
-def download_resource(
-    resource_id: str,
-    output_path: Path,
-    headless: bool = False,
-    audio_on: bool = False,
-) -> Path:
-    """Download an already-generated OpenArt resource by its id.
-
-    Unlike `generate_clip`, this spends no credits — it resolves an existing
-    resource (e.g. one the user picked in the OpenArt gallery) via
-    `/suite/api/resources/{id}` and downloads its full-res CDN file using the
-    authenticated browser context (the CDN URLs are session-signed, so a bare
-    GET 403s — see `_download_via_context`).
-
-    Args:
-        resource_id: the OpenArt resource id (the `rid` in the resources API).
-        output_path: destination file.
-        headless: open a visible window when False.
-        audio_on: leave audio when True; strip it after download when False
-            (matches the trivia-reaction default — VO is added in post).
-
-    Returns the saved path. Raises if the resource never resolves to a URL.
-    """
-    output_path = Path(output_path).expanduser().resolve()
-    with sync_playwright() as p, _browser(p, headless=headless) as ctx:
-        page = ctx.new_page()
-        _ensure_logged_in(page, OPENART_SUITE_BASE, headless=headless)
-        print(f"  → resolving resource {resource_id}…", file=sys.stderr)
-        (rid, info), = _poll_resources(page, [resource_id], GENERATION_TIMEOUT_S)
-        if info.get("status") != "ok":
-            raise RuntimeError(
-                f"resource {rid} did not resolve to a URL: "
-                f"{info.get('status')} ({info.get('error')})"
-            )
-        url = info["url"]
-        print(f"  → {rid} URL: {url}", file=sys.stderr)
-        _download_via_context(page, url, output_path)
-        if not audio_on:
-            _strip_audio_in_place(output_path)
-    return output_path
+# Pages of creation history to scan when resolving a bare resource id.
+RESOURCE_LOOKUP_PAGES = 10
 
 
 def generate_clip(
@@ -1023,307 +71,214 @@ def generate_clip(
     model: str,
     duration_s: int,
     output_paths: list[Path],
-    headless: bool = False,
+    headless: bool = True,
     audio_on: bool = False,
     character: str | None = None,
     resolution: str = "480p",
     reference_image: Path | str | None = None,
     workspace: str | None = OPENART_WORKSPACE,
 ) -> list[Path]:
-    """Drive openart.ai to generate `len(output_paths)` variants and download each.
+    """Generate `len(output_paths)` clip variants on OpenArt and download each.
 
     Args:
         prompt: full prompt text.
-        model: model name (e.g. "Seedance 2.0", "HappyHorse").
-        duration_s: clip duration in seconds.
-        output_paths: one destination path per variant. Length determines
-            the variant count submitted to OpenArt.
-        headless: open a visible window when False (recommended for debug).
-        audio_on: leave audio enabled when True (default off — captions and
-            VO are added in post for the trivia pipeline).
-        reference_image: optional local image uploaded as a visual
-            reference ("Upload Media") alongside any saved character.
+        model: model display name (e.g. "Seedance 2.0").
+        duration_s: clip duration in seconds. OpenArt's video models accept
+            4-15s; shorter asks are raised to the model's floor and the real
+            value is logged.
+        output_paths: one destination path per variant; the length is the
+            variant count.
+        headless: accepted and ignored — there is no browser.
+        audio_on: keep the generated audio track. Default off: captions and VO
+            are added in post for the trivia pipelines.
+        character: saved-character name, resolved to local stills in
+            `character_library/<slug>/` and passed as element references.
+        resolution: "480p", "720p", "1080p" or "4k".
+        reference_image: local image passed as an additional visual reference.
+        workspace: OpenArt workspace to bill. None/"" uses whatever is active.
 
-    Returns the list of saved paths in newest-first gallery order, aligned
-    with `output_paths` (i.e. output_paths[0] = newest variant).
+    Returns saved paths aligned with `output_paths` (newest variant first).
     """
     if not output_paths:
         raise ValueError("output_paths must contain at least one path")
     output_paths = [Path(p).expanduser().resolve() for p in output_paths]
-    n = len(output_paths)
-    target_url = _model_url(model)
-    with sync_playwright() as p, _browser(p, headless=headless) as ctx:
-        page = ctx.new_page()
-        _ensure_logged_in(page, target_url, headless=headless)
 
-        # Re-assert the workspace before anything else — the saved characters
-        # live in a specific team and OpenArt can silently swap the active one.
-        if workspace:
-            print(f"  → ensuring workspace: {workspace}", file=sys.stderr)
-            _select_workspace(page, workspace)
+    # Fails fast and loudly for models with no MCP route (HappyHorse), instead
+    # of substituting a different generator.
+    mid = api.model_id(model)
 
-        # Make sure we're on the Text-to-Video tool. The URL normally lands
-        # us there, but OpenArt silently redirects an unknown slug to the
-        # last-used tool — which may be Frame to Video, whose form has no
-        # character references at all. Switching tools can swap the model, so
-        # we re-assert the model immediately after.
-        _ensure_text_to_video(page)
-        _select_model_in_picker(page, model)
+    ref_path: Optional[Path] = None
+    if reference_image:
+        ref_path = Path(reference_image).expanduser().resolve()
+        if not ref_path.exists():
+            raise FileNotFoundError(f"reference_image does not exist: {ref_path}")
 
-        if reference_image:
-            ref = Path(reference_image).expanduser().resolve()
-            if not ref.exists():
-                raise FileNotFoundError(f"reference image not found: {ref}")
-            print(f"  → uploading reference image: {ref.name}", file=sys.stderr)
-            _upload_reference_image(page, ref)
+    # element2video treats the references as identity, not as a locked first
+    # frame — that is what a saved character used to do.
+    mode = "element2video" if (character or ref_path) else "text2video"
+    duration = _clamp_duration(mid, mode, duration_s)
 
+    def build_params() -> dict:
+        """Built per workspace attempt — uploads are workspace-scoped."""
+        references: list[dict] = []
         if character:
-            print(f"  → selecting character: {character}", file=sys.stderr)
-            _select_character(page, character)
-
-        # Configure inside the Setting popover, then close it.
-        _select_aspect(page, "9:16")
-        _select_resolution(page, resolution)
-        _set_duration(page, duration_s)
-        _close_popover(page)
-
-        _set_audio(page, audio_on)
-        _set_variant_count(page, n)
-
-        _enter_prompt(page, prompt)
-
-        # Re-assert the audio toggle right before submit. It has been
-        # observed to revert after other interactions (popover, character
-        # picker), so we double-check the state at the moment of submission.
-        _set_audio(page, audio_on)
-
-        _sw = _find_audio_switch(page)
-        sw_state = _sw.get_attribute("aria-checked") if _sw else "n/a"
-        print(
-            f"  → submit (model={model}, dur={duration_s}s, prompt={len(prompt)} chars, "
-            f"variants={n}, audio={'on' if audio_on else 'off'} (toggle={sw_state})"
-            f"{f', char={character}' if character else ''})",
-            file=sys.stderr,
-        )
-
-        # Capture the form-submission POST response — it returns the
-        # `resourceIds` for the variants this submission produced. We then
-        # poll `/api/resources/{id}` per variant to get the real CDN URL.
-        # This replaces the prior gallery-DOM scraping which could (and did)
-        # mis-attribute older gallery items to the current submission when
-        # the gallery hadn't loaded at baseline-snapshot time.
-        with page.expect_response(
-            lambda r: "/suite/api/forms/creations/" in r.url and r.request.method == "POST",
-            timeout=30_000,
-        ) as resp_info:
-            _click_generate(page)
-        resp = resp_info.value
-        if not resp.ok:
-            raise RuntimeError(f"submit POST returned HTTP {resp.status}: {resp.text()[:200]}")
-        import json
-        submit_data = json.loads(resp.text())
-        resource_ids = submit_data.get("resourceIds") or []
-        history_id = submit_data.get("historyId")
-        if not resource_ids:
-            raise RuntimeError(f"submit response missing resourceIds: {submit_data}")
-        print(
-            f"  → submitted: historyId={history_id} resourceIds={resource_ids}",
-            file=sys.stderr,
-        )
-        print(f"  → polling /api/resources for {n} variant(s) (up to {GENERATION_TIMEOUT_S * n}s)…", file=sys.stderr)
-
-        resolved = _poll_resources(
-            page, resource_ids, GENERATION_TIMEOUT_S * max(1, n),
-            history_id=history_id,
-        )
-
-        saved: list[Path] = []
-        for (rid, info), dest in zip(resolved, output_paths):
-            if info.get("status") != "ok":
-                print(f"  ✗ {rid}: {info.get('status')} ({info.get('error')})", file=sys.stderr)
-                continue
-            url = info["url"]
-            print(f"  → {rid} URL: {url}", file=sys.stderr)
-            _download_via_context(page, url, dest)
-            if not audio_on:
-                _strip_audio_in_place(dest)
-            meta = info.get("metadata") or {}
-            dims = f"{meta.get('width')}x{meta.get('height')}" if meta else "?"
-            dur = meta.get("duration")
-            print(
-                f"  ✓ saved {dest}{' (muted)' if not audio_on else ''}  "
-                f"({dims}, {dur}s)",
-                file=sys.stderr,
+            print(f"  → character stills: {character}", file=sys.stderr)
+            references.extend(
+                characters.visual_references(character, purpose="create-video"),
             )
-            saved.append(dest)
-        if len(saved) < n:
-            raise RuntimeError(f"only {len(saved)}/{n} variants saved")
-        return saved
-
-
-# ---------------------------------------------------------------------------
-# Smoke-test CLI
-# ---------------------------------------------------------------------------
-def _scrape_settings(model: str = "Seedance 2.0") -> int:
-    """Open each settings card and dump its popover content."""
-    import json
-    target_url = _model_url(model)
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    cards_to_open = ["Setting", "Mode"]  # the ones with ArrowRight
-    findings: dict = {}
-
-    with sync_playwright() as p, _browser(p, headless=False) as ctx:
-        page = ctx.new_page()
-        _ensure_logged_in(page, target_url)
-        time.sleep(2)
-
-        for card_label in cards_to_open:
-            print(f"\n=== opening {card_label!r} ===")
-            try:
-                # Click the card by matching its visible label
-                card = page.locator(
-                    f"div.group:has-text('{card_label}')"
-                ).first
-                card.click()
-                time.sleep(1.5)
-                # The popover content is somewhere outside the card; grab body text
-                body_html = page.locator("body").inner_html()
-                (out_dir / f"settings_{card_label.lower()}.html").write_text(body_html)
-                # Also dump role-based items just-appeared
-                roles = {}
-                for r in ("dialog", "menu", "listbox", "option", "tab", "radio"):
-                    items = page.get_by_role(r).all()
-                    roles[r] = [(it.text_content() or "").strip()[:80] for it in items[:60]]
-                findings[card_label] = roles
-                print(json.dumps(roles, indent=2)[:2000])
-                # Close: press Escape
-                page.keyboard.press("Escape")
-                time.sleep(0.8)
-            except Exception as e:
-                print(f"failed: {e}")
-                findings[card_label] = {"error": str(e)}
-
-        (out_dir / "settings_dump.json").write_text(json.dumps(findings, indent=2))
-        print(f"\n✓ saved findings to {out_dir / 'settings_dump.json'}")
-    return 0
-
-
-def _scrape(model: str = "Seedance 2.0", out_path: Path | None = None) -> int:
-    """Headed: log in once, then dump a structured summary of the authed DOM.
-
-    The output is JSON written to `out_path` (default: .playwright/scrape.json)
-    plus an HTML snapshot at .playwright/scrape.html. We capture textareas,
-    buttons, comboboxes, role=option items, anything with a stable test-id,
-    and a few targeted heuristic clusters near the prompt area.
-    """
-    import json
-
-    target_url = _model_url(model)
-    out_dir = REPO / ".playwright"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    json_path = Path(out_path) if out_path else out_dir / "scrape.json"
-    html_path = out_dir / "scrape.html"
-
-    with sync_playwright() as p, _browser(p, headless=False) as ctx:
-        page = ctx.new_page()
-        _ensure_logged_in(page, target_url)
-
-        # Give the post-login page a couple seconds to fully render.
-        time.sleep(3)
-
-        def loc_summary(locator) -> list[dict]:
-            out: list[dict] = []
-            try:
-                els = locator.all()
-            except Exception:
-                return out
-            for el in els[:80]:
-                try:
-                    out.append({
-                        "text": (el.text_content() or "").strip()[:140],
-                        "aria_label": el.get_attribute("aria-label") or "",
-                        "role": el.get_attribute("role") or "",
-                        "type": el.get_attribute("type") or "",
-                        "name": el.get_attribute("name") or "",
-                        "id": el.get_attribute("id") or "",
-                        "data_testid": el.get_attribute("data-testid") or "",
-                        "placeholder": el.get_attribute("placeholder") or "",
-                        "visible": el.is_visible(),
-                    })
-                except Exception:
-                    pass
-            return out
-
-        summary: dict = {
-            "url": page.url,
-            "title": page.title(),
-            "textareas": loc_summary(page.locator("textarea")),
-            "inputs": loc_summary(page.locator("input")),
-            "buttons": loc_summary(page.locator("button")),
-            "comboboxes": loc_summary(page.get_by_role("combobox")),
-            "options": loc_summary(page.get_by_role("option")),
-            "test_id_elements": loc_summary(page.locator("[data-testid]")),
+        if ref_path is not None:
+            print(f"  → reference image: {ref_path.name}", file=sys.stderr)
+            references.append(api.upload_reference(ref_path, "image", purpose="create-video"))
+        params = {
+            "prompt": prompt,
+            "videoCount": len(output_paths),
+            "duration": duration,
+            "aspectRatio": ASPECT,
+            "resolution": resolution,
+            "generateAudio": bool(audio_on),
         }
+        if references:
+            params["visualReferences"] = references
+        return params
 
-        # Dump full HTML snapshot for any deeper digging.
-        try:
-            html_path.write_text(page.content())
-        except Exception:
-            pass
+    saved = api.generate(
+        media="video",
+        model_display=model,
+        mode=mode,
+        params=build_params,
+        output_paths=output_paths,
+        workspace=workspace,
+        keep_source_ext=False,
+        total_timeout_s=GENERATION_TIMEOUT_S,
+    )
 
-        json_path.write_text(json.dumps(summary, indent=2))
-        print(f"\n✓ scrape complete")
-        print(f"  json:    {json_path}")
-        print(f"  html:    {html_path}")
-        print(f"  buttons: {len(summary['buttons'])}")
-        print(f"  inputs:  {len(summary['inputs'])}  textareas: {len(summary['textareas'])}")
-        print(f"  combos:  {len(summary['comboboxes'])}  options: {len(summary['options'])}")
-        print(f"  testids: {len(summary['test_id_elements'])}")
-    return 0
+    if not audio_on:
+        for path in saved:
+            _strip_audio_in_place(path)
+    return saved
 
 
-def _probe(model: str = "Seedance 2.0") -> int:
-    """Open OpenArt's per-model page, ensure login, then pause for inspection."""
-    target_url = _model_url(model)
-    with sync_playwright() as p, _browser(p, headless=False) as ctx:
-        page = ctx.new_page()
-        _ensure_logged_in(page, target_url)
-        print(f"\n— probe mode — at {target_url}; opening Playwright Inspector.")
-        print("  Use it to verify the selectors in `SELECTORS` at the top of this file.")
-        print("  Close the Inspector window to exit.\n")
-        page.pause()
-    return 0
+def _clamp_duration(model: str, mode: str, seconds: int) -> int:
+    """Hold `seconds` inside the model's advertised range.
+
+    The old UI accepted a 3s reaction clip; the API floor is 4s on every video
+    model it exposes. Clamping (and saying so) beats a rejected submission.
+    """
+    schema = api.form_schema(model, mode).get("properties", {})
+    spec = schema.get("duration")
+    if not isinstance(spec, dict):
+        return seconds
+    low, high = spec.get("minimum"), spec.get("maximum")
+    clamped = seconds
+    if isinstance(low, (int, float)):
+        clamped = max(clamped, int(low))
+    if isinstance(high, (int, float)):
+        clamped = min(clamped, int(high))
+    if clamped != seconds:
+        print(f"  ! duration {seconds}s is outside {model}'s {low}-{high}s range; "
+              f"using {clamped}s", file=sys.stderr)
+    return clamped
+
+
+def download_resource(
+    resource_id: str,
+    output_path: Path,
+    headless: bool = True,
+    audio_on: bool = False,
+) -> Path:
+    """Download an already-generated OpenArt asset by id. Spends no credits.
+
+    Accepts either a resource id or the historyId of the generation that made
+    it, and resolves it against the workspace's creation history.
+
+    Args:
+        resource_id: OpenArt resource id or historyId.
+        output_path: destination file.
+        headless: accepted and ignored — there is no browser.
+        audio_on: keep the audio track; strip it after download when False.
+    """
+    url = _resolve_resource_url(resource_id)
+    if not url:
+        raise OpenArtGenerationError(
+            f"resource {resource_id!r} was not found in the last "
+            f"{RESOURCE_LOOKUP_PAGES} pages of this workspace's creation history",
+        )
+    saved = api.download(url, Path(output_path))
+    if not audio_on:
+        _strip_audio_in_place(saved)
+    return saved
+
+
+def _resolve_resource_url(resource_id: str) -> Optional[str]:
+    cursor: Optional[str] = None
+    for _ in range(RESOURCE_LOOKUP_PAGES):
+        args: dict = {"limit": 50}
+        if cursor:
+            args["cursor"] = cursor
+        page = api.call_tool("openart_creation_list", args)
+        for item in page.get("items", []):
+            if resource_id in (item.get("id"), item.get("historyId")):
+                return item.get("url")
+        if not page.get("hasMore"):
+            return None
+        cursor = page.get("nextCursor")
+    return None
+
+
+def _strip_audio_in_place(path: Path) -> None:
+    """Remux the file to drop any audio track. Pure stream copy — fast.
+
+    Some models ignore `generateAudio: false` and return a clip with audio
+    anyway (Wan 2.7 in particular), so strip after download to make the
+    on-disk file match what was asked for.
+    """
+    tmp = path.with_name(f".muted_{path.name}")
+    subprocess.run([
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", str(path),
+        "-an",            # drop audio
+        "-c:v", "copy",   # no re-encode
+        "-movflags", "+faststart",
+        str(tmp),
+    ], check=True)
+    tmp.replace(path)
 
 
 def _main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--probe", action="store_true",
-                    help="open OpenArt + Playwright Inspector for selector tuning")
-    ap.add_argument("--scrape", action="store_true",
-                    help="open OpenArt headed; on login, dump JSON+HTML of the authed DOM")
-    ap.add_argument("--scrape-settings", action="store_true",
-                    help="open settings cards (Setting, Mode) and dump their popover content")
+    ap = argparse.ArgumentParser(description="Generate video clips on OpenArt via MCP.")
     ap.add_argument("--prompt")
-    ap.add_argument("--model", default="Seedance 2.0",
-                    help="e.g. 'Seedance 2.0', 'HappyHorse'")
-    ap.add_argument("--duration", type=int)
-    ap.add_argument("--out", type=Path)
-    ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--model", default="Seedance 2.0")
+    ap.add_argument("--duration", type=int, default=8)
+    ap.add_argument("--out", nargs="+", type=Path, help="one output path per variant")
+    ap.add_argument("--resolution", default="480p")
+    ap.add_argument("--audio", action="store_true", help="keep the generated audio track")
+    ap.add_argument("--character", default=None)
+    ap.add_argument("--reference", type=Path, default=None)
+    ap.add_argument("--workspace", default=OPENART_WORKSPACE)
+    ap.add_argument("--download", metavar="RESOURCE_ID",
+                    help="download an existing resource instead of generating")
     args = ap.parse_args()
 
-    if args.scrape:
-        return _scrape(args.model)
-    if args.scrape_settings:
-        return _scrape_settings(args.model)
-    if args.probe:
-        return _probe(args.model)
-    missing = [n for n in ("prompt", "duration", "out") if getattr(args, n) is None]
-    if missing:
-        ap.error(f"missing required args: {missing}")
-    out = generate_clip(args.prompt, args.model, args.duration, args.out, headless=args.headless)
-    print(f"saved: {out}")
+    if args.download:
+        if not args.out:
+            ap.error("--download needs a single --out path")
+        print(download_resource(args.download, args.out[0], audio_on=args.audio))
+        return 0
+
+    if not args.prompt or not args.out:
+        ap.error("--prompt and --out are required")
+    for path in generate_clip(
+        prompt=args.prompt,
+        model=args.model,
+        duration_s=args.duration,
+        output_paths=list(args.out),
+        audio_on=args.audio,
+        character=args.character,
+        resolution=args.resolution,
+        reference_image=args.reference,
+        workspace=args.workspace or None,
+    ):
+        print(path)
     return 0
 
 

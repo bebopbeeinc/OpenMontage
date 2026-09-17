@@ -21,7 +21,7 @@ choose between two production modes declared in `pipeline_defs/trivia-short.yaml
 |---|---|---|
 | Artifact | `projects/<slug>/artifacts/brief.json` | Mode, slug, row |
 | Artifact | `projects/<slug>/artifacts/script.json` | Per-segment prompts + VO copy |
-| Script | `scripts/trivia/openart_driver.py` | Playwright driver |
+| Script | `scripts/trivia/openart_driver.py` | MCP driver |
 | Script | `scripts/trivia_images/openart_image_driver.py` | Image variant (reaction) |
 | Sheet | Reaction / Body / Closer Filename columns | Local filenames. Reaction is a VLOOKUP from the picker; body/closer are human-pasted |
 | Schema | `schemas/artifacts/asset_manifest.schema.json` | Artifact validation |

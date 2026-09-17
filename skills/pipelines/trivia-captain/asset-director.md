@@ -11,7 +11,7 @@ in the manifest:
   using the saved `Captain Archibald` character, drops the mp4 into
   `scripts/trivia_captain/library/clips/<slug>.mp4`, and tells you go.
 - `automated_openart` — `scripts/trivia_captain/openart_generate.py`
-  drives the OpenArt UI via Playwright and downloads the variants
+  calls the OpenArt MCP API and downloads the variants
   directly.
 
 ## Prerequisites
@@ -20,8 +20,8 @@ in the manifest:
 |---|---|---|
 | Artifact | `projects/trivia-captain/<slug>/artifacts/brief.json` | Slug, Day |
 | Artifact | `projects/trivia-captain/<slug>/artifacts/script.json` | OpenArt prompt, character, duration, reference image |
-| Script | `scripts/trivia_captain/openart_generate.py` | Playwright driver wrapper |
-| Driver | `scripts/common/openart_driver.py` | Shared OpenArt Playwright driver |
+| Script | `scripts/trivia_captain/openart_generate.py` | MCP driver wrapper |
+| Driver | `scripts/common/openart_driver.py` | Shared OpenArt MCP driver |
 | Library | `scripts/trivia_captain/library/clips/` | Gitignored — final mp4s land here |
 | Schema | `schemas/artifacts/asset_manifest.schema.json` | Artifact validation |
 

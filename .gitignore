@@ -101,3 +101,8 @@ remotion-composer/public/demo-props/test-*
 remotion-composer/public/demo-props/talking-head-*
 remotion-composer/public/demo-props/caption-burn-*
 .playwright/
+
+# OpenArt MCP OAuth tokens (per-machine; re-create with openart_mcp.py --login)
+.openart/
+# Per-workspace upload ids for the character stills — a local cache, not source.
+character_library/.uploads.json
