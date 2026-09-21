@@ -24,6 +24,7 @@ import sys
 import threading
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,7 +91,26 @@ def _validate_tab(tab: str | None) -> str:
 _RESIZED_SUBFOLDER = "Resized"
 _country_folder_ids: dict[str, str] = {}     # code -> folder id
 _resized_folder_ids: dict[str, str] = {}     # parent folder id -> Resized folder id
+# Guards the _folder_locks registry below (not the Drive calls themselves).
 _folder_lock = threading.Lock()
+
+# One lock per country code / parent folder id, instead of a single global one.
+# The lock exists to stop two threads racing "find folder -> create folder" into
+# a duplicate; that guarantee is per-folder, so a global lock only served to
+# re-serialize the concurrent warm-up in _warm_country_listings (23 cold
+# folder resolutions at ~0.5s each = ~11s of avoidable wall clock on the first
+# /api/rows after a restart).
+_folder_locks: dict[str, threading.Lock] = {}
+
+
+def _folder_key_lock(key: str) -> threading.Lock:
+    with _folder_lock:
+        lk = _folder_locks.get(key)
+        if lk is None:
+            lk = _folder_locks[key] = threading.Lock()
+        return lk
+
+
 # Listing-cache lifetime for state resolution. Safe to keep long because every
 # mutation (upload_or_replace / trash) invalidates the folder's listing.
 _STATE_LIST_TTL_S = 120.0
@@ -130,7 +150,7 @@ def country_folder_id(code: str) -> str:
     cached = _country_folder_ids.get(code)
     if cached:
         return cached
-    with _folder_lock:
+    with _folder_key_lock(f"country:{code}"):
         cached = _country_folder_ids.get(code)
         if cached:
             return cached
@@ -163,7 +183,7 @@ def resized_folder_id(parent_id: str) -> str:
     cached = _resized_folder_ids.get(parent_id)
     if cached:
         return cached
-    with _folder_lock:
+    with _folder_key_lock(f"resized:{parent_id}"):
         cached = _resized_folder_ids.get(parent_id)
         if cached:
             return cached
@@ -738,6 +758,54 @@ def _drive_state_for(code: str, number: str, kind: str, approved: bool) -> dict:
     return out
 
 
+# Long-lived pool for the per-country Drive warm-up. Deliberately not a
+# per-call ThreadPoolExecutor: the Drive client keeps its Resource (and its
+# OAuth token) in threading.local(), so fresh threads on every /api/rows would
+# re-authenticate every time. Reused threads keep a warm Resource.
+_drive_pool_lock = threading.Lock()
+_drive_pool_ref: list = []
+
+
+def _drive_pool() -> ThreadPoolExecutor:
+    with _drive_pool_lock:
+        if not _drive_pool_ref:
+            _drive_pool_ref.append(
+                ThreadPoolExecutor(max_workers=8, thread_name_prefix="rows-drive")
+            )
+        return _drive_pool_ref[0]
+
+
+def _warm_country_listings(codes: set[str]) -> None:
+    """Resolve + list every country folder these rows reference, in parallel.
+
+    find_original() reads through the per-folder listing cache, so the per-row
+    lookups in read_rows are dict hits — but only once the listing exists.
+    Cold, each country costs a folders.list (find-or-create) plus a files.list,
+    and doing that one country at a time is what made /api/rows an ~18s call on
+    a multi-country tab: "Sorted Questions" spans 23 countries, and at 23 x
+    ~0.8s the endpoint sat right at oauth2-proxy's 30s upstream timeout, so any
+    two overlapping loads produced a 502 error page in place of the row table.
+
+    The Drive client gives each thread its own Resource specifically so read
+    paths can run concurrently (see tools/publishers/google_drive.py), so warm
+    them that way. Failures are swallowed: the per-row find_original() call
+    will retry and, if Drive is genuinely unhappy, degrade that row to 'none'
+    exactly as it did before.
+    """
+    codes = {c for c in codes if c}
+    if len(codes) < 2:
+        return   # single country: the per-row path warms it on the first call
+    client = get_client()
+
+    def warm(code: str) -> None:
+        try:
+            client.list_folder(country_folder_id(code), ttl_s=_STATE_LIST_TTL_S)
+        except Exception:  # noqa: BLE001
+            pass
+
+    list(_drive_pool().map(warm, sorted(codes)))
+
+
 def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int = 20000, refresh_schema: bool = False) -> list[dict]:
     schema = _get_schema(tab, refresh=refresh_schema)
     # Read up to the rightmost column the schema cares about, with a
@@ -763,15 +831,17 @@ def read_rows(tab: str = SHEET_TAB, min_row: int = DATA_START_ROW, max_row: int 
         tab_code = _tab_country_code(tab)
     except Exception:
         tab_code = ""
-    # Warm the Drive listing once per /api/rows call — find_original goes
+    # Warm the Drive listings once per /api/rows call — find_original goes
     # through the per-folder cache so all rows of a country = a couple Drive
-    # API calls, not two per row.
+    # API calls, not two per row. Pre-resolve every country the rows mention
+    # concurrently; without this the folders were listed one at a time as the
+    # loop first reached each country.
+    extracted = [(min_row + i, schema.extract(v, ROW_FIELDS)) for i, v in enumerate(raw)]
+    extracted = [(r, f) for r, f in extracted if f["number"]]
+    _warm_country_listings({(f["country"] or tab_code) for _r, f in extracted})
+
     rows: list[dict] = []
-    for i, v in enumerate(raw):
-        sheet_row = min_row + i
-        f = schema.extract(v, ROW_FIELDS)
-        if not f["number"]:
-            continue
+    for sheet_row, f in extracted:
         code = f["country"] or tab_code
         slug = f"q{f['number']}"
         q_approved = f["approved_q"] == "✓"
@@ -1298,10 +1368,33 @@ async def api_tabs(refresh: int = 0):
     return {"tabs": tabs, "default": default, "sheet_id": SHEET_ID}
 
 
+# One gate per requested tab, so concurrent loads of the same tab queue instead
+# of each paying its own Sheets + Drive round-trips. The UI reloads rows on
+# every job completion, and with two browsers open on a 70-job batch that
+# regularly meant 4-5 identical reads in flight at once. The waiter re-checks
+# the 15s payload cache inside _rows_sync after it acquires, so in practice it
+# returns the first read's result instead of repeating the round-trips.
+_rows_gates: dict[str, asyncio.Lock] = {}
+
+
+def _rows_gate(tab: str | None) -> asyncio.Lock:
+    key = tab or ""
+    gate = _rows_gates.get(key)
+    if gate is None:
+        # `tab` is a raw query param, so keep the map bounded. Clearing while a
+        # lock is held is safe: the holder still owns its own lock object, and a
+        # later caller just gets a fresh one (worst case, one ungated read).
+        if len(_rows_gates) >= 64:
+            _rows_gates.clear()
+        gate = _rows_gates[key] = asyncio.Lock()
+    return gate
+
+
 @app.get("/api/rows")
 async def api_rows(tab: str | None = None, refresh: int = 0):
     try:
-        validated, rows = await asyncio.to_thread(_rows_sync, tab, bool(refresh))
+        async with _rows_gate(tab):
+            validated, rows = await asyncio.to_thread(_rows_sync, tab, bool(refresh))
     except HTTPException:
         raise
     except Exception as e:

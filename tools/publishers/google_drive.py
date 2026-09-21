@@ -233,7 +233,10 @@ class DriveClient:
             resp = self._execute(drive.files().list(
                 q=f"'{folder_id}' in parents and trashed=false",
                 fields="nextPageToken,files(id,name,mimeType,modifiedTime,parents,thumbnailLink)",
-                pageSize=200,
+                # Drive's max. A country folder in trivia-images already holds
+                # ~600 files, which at the old pageSize=200 meant three
+                # sequential round-trips per listing.
+                pageSize=1000,
                 supportsAllDrives=True,
                 includeItemsFromAllDrives=True,
                 pageToken=page_token,

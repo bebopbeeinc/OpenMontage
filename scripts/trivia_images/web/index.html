@@ -482,7 +482,20 @@ async function api(path, opts={}) {
     location.href = '/oauth2/sign_in?rd=' + rd;
     throw new Error('session expired — redirecting to sign in');
   }
-  if (!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}: ${await r.text().catch(()=>'')}`);
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    // A 502/504 is almost always oauth2-proxy giving up on the upstream
+    // (upstream_timeout) and serving its own HTML error page. Splicing that
+    // whole page into the table buried the one line that matters, so
+    // summarize it instead of echoing the markup.
+    const isHtml = /^\s*(<!DOCTYPE|<html)/i.test(body);
+    const detail = isHtml
+      ? ((r.status === 502 || r.status === 504)
+          ? 'server did not respond in time (proxy timeout) — retry'
+          : 'proxy error page')
+      : body.slice(0, 300);
+    throw new Error(`HTTP ${r.status} ${r.statusText}: ${detail}`);
+  }
   return r.json();
 }
 
@@ -1118,7 +1131,14 @@ async function attachToJob(id) {
       else if (j.status === 'cancelled') toast(`job ${id} cancelled`, 'ok');
       else if (j.status === 'error') toast(`job ${id} ✗ ${j.error || ''}`, 'err');
     } catch (e) { /* job might be gone */ }
-    await loadRows({force: true});   // pick up new thumb — bypass row/listing caches (TT-438)
+    // Plain reload, NOT refresh=1: the server drops this tab's rows cache on
+    // job success and upload_or_replace invalidates the one country folder
+    // that changed, so the new thumb still shows (TT-438). refresh=1 would
+    // also invalidate every OTHER country folder listing — 23 of them on
+    // "Sorted Questions" — turning each job completion into ~18s of
+    // sequential Drive listings and regular 502s from the proxy's upstream
+    // timeout. The Refresh button still does the full re-probe.
+    await loadRows();
     await refreshActive();
     // If something else is still running/queued, auto-attach to it so the
     // user sees live progress across the whole batch without clicking.
@@ -1150,7 +1170,14 @@ async function pollUntilDone(id, logEl) {
       else if (j.status === 'success') toast(`job ${id} ✓`, 'ok');
       else if (j.status === 'cancelled') toast(`job ${id} cancelled`, 'ok');
       else                        toast(`job ${id} ✗ ${j.error || ''}`, 'err');
-      await loadRows({force: true});   // bypass row/listing caches so the new thumb shows (TT-438)
+      // Plain reload, NOT refresh=1: the server drops this tab's rows cache on
+      // job success and upload_or_replace invalidates the one country folder
+      // that changed, so the new thumb still shows (TT-438). refresh=1 would
+      // also invalidate every OTHER country folder listing — 23 of them on
+      // "Sorted Questions" — turning each job completion into ~18s of
+      // sequential Drive listings and regular 502s from the proxy's upstream
+      // timeout. The Refresh button still does the full re-probe.
+      await loadRows();
       await refreshActive();
       const next = await pickNextRunningJob();
       if (next) attachToJob(next);
