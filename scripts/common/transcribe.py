@@ -71,6 +71,9 @@ WHISPER_MERGE_FIXES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("fen", "ick"), "Fennec"),
     (("fen", "eck"), "Fennec"),
     (("fen", "ec"), "Fennec"),
+    # Whisper splits "apart" at the glottal-stop 't' into "a" + "par"
+    # ("...so they don't drift a par" instead of "drift apart").
+    (("a", "par"), "apart"),
 )
 
 
