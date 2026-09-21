@@ -67,7 +67,7 @@ tool = registry._tools["openart_image"]
 
 result = tool.execute({
     "prompt": row_col_r,
-    "model": "Nano Banana Pro",
+    "model": "Nano Banana 2",
     "aspect": "4:3",
     "resolution": "2K",
     "output_path": f"scripts/trivia_images/library/q{N}_answer.jpg",
@@ -106,10 +106,10 @@ stage 1, append the answer image entry):
       "scene_id": "q{N}",
       "subtype": "question",
       "prompt": "<question prompt text>",
-      "model": "Nano Banana Pro",
+      "model": "Nano Banana 2",
       "provider": "openart",
       "format": "png",
-      "generation_summary": "OpenArt /suite/create-image/nano-banana-pro, 4:3 2K original + 512×384 lossless-PNG resized copy"
+      "generation_summary": "OpenArt /suite/create-image/nano-banana-2, 4:3 2K original + 512×384 lossless-PNG resized copy"
     },
     {
       "id": "q{N}_answer",
@@ -119,7 +119,7 @@ stage 1, append the answer image entry):
       "scene_id": "q{N}_answer",
       "subtype": "answer",
       "prompt": "<answer prompt text>",
-      "model": "Nano Banana Pro",
+      "model": "Nano Banana 2",
       "provider": "openart",
       "format": "png",
       "generation_summary": "OpenArt same-scene remix, ref=scripts/trivia_images/library/q{N}.png (full-res), 4:3 2K original + 512×384 lossless-PNG resized copy"
@@ -155,8 +155,9 @@ Mirrors `pipeline_defs/trivia-images.yaml` -> `stages.answer_image.review_focus`
 
 ## Known Constraints
 
-- **Driver is headed on first run** (manual OpenArt login). Subsequent runs
-  reuse `.playwright/openart-state.json` and can be `headless=True`.
+- **OpenArt auth is one OAuth consent per machine**
+  (`python scripts/common/openart_mcp.py --login`). After that the refresh
+  token at `.openart/mcp-token.json` keeps every run headless.
 - **Reference uploads add ~3-10s** to the per-image generation time on top of
   the model's own 30-90s generation window. Total wall-clock budget per
   answer image: budget ~90s.
@@ -173,5 +174,5 @@ Mirrors `pipeline_defs/trivia-images.yaml` -> `stages.answer_image.review_focus`
   to stage 1.
 - Author the answer-image prompt. The prompt comes from the sheet. A future
   `prompts` stage may automate this.
-- Switch models. Nano Banana Pro is the standard for environment-preserving
+- Switch models. Nano Banana 2 is the standard for environment-preserving
   remixes on OpenArt.

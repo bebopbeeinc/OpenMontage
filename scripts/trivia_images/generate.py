@@ -2,8 +2,8 @@
 """Generate question images from the Trivia Spreadsheet.
 
 Reads each row from a 1-100-format question tab of the trivia-questions sheet
-(default `1-100`), uses the question-image prompt to drive OpenArt's Nano Banana
-Pro image generator, and saves the resulting image to a local library.
+(default `1-100`), uses the question-image prompt to drive OpenArt's Nano Banana 2
+image generator, and saves the resulting image to a local library.
 
 Columns are resolved by HEADER LABEL at runtime via sheet_schema.py
 (FIELD_TO_HEADER holds the 1-100 labels; SheetSchema does the lookup), which
@@ -92,7 +92,7 @@ def _write_resized(original: Path) -> Path:
     dest.write_bytes(optimize_image_bytes(original.read_bytes()))
     return dest
 
-MODEL = "Nano Banana Pro"
+MODEL = "Nano Banana 2"
 ASPECT = "4:3"          # matches the "4:3 aspect ratio" trailer in every prompt
 RESOLUTION = "2K"       # 1K / 2K / 4K available; 2K is the quality/cost sweet spot
 

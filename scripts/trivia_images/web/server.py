@@ -7,9 +7,9 @@ exposes the two stages of the trivia-images pipeline:
   - Generate Question:  question-image prompt -> openart_image -> q{N}.<ext>
   - Generate Answer:    answer-image prompt + q{N}.<ext> as reference -> openart_image -> q{N}_answer.<ext>
 
-Each call runs the OpenArt Playwright driver in a worker thread (the tool
-itself is sync), streams its stdout to a per-job log subscriber, and returns
-a job summary the UI can poll or live-stream via SSE.
+Each call runs the OpenArt MCP driver in a worker thread (the tool itself is
+sync), streams its stdout to a per-job log subscriber, and returns a job
+summary the UI can poll or live-stream via SSE.
 
 Mounted by web/server.py — do not run this app standalone. The index.html's
 <base href="/trivia-images/"> would resolve incorrectly without the mount.
@@ -359,7 +359,7 @@ ROW_FIELDS = [
 ]
 
 # Defaults for OpenArt — match scripts/trivia_images/generate.py.
-MODEL = "Nano Banana Pro"
+MODEL = "Nano Banana 2"
 ASPECT = "4:3"
 RESOLUTION = "2K"
 
@@ -413,11 +413,10 @@ jobs: dict[str, Job] = {}
 recent_job_ids: deque[str] = deque(maxlen=200)
 log_subscribers: dict[str, list[asyncio.Queue[str]]] = {}
 
-# Serializes the worker — the OpenArt Playwright driver opens a fresh
-# Chromium per call and uses a single persisted login state at
-# .playwright/openart-state.json. Running multiple workers concurrently would
-# race on that file (and saturate OpenArt's rate limits). One Chromium at a
-# time; jobs queue naturally behind this lock.
+# Serializes the worker. The Chromium-per-call constraint is gone now that the
+# driver talks to OpenArt's MCP API, but one job at a time is still what we
+# want: it keeps us inside OpenArt's rate limits and keeps the per-job log
+# stream readable. Jobs queue naturally behind this lock.
 worker_lock = asyncio.Lock()
 
 
@@ -996,10 +995,10 @@ def _write_prompts(tab: str, row: int, prompt_q: str | None, prompt_r: str | Non
 # Worker
 # ---------------------------------------------------------------------------
 # Drive is the source of truth — we never persist generated images locally.
-# The OpenArt driver still needs to write to disk (it downloads via the
-# browser's authenticated request context), and Playwright's set_input_files
-# for the reference upload needs a real path too. We give it a tempfile, push
-# the result to Drive, then unlink. Tempfile dir defaults to /tmp on macOS;
+# The OpenArt driver still needs to write to disk (it streams the finished
+# bytes from the CDN), and the reference upload reads from a real path too.
+# We give it a tempfile, push the result to Drive, then unlink. Tempfile dir
+# defaults to /tmp on macOS;
 # the OS reaps it eventually even if we leak one on a hard crash.
 
 def _run_generation_sync(job: Job, prompt: str,
@@ -1116,7 +1115,7 @@ async def _worker(job: Job) -> None:
         # "cancelled" while they're parked here, and each one drains without
         # doing any work when its turn comes. There's no way to interrupt the
         # job that already holds the lock — it's blocked in a worker thread
-        # driving Playwright — so cancel only ever applies to the queue.
+        # waiting on OpenArt — so cancel only ever applies to the queue.
         if job.status == "cancelled":
             return
         await _run_job(job)
@@ -1125,9 +1124,9 @@ async def _worker(job: Job) -> None:
 def _stage_reference_from_drive(code: str, slug: str) -> Path:
     """Download the question image for `slug` from the country folder to a tempfile.
 
-    The OpenArt driver needs a real local path for Playwright's
-    set_input_files. We pull bytes from Drive and write them to a tempfile that
-    the caller is responsible for deleting.
+    The OpenArt driver uploads the reference from a real local path. We pull
+    bytes from Drive and write them to a tempfile that the caller is
+    responsible for deleting.
 
     Raises if the question image isn't in the country folder.
     """
@@ -1416,8 +1415,8 @@ async def api_cancel_all():
 
     Jobs are asyncio tasks parked on `worker_lock`; flipping them to
     "cancelled" makes `_worker` skip them when the lock frees up. The job
-    holding the lock is blocked in a thread driving Playwright/OpenArt and
-    can't be interrupted — the caller gets it back in `still_running` so the
+    holding the lock is blocked in a thread waiting on OpenArt and can't be
+    interrupted — the caller gets it back in `still_running` so the
     UI can say so instead of pretending the machine went quiet.
     """
     cancelled: list[dict] = []

@@ -55,8 +55,9 @@ the target row. The CLI/server resolve the read range from the live header rows
 
 ### 2. Call openart_image
 
-Use the registered tool, not the driver directly. The tool wraps the Playwright
-driver and surfaces it through `image_selector` for future routing flexibility.
+Use the registered tool, not the driver directly. The tool wraps the OpenArt
+MCP driver and surfaces it through `image_selector` for future routing
+flexibility.
 
 ```python
 from tools.tool_registry import registry
@@ -65,7 +66,7 @@ tool = registry._tools["openart_image"]
 
 result = tool.execute({
     "prompt": row_col_q,
-    "model": "Nano Banana Pro",       # the current trivia-images default
+    "model": "Nano Banana 2",         # the current trivia-images default
     "aspect": "4:3",
     "resolution": "2K",
     "output_path": f"scripts/trivia_images/library/q{N}.jpg",
@@ -85,7 +86,7 @@ If `result.success` is False, escalate per "Escalate Blockers Explicitly":
 - Options: retry, switch model, fall back to a different `image_generation`
   provider (`image_selector` can route).
 
-Do not silently swap to a different provider — Nano Banana Pro is the trivia-
+Do not silently swap to a different provider — Nano Banana 2 is the trivia-
 short visual standard. Provider swaps need user approval.
 
 ### 3. Optimize For The Game (keep both)
@@ -132,11 +133,11 @@ Write `projects/trivia-q-{N}/artifacts/asset_manifest.json`:
       "source_tool": "openart_image",
       "scene_id": "q{N}",
       "prompt": "<question prompt text>",
-      "model": "Nano Banana Pro",
+      "model": "Nano Banana 2",
       "provider": "openart",
       "format": "png",
       "subtype": "question",
-      "generation_summary": "OpenArt /suite/create-image/nano-banana-pro, 4:3 2K original + 512×384 lossless-PNG resized copy"
+      "generation_summary": "OpenArt /suite/create-image/nano-banana-2, 4:3 2K original + 512×384 lossless-PNG resized copy"
     }
   ],
   "total_cost_usd": 0.0,
@@ -169,11 +170,12 @@ Critical findings → fix in-turn. Suggestions → note and proceed.
 
 ## Known Constraints
 
-- The driver is **headed on first run** because OpenArt requires manual login.
-  Subsequent runs reuse the saved storage state at
-  `.playwright/openart-state.json` and can be `headless=True`.
+- OpenArt auth is **one OAuth consent per machine**
+  (`python scripts/common/openart_mcp.py --login`). After that the refresh
+  token at `.openart/mcp-token.json` keeps every run headless. A tool status of
+  `degraded` means that login hasn't happened yet.
 - The driver is **one prompt at a time** — high-volume batches accumulate
-  wall-clock time. ~60-90s per Nano Banana Pro image.
+  wall-clock time. ~60-90s per Nano Banana 2 image.
 - OpenArt billing is subscription-based on the user's account; the tool reports
   `cost_usd=0` per call. This is correct for budgeting but does not mean the
   call is free.
@@ -183,5 +185,5 @@ Critical findings → fix in-turn. Suggestions → note and proceed.
 - Generate the **answer image** — that's `answer_image` stage.
 - Write the prompt itself. The prompt comes from the sheet (Question IMAGE prompt column), authored
   manually today. A future `prompts` stage may automate this.
-- Pick a different model. Nano Banana Pro is the standard. Switching models
+- Pick a different model. Nano Banana 2 is the standard. Switching models
   needs user approval (Decision Communication Contract).
