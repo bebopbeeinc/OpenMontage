@@ -109,3 +109,4 @@ character_library/.uploads.json
 
 # YOLO weights, downloaded on first detection run
 yolov8*.pt
+scripts/chonky/library/
