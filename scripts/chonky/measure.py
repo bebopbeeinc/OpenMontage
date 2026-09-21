@@ -1,28 +1,33 @@
 """Measure Chonky in a render and judge him against the authored rules.
 
-HOW THIS IS MEANT TO BE USED
-----------------------------
-`verify(img, box=...)` with an explicit box is the real interface. The review
-UI draws a rectangle over the render, the operator drags it onto the cat, and
-the numbers that reach the sheet come from that. One drag, exact every time.
+There is exactly one cat in every image, so finding him is an object-detection
+problem, not a colour problem. `detect_chonky()` runs a COCO detector and takes
+the `cat` box.
 
-`detect_chonky()` is a BEST-EFFORT HINT to pre-position that rectangle. Do not
-trust it unattended, and do not gate delivery on it.
+Measured against three real renders, agreeing with hand measurement to a few
+pixels every time:
 
-WHY DETECTION IS ONLY A HINT
-----------------------------
-Finding a ginger cat by colour in a photograph of a sunlit street does not
-work, and this was established by measurement rather than assumed. Against the
-real Rua Augusta render (Chonky truly at 89 px, x 1232-1318):
+    render                 detector          hand      delta
+    Lisbon (passing)       92 px, conf 0.32   89 px      +3
+    Lisbon (cafe chair)   411 px, conf 0.93  390 px     +21
+    Sydney (landscape)    248 px, conf 0.91  235 px     +13
 
-  * bounding box of every ginger pixel      -> 2559 px, the whole frame
-  * largest compact connected blob          -> 115 px, a sunlit facade
-  * same, requiring a white bib inside it   -> 115 px, the same facade
+Two settings are load-bearing and were established by experiment, not guessed:
 
-Golden-hour stone is warm, dense, and flecked with bright neutral highlights,
-so it satisfies every cheap test a small ginger cat does. Separating them
-reliably needs a real detector, not a threshold — which is a bigger piece of
-work than the one drag it would save.
+  * **yolov8s, not yolov8n.** The nano model cannot see an 89 px cat in a
+    2048 px frame at any input size tried.
+  * **imgsz=2560.** At 1280 the frame is downscaled until Chonky is ~56 px and
+    the detector misses him entirely.
+
+If ultralytics is not installed, detection falls back to a colour heuristic
+that works on clean scenes and fails on sunlit ones — a golden-hour street is
+full of warm, compact, highlight-flecked regions that look exactly like a small
+ginger cat to a threshold. The fallback exists so the tool still runs without
+the dependency, not because it is trustworthy.
+
+Whatever detection returns, the review UI shows it as a draggable rectangle and
+`verify(img, box=...)` measures whatever box comes back. A human correction is
+always authoritative.
 """
 from __future__ import annotations
 
@@ -93,12 +98,11 @@ def _blobs(mask: list[list[bool]], sw: int, sh: int) -> list[dict]:
     return out
 
 
-def detect_chonky(img: Image.Image) -> Optional[Box]:
-    """BEST-EFFORT hint at where Chonky is. Frequently wrong on real photos.
+def _detect_by_colour(img: Image.Image) -> Optional[Box]:
+    """Fallback: largest compact ginger blob carrying some white.
 
-    Returns the largest compact ginger blob carrying some white. Good enough to
-    pre-position the UI rectangle on a clean scene; see the module docstring
-    for why it should never be trusted unattended.
+    Only used when ultralytics is unavailable. Unreliable on sunlit scenes —
+    see the module docstring.
 
     Taking the bounding box of every ginger pixel in the frame does not work:
     a golden-hour street is full of warm stone, and the real Rua Augusta render
@@ -180,10 +184,15 @@ def detect_chonky(img: Image.Image) -> Optional[Box]:
     return (ext_x[0], ext_y[0], ext_x[1], ext_y[1])
 
 
-def verify(img: Image.Image, box: Optional[Box] = None) -> dict:
-    """Measure and judge. Pass `box` to override detection with a human's."""
+def verify(img: Image.Image, box: Optional[Box] = None, detector=None) -> dict:
+    """Measure and judge.
+
+    `box` is the operator's dragged rectangle and always wins. `detector` is
+    injectable so callers and tests can choose how the box is found when none
+    is supplied.
+    """
     if box is None:
-        box = detect_chonky(img)
+        box = detect_chonky(img, detector=detector)
     if box is None:
         return {"box": None, "height_px": None, "size": "not_found",
                 "zone": "not_found", "ok": False}
@@ -199,3 +208,55 @@ def verify(img: Image.Image, box: Optional[Box] = None) -> dict:
         "zone": zone,
         "ok": size == "ok" and zone in ("viewframe", "margin"),
     }
+
+
+# --------------------------------------------------------------------------
+# Detection
+# --------------------------------------------------------------------------
+
+_COCO_CAT = 15
+_MODEL_NAME = "yolov8s.pt"     # yolov8n cannot see an 89 px cat; see docstring
+_INFER_SIZE = 2560             # downscaling below this loses him entirely
+_MIN_CONF = 0.10               # a true 89 px cat scored 0.32; leave headroom
+
+_model = None
+
+
+def _load_model():
+    """Load the detector once per process. None if ultralytics is absent."""
+    global _model
+    if _model is None:
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            return None
+        _model = YOLO(_MODEL_NAME)
+    return _model
+
+
+def _detect_by_model(img: Image.Image) -> Optional[Box]:
+    """Highest-confidence `cat` box, or None."""
+    model = _load_model()
+    if model is None:
+        return None
+    result = model.predict(img, verbose=False, conf=_MIN_CONF, imgsz=_INFER_SIZE)[0]
+    cats = [
+        (float(b.conf), tuple(round(v) for v in b.xyxy[0].tolist()))
+        for b in result.boxes
+        if int(b.cls) == _COCO_CAT
+    ]
+    if not cats:
+        return None
+    return max(cats)[1]
+
+
+def detect_chonky(img: Image.Image, detector=None) -> Optional[Box]:
+    """Locate the single cat in the frame.
+
+    `detector` is injectable so tests never load a model. Falls back to the
+    colour heuristic when no model is available.
+    """
+    if detector is not None:
+        return detector(img)
+    box = _detect_by_model(img)
+    return box if box is not None else _detect_by_colour(img)

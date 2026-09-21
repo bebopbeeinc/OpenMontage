@@ -1,7 +1,7 @@
 from PIL import Image
 
 from scripts.chonky.geometry import IMG_W, IMG_H
-from scripts.chonky.measure import detect_chonky, verify
+from scripts.chonky.measure import _detect_by_colour, detect_chonky, verify
 
 
 def _blank():
@@ -18,7 +18,7 @@ def _with_patch(x0, y0, w, h, colour=(210, 120, 45)):
 
 def test_detects_a_ginger_patch():
     img = _with_patch(1232, 1709, 86, 89)
-    box = detect_chonky(img)
+    box = _detect_by_colour(img)
     assert box is not None
     x0, y0, x1, y1 = box
     assert abs(x0 - 1232) <= 2 and abs(y0 - 1709) <= 2
@@ -26,24 +26,24 @@ def test_detects_a_ginger_patch():
 
 
 def test_returns_none_when_there_is_no_cat():
-    assert detect_chonky(_blank()) is None
+    assert _detect_by_colour(_blank()) is None
 
 
 def test_verify_passes_a_good_render():
-    result = verify(_with_patch(1232, 1709, 86, 89))
+    result = verify(_with_patch(1232, 1709, 86, 89), detector=_detect_by_colour)
     assert result["size"] == "ok"
     assert result["zone"] == "viewframe"
     assert result["ok"] is True
 
 
 def test_verify_fails_an_oversized_cat():
-    result = verify(_with_patch(1232, 1500, 250, 310))
+    result = verify(_with_patch(1232, 1500, 250, 310), detector=_detect_by_colour)
     assert result["size"] == "too_big"
     assert result["ok"] is False
 
 
 def test_verify_fails_centrestage():
-    result = verify(_with_patch(900, 1709, 86, 89))
+    result = verify(_with_patch(900, 1709, 86, 89), detector=_detect_by_colour)
     assert result["zone"] == "centrestage"
     assert result["ok"] is False
 
@@ -57,7 +57,7 @@ def test_explicit_box_overrides_detection():
 
 
 def test_verify_handles_no_detection():
-    result = verify(_blank())
+    result = verify(_blank(), detector=_detect_by_colour)
     assert result["box"] is None
     assert result["ok"] is False
 
@@ -82,7 +82,7 @@ def test_finds_the_cat_despite_a_warm_scene():
     # Regression: the real Rua Augusta render measured 2559 px (the whole
     # frame) before detection looked for a compact blob instead of a global bbox.
     img = _with_warm_scene_noise(_with_patch(1232, 1709, 86, 89))
-    box = detect_chonky(img)
+    box = _detect_by_colour(img)
     assert box is not None
     x0, y0, x1, y1 = box
     assert abs((y1 - y0) - 89) <= 4, f"got {y1 - y0} px, expected ~89"
@@ -91,7 +91,7 @@ def test_finds_the_cat_despite_a_warm_scene():
 
 def test_warm_scene_still_verifies_as_a_pass():
     img = _with_warm_scene_noise(_with_patch(1232, 1709, 86, 89))
-    result = verify(img)
+    result = verify(img, detector=_detect_by_colour)
     assert result["size"] == "ok", result
     assert result["zone"] == "viewframe", result
     assert result["ok"] is True
@@ -111,3 +111,35 @@ def test_an_explicit_box_is_always_authoritative():
     assert result["size"] == "ok"
     assert result["zone"] == "viewframe"
     assert result["ok"] is True
+
+
+def test_detector_is_injectable_and_wins():
+    """The model path is swappable, so tests never download 22 MB of weights."""
+    called = []
+
+    def fake(img):
+        called.append(img)
+        return (1232, 1709, 1318, 1798)
+
+    result = verify(_blank(), detector=fake)
+    assert len(called) == 1
+    assert result["height_px"] == 89
+    assert result["zone"] == "viewframe"
+    assert result["ok"] is True
+
+
+def test_a_supplied_box_skips_detection_entirely():
+    def exploding(img):
+        raise AssertionError("detection must not run when a box is supplied")
+
+    result = verify(_blank(), box=(1232, 1709, 1318, 1798), detector=exploding)
+    assert result["height_px"] == 89
+
+
+def test_detection_falls_back_to_colour_when_no_model(monkeypatch):
+    import scripts.chonky.measure as m
+    monkeypatch.setattr(m, "_detect_by_model", lambda img: None)
+    img = _with_patch(1232, 1709, 86, 89)
+    box = m.detect_chonky(img)
+    assert box is not None, "must still find him via the colour fallback"
+    assert abs((box[3] - box[1]) - 89) <= 4

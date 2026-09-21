@@ -106,3 +106,6 @@ remotion-composer/public/demo-props/caption-burn-*
 .openart/
 # Per-workspace upload ids for the character stills — a local cache, not source.
 character_library/.uploads.json
+
+# YOLO weights, downloaded on first detection run
+yolov8*.pt
