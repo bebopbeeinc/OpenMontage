@@ -7,14 +7,14 @@ renders TO Drive + flip the sheet status; this pulls the published Drive
 files DOWN into the account-matching local subfolder.
 
 Two accounts, each backed by its own pipeline + queue sheet:
-  dailytrivia.tc   <- trivia-captain-reaction Posts_Reaction tab, Status / Drive Link (+ Drive Clip)
-  ellie.travelcrush <- trivia-reaction        Queue tab, Status / Drive Link (+ Drive Clip)
+  archibald.travelcrush <- trivia-captain-reaction Posts_Reaction tab, Status / Drive Link (+ Drive Clip)
+  ellie.travelcrush     <- trivia-reaction         Queue tab, Status / Drive Link (+ Drive Clip)
 
 Idempotent: if a local file already matches the Drive file's byte size it's
 skipped; otherwise it's (re)downloaded (Drive may carry a re-render).
 
 Usage:
-    python -m scripts.common.download_ready_to_publish [dailytrivia|ellie|both]
+    python -m scripts.common.download_ready_to_publish [archibald|ellie|both]
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ DOWNLOAD_ROOT = Path(
     "MuMuPlayerShared.localized/Download"
 )
 DEST = {
-    "dailytrivia": DOWNLOAD_ROOT / "dailytrivia.tc",
+    "archibald": DOWNLOAD_ROOT / "archibald.travelcrush",
     "ellie": DOWNLOAD_ROOT / "ellie.travelcrush",
 }
 
@@ -99,6 +99,44 @@ def _pull(drive, label: str, file_id: str, dest: Path) -> None:
     glyph = {"created": "✓", "replaced": "↻", "skipped": "·"}[action]
     size_kb = dest.stat().st_size // 1024
     print(f"    {glyph} {label} {action}: {dest.name} ({size_kb} KB)")
+
+
+def _cover_map(sheets, mod) -> dict[int, str]:
+    """Return {sheet_row: cover_drive_link} for the 'Cover' column.
+
+    The Cover column's position differs per account (archibald has it at M right
+    after Drive Clip; ellie's Queue gained TikTok-stats columns and carries it at
+    T), so resolve it by header label rather than a fixed letter. The bulk row
+    read stops at column L, so covers are fetched here as a separate column read.
+    """
+    letter = mod._refresh_header_cache(sheets).get("Cover")
+    if not letter:
+        return {}
+    start = mod.QUEUE_DATA_START_ROW
+    resp = sheets.spreadsheets().values().get(
+        spreadsheetId=mod.QUEUE_SHEET,
+        range=f"'{mod.QUEUE_TAB}'!{letter}{start}:{letter}",
+    ).execute()
+    out: dict[int, str] = {}
+    for i, cell in enumerate(resp.get("values", []), start=start):
+        link = (cell[0] if cell else "").strip()
+        if link:
+            out[i] = link
+    return out
+
+
+def _pull_cover(drive, slug: str, link: str, dest_dir: Path) -> None:
+    """Pull a row's cover image, naming it {slug}_cover<ext> with the real
+    extension read from the Drive file (cover art may be jpg or png)."""
+    file_id = _file_id_from_link(link)
+    if not file_id:
+        print("    ! cover : no Drive link — skipping")
+        return
+    name = drive.files().get(
+        fileId=file_id, fields="name", supportsAllDrives=True,
+    ).execute().get("name", "")
+    ext = Path(name).suffix or ".jpg"
+    _pull(drive, "cover ", file_id, dest_dir / f"{slug}_cover{ext}")
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +286,7 @@ def do_ellie(drive) -> int:
     rows = queue_row.read_queue_bulk(sheets)
     ready = [r for r in rows
              if (r.get("status") or "").strip() == queue_row.STATUS_READY_TO_PUBLISH]
+    covers = _cover_map(sheets, queue_row)
     dest_dir = DEST["ellie"]
     print(f"\n=== ellie.travelcrush  (trivia-reaction)  →  {dest_dir} ===")
     print(f"{len(ready)} row(s) at status='{queue_row.STATUS_READY_TO_PUBLISH}'")
@@ -260,20 +299,22 @@ def do_ellie(drive) -> int:
               dest_dir / f"{slug}.mp4")
         _pull(drive, "clip  ", _file_id_from_link(r.get("drive_clip_link") or ""),
               dest_dir / f"{slug}_clip.mp4")
+        _pull_cover(drive, slug, covers.get(r["row"], ""), dest_dir)
     return len(ready)
 
 
-def do_dailytrivia(drive) -> int:
-    # Angle changed: dailytrivia.tc now pulls from the Posts_Reaction tab
-    # (trivia-captain-reaction — Captain reaction format) instead of Posts_2T1L.
+def do_archibald(drive) -> int:
+    # trivia-captain-reaction (Captain reaction format) now feeds the dedicated
+    # @archibald.travelcrush account — its own Post Calendar + emulator folder.
     # The reaction queue uses the clean 12-col schema: B Slug | C Status |
     # I Drive Link (captioned final) | L Drive Clip (raw). Mirror of do_ellie.
     sheets = captain_reaction_queue.build_sheets(write=False)
     rows = captain_reaction_queue.read_queue_bulk(sheets)
     ready = [r for r in rows
              if (r.get("status") or "").strip() == captain_reaction_queue.STATUS_READY_TO_PUBLISH]
-    dest_dir = DEST["dailytrivia"]
-    print(f"\n=== dailytrivia.tc  (trivia-captain-reaction / Posts_Reaction)  →  {dest_dir} ===")
+    covers = _cover_map(sheets, captain_reaction_queue)
+    dest_dir = DEST["archibald"]
+    print(f"\n=== archibald.travelcrush  (trivia-captain-reaction / Posts_Reaction)  →  {dest_dir} ===")
     print(f"{len(ready)} row(s) at Status='{captain_reaction_queue.STATUS_READY_TO_PUBLISH}'")
     for r in ready:
         slug = (r.get("slug") or "").strip()
@@ -284,13 +325,14 @@ def do_dailytrivia(drive) -> int:
               dest_dir / f"{slug}.mp4")
         _pull(drive, "clip  ", _file_id_from_link(r.get("drive_clip_link") or ""),
               dest_dir / f"{slug}_clip.mp4")
+        _pull_cover(drive, slug, covers.get(r["row"], ""), dest_dir)
     return len(ready)
 
 
 def main(which: str) -> int:
     drive = build_drive()
-    if which in ("dailytrivia", "both"):
-        do_dailytrivia(drive)
+    if which in ("archibald", "both"):
+        do_archibald(drive)
     if which in ("ellie", "both"):
         do_ellie(drive)
     print("\n✓ done")
@@ -299,6 +341,6 @@ def main(which: str) -> int:
 
 if __name__ == "__main__":
     arg = sys.argv[1] if len(sys.argv) > 1 else "both"
-    if arg not in ("dailytrivia", "ellie", "both"):
-        raise SystemExit("usage: download_ready_to_publish.py [dailytrivia|ellie|both]")
+    if arg not in ("archibald", "ellie", "both"):
+        raise SystemExit("usage: download_ready_to_publish.py [archibald|ellie|both]")
     raise SystemExit(main(arg))
