@@ -1,0 +1,11 @@
+# Optional: Chonky image verification (scripts/chonky).
+#
+# Finding the single cat in a render is an object-detection problem — a colour
+# threshold cannot separate a small ginger cat from sunlit stone. Installing
+# this enables scripts/chonky/measure.py's model path; without it the module
+# falls back to a colour heuristic that is unreliable on lit scenes.
+#
+#   pip install -r requirements-detect.txt
+#
+# Pulls torch (~100 MB) and downloads yolov8s.pt (~22 MB) on first use.
+ultralytics>=8.4

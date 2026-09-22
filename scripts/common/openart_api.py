@@ -72,6 +72,8 @@ MODEL_IDS: dict[str, str] = {
     "Nano Banana 2 Lite":  "nano-banana-2-lite",
     "Nano Banana Pro":     "nano-banana-pro",
     "GPT Image 2":         "gpt-image-2",
+    "GPT Image 2.5 Sunburst": "gpt-image-2-5-sunburst",
+    "GPT Image 2.5 Flare":    "gpt-image-2-5-flare",
     "Seedream 4.5":        "byte-plus-seedream-4-5",
     "Seedream 5 Pro":      "byte-plus-seedream-5-pro",
     "Seedance 2.0":        "byte-plus-seedance-2",

@@ -34,6 +34,7 @@ from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 # Pipeline sub-apps. Each must be a self-contained FastAPI app.
+from scripts.chonky.web import server as chonky
 from scripts.trivia.web import server as trivia
 from scripts.trivia_captain.web import server as trivia_captain
 from scripts.trivia_captain_2t1l.web import server as trivia_captain_2t1l
@@ -187,6 +188,7 @@ app = FastAPI(title="OpenMontage pipeline launcher")
 # `jobs: dict[str, Job]` where Job has at least `.id`, `.kind`, `.slug`,
 # `.status` ∈ {"queued","running","success","error"} (see scripts/trivia*/web).
 PIPELINE_MODULES: dict[str, object] = {
+    "chonky": chonky,
     "trivia": trivia,
     "trivia-images": trivia_images,
     "trivia-quiz": trivia_quiz,

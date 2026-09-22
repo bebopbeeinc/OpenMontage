@@ -1,0 +1,93 @@
+from fastapi.testclient import TestClient
+
+from scripts.chonky.web.server import app
+
+client = TestClient(app)
+
+
+def test_health_reports_the_authored_geometry():
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["image"] == "2048x2560"
+    assert body["viewframe"] == "1200x2133 at x 424-1624, y 213-2346"
+    assert body["chonky_height_px"] == "65-105"
+
+
+def test_prompts_endpoint_parses_tsv_and_assigns_zones():
+    tsv = ("Difficulty\tLocation\tprompt\n"
+           "1\tLisbon, Portugal\tA photo of Rua Augusta\n"
+           "2\tOslo, Norway\tA photo of Karl Johans gate\n")
+    r = client.post("/api/prompts", json={"tsv": tsv})
+    assert r.status_code == 200
+    rows = r.json()["rows"]
+    assert len(rows) == 2
+    assert rows[0]["difficulty"] == "1"
+    assert rows[0]["city"] == "Lisbon"
+    assert rows[0]["country"] == "Portugal"
+    assert rows[0]["target_zone"] in ("viewframe", "margin")
+    assert rows[0]["prompt"].startswith("A photo of Rua Augusta")
+
+
+def test_prompts_endpoint_tolerates_a_missing_header():
+    tsv = "1\tLisbon, Portugal\tA photo\n"
+    rows = client.post("/api/prompts", json={"tsv": tsv}).json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["difficulty"] == "1"
+
+
+def test_measure_endpoint_accepts_a_corrected_box():
+    r = client.post("/api/measure", json={"box": [1232, 1709, 1318, 1798]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["height_px"] == 89
+    assert body["zone"] == "viewframe"
+    assert body["size"] == "ok"
+    assert body["ok"] is True
+
+
+def test_measure_endpoint_flags_an_oversized_cat():
+    body = client.post("/api/measure", json={"box": [1190, 1240, 1440, 1630]}).json()
+    assert body["size"] == "too_big"
+    assert body["ok"] is False
+
+
+def test_measure_endpoint_flags_centrestage():
+    body = client.post("/api/measure", json={"box": [900, 1709, 1000, 1798]}).json()
+    assert body["zone"] == "centrestage"
+    assert body["ok"] is False
+
+
+def test_index_is_served_and_sets_the_base_href():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert '<base href="/chonky/">' in r.text
+
+
+def test_the_launcher_mounts_chonky():
+    """The sub-app must be reachable at /chonky through the real launcher.
+
+    index.html sets <base href="/chonky/">, so serving it anywhere else breaks
+    every relative fetch. This is the contract the other pipelines document.
+    """
+    from web.server import PIPELINE_MODULES, app as launcher
+
+    assert "chonky" in PIPELINE_MODULES
+    mounted = [getattr(r, "path", "") for r in launcher.routes if hasattr(r, "app")]
+    assert "/chonky" in mounted
+
+
+def test_jobs_are_shaped_for_the_deploy_guard():
+    """web/server.py disables Deploy while any pipeline job is in flight.
+
+    It reads `jobs` off each module and looks for .status in ("queued",
+    "running"), so a render must be visible to it or a deploy could land
+    mid-render.
+    """
+    from scripts.chonky.web.server import Job, jobs
+
+    j = Job(id="abc", slug="img1", image_id="img1")
+    assert j.status == "running"
+    for attr in ("id", "kind", "slug", "status", "started_at"):
+        assert hasattr(j, attr), attr
+    assert isinstance(jobs, dict)
