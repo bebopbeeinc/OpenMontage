@@ -113,14 +113,94 @@ def index() -> HTMLResponse:
     return HTMLResponse((HERE / "index.html").read_text())
 
 
+def _mask(value: str) -> str:
+    """Enough of an id to recognise, not enough to be a leak."""
+    if not value:
+        return ""
+    return value[:6] + "…" + value[-4:] if len(value) > 12 else "set"
+
+
+def _readiness() -> dict:
+    """Preflight for every external dependency.
+
+    Each of these fails at a different and inconvenient moment — missing
+    config kills Approve at the END of a batch, a missing OpenArt token kills
+    Render at the start, a missing service account 403s the upload, and a
+    missing detector degrades measurement silently. Checking them together is
+    how an operator finds out before spending credits.
+    """
+    import importlib.util
+    import os
+
+    checks: dict[str, dict] = {}
+
+    folder = os.environ.get("CHONKY_DRIVE_FOLDER_ID", "")
+    checks["drive_folder"] = {
+        "ok": bool(folder),
+        "detail": f"CHONKY_DRIVE_FOLDER_ID={_mask(folder)}" if folder
+                  else "CHONKY_DRIVE_FOLDER_ID is unset — Approve will refuse",
+    }
+
+    sheet = os.environ.get("CHONKY_SHEET_ID", "")
+    checks["sheet"] = {
+        "ok": bool(sheet),
+        "detail": f"CHONKY_SHEET_ID={_mask(sheet)}" if sheet
+                  else "CHONKY_SHEET_ID is unset — Approve will refuse",
+    }
+
+    token = REPO / ".openart" / "mcp-token.json"
+    account = ""
+    if token.exists():
+        try:
+            import sys as _sys
+            _common = str(REPO / "scripts" / "common")
+            if _common not in _sys.path:
+                _sys.path.insert(0, _common)
+            import openart_api as _api
+            acct = _api.call_tool("openart_account_get", {})
+            ws = (acct.get("workspace") or {}).get("name", "?")
+            account = f"{acct.get('user', {}).get('email', '?')} · workspace {ws} · {acct.get('credits', '?')} credits"
+        except Exception as exc:
+            account = f"token present but unusable: {type(exc).__name__}"
+    checks["openart_token"] = {
+        "ok": bool(token.exists() and account and "unusable" not in account),
+        "detail": account or f"no token at {token} — run scripts/common/openart_mcp.py --login",
+    }
+
+    sa = Path.home() / ".google" / "claude-sheets-sa.json"
+    checks["service_account"] = {
+        "ok": sa.exists(),
+        "detail": f"present at {sa}" if sa.exists()
+                  else f"missing at {sa} — Drive and Sheets writes will fail",
+    }
+
+    has_yolo = importlib.util.find_spec("ultralytics") is not None
+    checks["detector"] = {
+        "ok": has_yolo,
+        "detail": "ultralytics installed" if has_yolo
+                  else "ultralytics missing — measurement falls back to a colour "
+                       "heuristic that is unreliable on sunlit scenes "
+                       "(pip install -r requirements-detect.txt)",
+    }
+
+    checks["workspace"] = {
+        "ok": True,
+        "detail": os.environ.get("CHONKY_OPENART_WORKSPACE", "R N (default)"),
+    }
+    return checks
+
+
 @app.get("/api/health")
 def health() -> dict:
+    ready = _readiness()
     return {
         "image": f"{geo.IMG_W}x{geo.IMG_H}",
         "viewframe": (f"{geo.VF_W}x{geo.VF_H} at x {geo.VF_X0}-{geo.VF_X1}, "
                       f"y {geo.VF_Y0}-{geo.VF_Y1}"),
         "chonky_height_px": f"{geo.CHONKY_MIN_H}-{geo.CHONKY_MAX_H}",
         "viewframe_box": [geo.VF_X0, geo.VF_Y0, geo.VF_X1, geo.VF_Y1],
+        "all_ready": all(c["ok"] for c in ready.values()),
+        "ready": ready,
     }
 
 
