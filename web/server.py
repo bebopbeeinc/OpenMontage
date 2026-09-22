@@ -88,6 +88,23 @@ PIPELINES = [
         "accounts": DAILYTRIVIA_ACCOUNTS,
     },
     {
+        "id": "chonky",
+        "path": "/chonky/",
+        "name": "Chonky",
+        "description": (
+            "Geography-puzzle images for \"Where in the World Is Chonky?\". "
+            "Paste the prompt TSV; each image is rendered once on OpenArt, "
+            "then verified against the authored 9:16 ViewFrame and Chonky's "
+            "65-105 px size band before anything is filed. Review the full "
+            "frame beside its ViewFrame, correct the measurement box if the "
+            "cat detector is wrong, edit the clue messages, and approve to "
+            "Drive and the sheet."
+        ),
+        "stability": "beta",
+        "archived": False,
+        "accounts": [],
+    },
+    {
         "id": "trivia-images",
         "path": "/trivia-images/",
         "name": "Trivia Images",
