@@ -57,3 +57,35 @@ def test_creates_the_output_directory(tmp_path):
     out = tmp_path / "nested" / "deeper" / "r.png"
     render_once("p", out, driver=_fake(calls))
     assert out.exists()
+
+
+def test_bills_one_named_workspace_with_no_fallback(tmp_path):
+    """Chonky spends the workspace it is told to, or fails.
+
+    The shared driver falls back to another workspace when the primary is out
+    of credits. That is right for the trivia pipelines and wrong here: a
+    shortfall must be visible, not quietly billed somewhere nobody chose.
+    """
+    from scripts.chonky.render import FALLBACK_WORKSPACES, WORKSPACE
+
+    calls = []
+    render_once("p", tmp_path / "r.png", driver=_fake(calls))
+    assert WORKSPACE, "a workspace must always be named explicitly"
+    assert calls[0]["workspace"] == WORKSPACE
+    assert calls[0]["fallback_workspaces"] == FALLBACK_WORKSPACES == ()
+
+
+def test_workspace_is_configurable(monkeypatch, tmp_path):
+    """So the funded workspace can move without a code change."""
+    import importlib
+
+    monkeypatch.setenv("CHONKY_OPENART_WORKSPACE", "Some Other Workspace")
+    import scripts.chonky.render as r
+    importlib.reload(r)
+    try:
+        calls = []
+        r.render_once("p", tmp_path / "r.png", driver=_fake(calls))
+        assert calls[0]["workspace"] == "Some Other Workspace"
+    finally:
+        monkeypatch.delenv("CHONKY_OPENART_WORKSPACE", raising=False)
+        importlib.reload(r)
