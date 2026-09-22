@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import io
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -17,10 +18,28 @@ from PIL import Image
 from scripts.chonky.imaging import encode_delivery
 from scripts.chonky.naming import build_filename
 
-# Where approved renders land. Created by the operator; see docs/design.md.
-DRIVE_FOLDER_ID = "1T1vnLNGeIp-cM1lA2Rb_xO3yRVd4zFSY"
-SHEET_ID = "1a36CLEy3VZRnpjsv_O0k3yZYM14KaG2SftINDaNxu8U"
-BATCHES_TAB = "Batches"
+# Where approved renders and rows land.
+#
+# Deliberately NOT defaulted to anything. These are company resources and must
+# be set explicitly, so a misconfigured environment fails loudly instead of
+# quietly writing game assets into whichever Drive happened to be hardcoded.
+#
+#     export CHONKY_DRIVE_FOLDER_ID=...
+#     export CHONKY_SHEET_ID=...
+#
+# Both also live in .env, which the launcher loads.
+DRIVE_FOLDER_ID = os.environ.get("CHONKY_DRIVE_FOLDER_ID", "")
+SHEET_ID = os.environ.get("CHONKY_SHEET_ID", "")
+BATCHES_TAB = os.environ.get("CHONKY_BATCHES_TAB", "Batches")
+
+
+def _require(name: str, value: str) -> str:
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. Chonky writes to company Drive and Sheets "
+            f"only; set {name} in .env or the environment before delivering."
+        )
+    return value
 
 # Same service account the trivia pipelines use.
 SA_PATH = Path.home() / ".google" / "claude-sheets-sa.json"
@@ -57,7 +76,8 @@ def _default_uploader(data: bytes, filename: str) -> str:
     drive, _ = _clients()
     media = MediaIoBaseUpload(io.BytesIO(data), mimetype="image/jpeg", resumable=True)
     created = drive.files().create(
-        body={"name": filename, "parents": [DRIVE_FOLDER_ID]},
+        body={"name": filename,
+              "parents": [_require("CHONKY_DRIVE_FOLDER_ID", DRIVE_FOLDER_ID)]},
         media_body=media,
         fields="id,name,webViewLink",
         supportsAllDrives=True,
@@ -68,7 +88,7 @@ def _default_uploader(data: bytes, filename: str) -> str:
 def _default_sheet_writer(row: dict) -> None:
     _, sheets = _clients()
     sheets.spreadsheets().values().append(
-        spreadsheetId=SHEET_ID,
+        spreadsheetId=_require("CHONKY_SHEET_ID", SHEET_ID),
         range=f"{BATCHES_TAB}!A1",
         valueInputOption="RAW",
         insertDataOption="INSERT_ROWS",
