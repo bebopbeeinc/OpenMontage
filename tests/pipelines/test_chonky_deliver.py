@@ -93,9 +93,34 @@ def test_refuses_to_deliver_without_company_config(monkeypatch):
 
 
 def test_no_personal_ids_remain_in_the_module():
+    """Company addresses are fine to commit; a personal Drive never is."""
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / "scripts" / "chonky" / "deliver.py"
     text = src.read_text()
     assert "1T1vnLNGeIp" not in text, "a personal Drive folder id must never be committed"
-    assert "1a36CLEy" not in text, "the sheet id must come from configuration"
+
+
+def test_defaults_point_at_the_company_resources():
+    import scripts.chonky.deliver as d
+
+    # "8. Chonky" shared drive -> Images, and the Chonky Exclamations sheet.
+    assert d.DEFAULT_DRIVE_FOLDER_ID == "1GVpjyHEI40y2ewy6ksXKA88EdnYl1oN2"
+    assert d.DEFAULT_SHEET_ID == "1a36CLEy3VZRnpjsv_O0k3yZYM14KaG2SftINDaNxu8U"
+    assert d.DRIVE_FOLDER_ID and d.SHEET_ID, "a fresh checkout must work unconfigured"
+
+
+def test_environment_still_overrides_the_defaults(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("CHONKY_DRIVE_FOLDER_ID", "OVERRIDDEN_FOLDER")
+    monkeypatch.setenv("CHONKY_SHEET_ID", "OVERRIDDEN_SHEET")
+    import scripts.chonky.deliver as d
+    importlib.reload(d)
+    try:
+        assert d.DRIVE_FOLDER_ID == "OVERRIDDEN_FOLDER"
+        assert d.SHEET_ID == "OVERRIDDEN_SHEET"
+    finally:
+        monkeypatch.delenv("CHONKY_DRIVE_FOLDER_ID", raising=False)
+        monkeypatch.delenv("CHONKY_SHEET_ID", raising=False)
+        importlib.reload(d)
