@@ -8,6 +8,7 @@ explicit second call by a caller that has stated why.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Callable, Optional
@@ -21,11 +22,17 @@ ASPECT = "4:5"          # returns 2048x2560; customWidth/Height are ignored
 RESOLUTION = "4K"
 CHARACTER = "Chonky"    # stills in character_library/chonky/
 
-# Chonky bills the company art workspace and nothing else. The shared driver
-# defaults to falling back to a personal workspace when the primary one runs
-# out of credits; that is wrong here, so the fallback is disabled and a credit
-# shortfall fails loudly instead of quietly spending someone's own balance.
-WORKSPACE = "BebopBee Art Team"
+# Chonky bills one named OpenArt workspace and nothing else.
+#
+# The shared driver falls back to another workspace when the primary runs out
+# of credits. That is disabled here: a credit shortfall must fail loudly
+# rather than quietly spending a balance nobody chose.
+#
+# The default is the workspace on the company account (contact@bebopbee.com)
+# that actually carries credits. "BebopBee Art Team" exists on the same
+# account but is a Free plan with a near-zero balance, so pointing at it just
+# fails on the first render.
+WORKSPACE = os.environ.get("CHONKY_OPENART_WORKSPACE", "R N")
 FALLBACK_WORKSPACES: tuple[str, ...] = ()
 
 

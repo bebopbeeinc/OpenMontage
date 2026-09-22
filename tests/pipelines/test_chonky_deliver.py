@@ -76,3 +76,26 @@ def test_refuses_to_deliver_an_unverified_image():
             uploader=lambda d, f: "x", sheet_writer=rows.append,
         )
     assert rows == [], "nothing may reach the sheet when the image failed"
+
+
+def test_refuses_to_deliver_without_company_config(monkeypatch):
+    """No personal Drive or sheet may be baked in as a default.
+
+    An unset destination must fail loudly rather than quietly filing game
+    assets wherever a hardcoded id happened to point.
+    """
+    import scripts.chonky.deliver as d
+
+    with pytest.raises(RuntimeError, match="CHONKY_DRIVE_FOLDER_ID"):
+        d._require("CHONKY_DRIVE_FOLDER_ID", "")
+    with pytest.raises(RuntimeError, match="CHONKY_SHEET_ID"):
+        d._require("CHONKY_SHEET_ID", "")
+
+
+def test_no_personal_ids_remain_in_the_module():
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[2] / "scripts" / "chonky" / "deliver.py"
+    text = src.read_text()
+    assert "1T1vnLNGeIp" not in text, "a personal Drive folder id must never be committed"
+    assert "1a36CLEy" not in text, "the sheet id must come from configuration"
