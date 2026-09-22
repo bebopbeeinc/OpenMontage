@@ -91,3 +91,33 @@ def test_jobs_are_shaped_for_the_deploy_guard():
     for attr in ("id", "kind", "slug", "status", "started_at"):
         assert hasattr(j, attr), attr
     assert isinstance(jobs, dict)
+
+
+def test_health_reports_readiness_of_every_dependency():
+    """Health is the preflight check.
+
+    The pipeline has four external dependencies and each fails differently and
+    late: no Drive/sheet config means Approve dies at the end of a batch, no
+    OpenArt token means Render dies at the start, no service account means the
+    upload 403s, and no detector silently degrades measurement. Surfacing all
+    four in one place is how an operator finds out before spending credits
+    rather than after.
+    """
+    body = client.get("/api/health").json()
+    assert "ready" in body
+    checks = body["ready"]
+    for key in ("drive_folder", "sheet", "openart_token", "service_account", "detector"):
+        assert key in checks, f"health must report {key}"
+        assert "ok" in checks[key]
+        assert "detail" in checks[key]
+
+
+def test_health_never_leaks_secrets():
+    """Ids are masked and no key material is returned."""
+    import json
+
+    raw = json.dumps(client.get("/api/health").json())
+    assert "private_key" not in raw
+    assert "BEGIN PRIVATE KEY" not in raw
+    # a configured id must be shown masked, never in full
+    assert "1GVpjyHEI40y2ewy6ksXKA88EdnYl1oN2" not in raw
