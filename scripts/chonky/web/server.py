@@ -134,18 +134,26 @@ def _readiness() -> dict:
 
     checks: dict[str, dict] = {}
 
-    folder = os.environ.get("CHONKY_DRIVE_FOLDER_ID", "")
+    # Read the RESOLVED values, not the environment: the company addresses are
+    # committed as defaults, so an unset env var is normal rather than broken.
+    from scripts.chonky import deliver as _deliver
+
+    folder = _deliver.DRIVE_FOLDER_ID
+    overridden = bool(os.environ.get("CHONKY_DRIVE_FOLDER_ID"))
     checks["drive_folder"] = {
         "ok": bool(folder),
-        "detail": f"CHONKY_DRIVE_FOLDER_ID={_mask(folder)}" if folder
-                  else "CHONKY_DRIVE_FOLDER_ID is unset — Approve will refuse",
+        "detail": (f"{_mask(folder)}"
+                   + (" (env override)" if overridden else " (committed default)")) if folder
+                  else "no Drive folder resolved — Approve will refuse",
     }
 
-    sheet = os.environ.get("CHONKY_SHEET_ID", "")
+    sheet = _deliver.SHEET_ID
+    sheet_overridden = bool(os.environ.get("CHONKY_SHEET_ID"))
     checks["sheet"] = {
         "ok": bool(sheet),
-        "detail": f"CHONKY_SHEET_ID={_mask(sheet)}" if sheet
-                  else "CHONKY_SHEET_ID is unset — Approve will refuse",
+        "detail": (f"{_mask(sheet)} · tab {_deliver.BATCHES_TAB}"
+                   + (" (env override)" if sheet_overridden else " (committed default)")) if sheet
+                  else "no sheet resolved — Approve will refuse",
     }
 
     token = REPO / ".openart" / "mcp-token.json"

@@ -20,16 +20,22 @@ from scripts.chonky.naming import build_filename
 
 # Where approved renders and rows land.
 #
-# Deliberately NOT defaulted to anything. These are company resources and must
-# be set explicitly, so a misconfigured environment fails loudly instead of
-# quietly writing game assets into whichever Drive happened to be hardcoded.
+# These are company resources and are committed the same way the trivia
+# pipelines commit theirs (see trivia_images/drive_config.py and
+# trivia/publish.py) — a Drive folder id is an address, not a secret, and
+# committing it means a fresh checkout works without per-machine setup.
 #
-#     export CHONKY_DRIVE_FOLDER_ID=...
-#     export CHONKY_SHEET_ID=...
+# Override per environment with CHONKY_DRIVE_FOLDER_ID / CHONKY_SHEET_ID.
 #
-# Both also live in .env, which the launcher loads.
-DRIVE_FOLDER_ID = os.environ.get("CHONKY_DRIVE_FOLDER_ID", "")
-SHEET_ID = os.environ.get("CHONKY_SHEET_ID", "")
+#   Drive: "8. Chonky" shared drive → Images
+#   Sheet: "Chonky Exclamations", Batches tab
+#
+# Both are shared with claude-sheets-config@travel-crush.iam.gserviceaccount.com.
+DEFAULT_DRIVE_FOLDER_ID = "1GVpjyHEI40y2ewy6ksXKA88EdnYl1oN2"
+DEFAULT_SHEET_ID = "1a36CLEy3VZRnpjsv_O0k3yZYM14KaG2SftINDaNxu8U"
+
+DRIVE_FOLDER_ID = os.environ.get("CHONKY_DRIVE_FOLDER_ID") or DEFAULT_DRIVE_FOLDER_ID
+SHEET_ID = os.environ.get("CHONKY_SHEET_ID") or DEFAULT_SHEET_ID
 BATCHES_TAB = os.environ.get("CHONKY_BATCHES_TAB", "Batches")
 
 
