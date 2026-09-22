@@ -21,6 +21,13 @@ ASPECT = "4:5"          # returns 2048x2560; customWidth/Height are ignored
 RESOLUTION = "4K"
 CHARACTER = "Chonky"    # stills in character_library/chonky/
 
+# Chonky bills the company art workspace and nothing else. The shared driver
+# defaults to falling back to a personal workspace when the primary one runs
+# out of credits; that is wrong here, so the fallback is disabled and a credit
+# shortfall fails loudly instead of quietly spending someone's own balance.
+WORKSPACE = "BebopBee Art Team"
+FALLBACK_WORKSPACES: tuple[str, ...] = ()
+
 
 def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = None) -> Path:
     """Render `prompt` to `out_path`. One submission, no retries.
@@ -41,5 +48,7 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
         aspect=ASPECT,
         resolution=RESOLUTION,
         character=CHARACTER,
+        workspace=WORKSPACE,
+        fallback_workspaces=FALLBACK_WORKSPACES,
     )
     return Path(saved[0])
