@@ -5,13 +5,18 @@ from scripts.chonky.web.server import app
 client = TestClient(app)
 
 
-def test_health_reports_the_authored_geometry():
-    r = client.get("/api/health")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["image"] == "2048x2560"
+def test_health_reports_the_authored_geometry_as_a_reference_not_a_claim():
+    """The header sat above renders that were never this size.
+
+    Read as a statement about the render on screen it was wrong every time, so
+    it has to say which frame the numbers describe.
+    """
+    body = client.get("/api/health").json()
+    assert "2048x2560" in body["image"]
+    assert "reference" in body["image"].lower()
     assert body["viewframe"] == "1200x2133 at x 424-1624, y 213-2346"
-    assert body["chonky_height_px"] == "65-105"
+    assert "65-105" in body["chonky_height_px"]
+    assert "own" in body["chonky_height_px"], "must say each render is measured in its own frame"
 
 
 def test_prompts_endpoint_parses_tsv_and_assigns_zones():
