@@ -241,7 +241,11 @@ async function loadGallery() {
 function tile(r) {
   const m = r.measurement;
   const t = el('div', 'tile');
-  t.appendChild(el('div', 'cap', r.location || r.image_id));
+  // Place and level together: which level an image belongs to is half of what
+  // identifies it once there are a few dozen of these.
+  const where = r.location || r.image_id;
+  t.appendChild(el('div', 'cap',
+    r.difficulty ? `${where} — Level ${r.difficulty}` : where));
 
   // The red rectangle is the phone screen: what the player opens on, before
   // they pan or zoom. Everything outside it is the exploration reward, so a
@@ -349,7 +353,9 @@ function openEditor(r) {
   close.title = 'Close';
   box.appendChild(close);
 
-  box.appendChild(el('h2', null, r.location || r.image_id));
+  box.appendChild(el('h2', null, r.difficulty
+    ? `${r.location || r.image_id} — Level ${r.difficulty}`
+    : (r.location || r.image_id)));
 
   const split = el('div', 'modal-body');
   const left = el('div', 'modal-img');

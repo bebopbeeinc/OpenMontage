@@ -32,7 +32,8 @@ def _cleanup(*ids):
 def test_renders_lists_what_is_on_disk():
     try:
         _write_render("gal-a", measurement={"height_px": 60, "ok": True},
-                      location="Prague, Czech Republic", prompt="a prompt")
+                      location="Prague, Czech Republic", prompt="a prompt",
+                      difficulty="2")
         rows = client.get("/api/renders").json()["renders"]
         ids = [r["image_id"] for r in rows]
         assert "gal-a" in ids
@@ -40,6 +41,9 @@ def test_renders_lists_what_is_on_disk():
         assert row["measurement"]["height_px"] == 60
         assert row["location"] == "Prague, Czech Republic"
         assert row["prompt"] == "a prompt"
+        # The level belongs beside the place: which level an image is for is
+        # half of what identifies it on the wall of renders.
+        assert row["difficulty"] == "2"
     finally:
         _cleanup("gal-a")
 

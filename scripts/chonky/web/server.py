@@ -414,6 +414,8 @@ def generate(payload: dict) -> dict:
     cities = payload.get("cities") or []
     pct = int(payload.get("viewframe_pct", 70))
     weights = payload.get("weights") or {}
+    width = payload.get("width")
+    height = payload.get("height")
     try:
         aspect = normalise_aspect(payload.get("aspect"))
         resolution = normalise_tier(payload.get("resolution"))
@@ -462,7 +464,8 @@ def generate(payload: dict) -> dict:
                 kwargs=dict(location=location, difficulty=difficulty,
                             target_zone=zone, clues=d["clues"],
                             clue_words=d.get("clue_words"),
-                            aspect=aspect, resolution=resolution),
+                            aspect=aspect, resolution=resolution,
+                            width=width, height=height),
                 daemon=True,
             ).start()
 
@@ -472,12 +475,13 @@ def generate(payload: dict) -> dict:
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
-                       clue_words=None, aspect=None, resolution=None) -> None:
+                       clue_words=None, aspect=None, resolution=None,
+                       width=None, height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
         render_once(prompt, out, log=submission, aspect=aspect,
-                    resolution=resolution)
+                    resolution=resolution, width=width, height=height)
         with Image.open(out) as im:
             result = verify(im)
         with _lock:
