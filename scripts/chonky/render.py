@@ -32,6 +32,50 @@ ASPECT_RATIOS = ("1:1", "3:2", "2:3", "16:9", "9:16", "4:3",
 RESOLUTION_TIERS = ("1k", "2k", "4k")
 
 
+# Long sides offered for every ratio. The tiers OpenArt names (1k/2k/4k) map
+# to sizes that are not round numbers and differ per ratio, so they tell an
+# operator nothing about what they will get; customWidth/customHeight are
+# honoured — 2048x2048 asked for on a 4:5 aspect came back 2048x2048 — so the
+# sizes can simply be named.
+#
+# Verified up to 2048x2560. Larger entries are offered because the field
+# accepts them, not because the ceiling is known; a size OpenArt refuses fails
+# the job with its own message rather than silently producing something else.
+_LONG_SIDES = (1024, 1280, 1536, 1792, 2048, 2560, 3072, 4096)
+# An 8-pixel grid, not 16: the grid is our own conservatism rather than
+# OpenArt's requirement — it returned exactly the 2048x2048 it was asked for —
+# and 16 pushed the extreme ratios off by as much as 1.6%, which is visible as
+# a letterbox on a 21:9 frame.
+_GRID = 8
+
+
+def _snap(value: float) -> int:
+    return max(_GRID, int(round(value / _GRID)) * _GRID)
+
+
+def sizes_for(aspect: str) -> list[tuple[int, int]]:
+    """Concrete pixel sizes for a ratio, smallest first.
+
+    Snapped to a 16-pixel grid: off-grid dimensions get rounded somewhere
+    downstream anyway, and an operator who picks 3277 and is handed 3280 has
+    been told something untrue.
+    """
+    aspect = normalise_aspect(aspect)
+    w_part, h_part = (int(p) for p in aspect.split(":"))
+
+    sizes: list[tuple[int, int]] = []
+    for long_side in _LONG_SIDES:
+        if w_part >= h_part:
+            w, h = long_side, _snap(long_side * h_part / w_part)
+            w = _snap(w)
+        else:
+            h, w = long_side, _snap(long_side * w_part / h_part)
+            h = _snap(h)
+        if (w, h) not in sizes:
+            sizes.append((w, h))
+    return sorted(sizes, key=lambda s: s[0] * s[1])
+
+
 def normalise_tier(tier: Optional[str]) -> str:
     """Accept what a human writes, send what the schema accepts."""
     if tier is None:
