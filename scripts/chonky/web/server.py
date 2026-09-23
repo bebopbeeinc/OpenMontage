@@ -388,10 +388,13 @@ def draft_only(payload: dict) -> dict:
 def generate(payload: dict) -> dict:
     """Write the prompts and render them. The operator supplies no prompt.
 
-    Each image is drafted in its own thread and rendered as soon as its draft
-    is ready, so a slow draft does not hold up the others. A draft that fails
-    the manual's checks fails that job and never reaches OpenArt — a bad
-    prompt is cheap, a render is not.
+    Drafting is sequential and rendering is not. Two drafts in one batch both
+    chose Sydney when they were handed the same "already used" list, so each
+    draft now waits to see what the ones before it took — while every render
+    starts the moment its own draft lands, rather than waiting for the batch.
+
+    A draft that fails the manual's checks fails that job and never reaches
+    OpenArt: a bad prompt is cheap, a render is not.
     """
     count = max(1, min(int(payload.get("count", 1)), 12))
     difficulty = payload.get("difficulty", 1)
@@ -400,6 +403,7 @@ def generate(payload: dict) -> dict:
 
     used = _used_locations()
     history: list[dict] = []
+    plan = []
     out = []
     for i in range(count):
         decision = next_zone(history, pct)
@@ -409,40 +413,45 @@ def generate(payload: dict) -> dict:
         with _lock:
             jobs[job_id] = Job(id=job_id, slug=image_id, image_id=image_id,
                                status="drafting")
+        spec = (cities[i] if i < len(cities) else None) or None
+        city, country = _split_location(spec) if spec else (None, None)
+        plan.append((job_id, image_id, decision["target_zone"], city, country))
         out.append({"job_id": job_id, "image_id": image_id,
                     "target_zone": decision["target_zone"]})
 
-        spec = (cities[i] if i < len(cities) else None) or None
-        city, country = _split_location(spec) if spec else (None, None)
-
-        def _draft_then_render(job_id=job_id, image_id=image_id,
-                               zone=decision["target_zone"],
-                               city=city, country=country) -> None:
+    def _draft_all() -> None:
+        for job_id, image_id, zone, city, country in plan:
             try:
                 d = prompt_writer.draft(difficulty=difficulty, target_zone=zone,
-                                  used=used, city=city, country=country)
-            except Exception as exc:                  # noqa: BLE001 - shown in the UI
+                                        used=used, city=city, country=country)
+            except Exception as exc:              # noqa: BLE001 - shown in the UI
                 with _lock:
                     job = jobs[job_id]
                     job.status = "error"
                     job.error = f"{type(exc).__name__}: {exc}"
-                return
+                continue
             location = f"{d['city']}, {d['country']}"
+            # What this image took is what the next one must avoid.
+            if location not in used:
+                used.append(location)
             with _lock:
                 jobs[job_id].status = "running"
-            # Render on this thread: the job already exists and is being
-            # polled, so handing off to another one buys nothing.
-            _run_render_inline(job_id, image_id, d["prompt"], location=location,
-                               difficulty=difficulty, target_zone=zone,
-                               clues=d["clues"])
+            threading.Thread(
+                target=_run_render_inline,
+                args=(job_id, image_id, d["prompt"]),
+                kwargs=dict(location=location, difficulty=difficulty,
+                            target_zone=zone, clues=d["clues"],
+                            clue_words=d.get("clue_words")),
+                daemon=True,
+            ).start()
 
-        threading.Thread(target=_draft_then_render, daemon=True).start()
-
+    threading.Thread(target=_draft_all, daemon=True).start()
     return {"jobs": out}
 
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
-                       difficulty=None, target_zone=None, clues=None) -> None:
+                       difficulty=None, target_zone=None, clues=None,
+                       clue_words=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
@@ -455,9 +464,11 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
             job.status = "success"
             job.measurement = result
             job.submission = submission
+        # clue_words as well as clues: the filename is built from them, and
+        # without them Approve refuses the render it just made.
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
-                       clues=clues, measurement=result)
+                       clues=clues, clue_words=clue_words, measurement=result)
     except Exception as exc:                          # surfaced to the UI as-is
         with _lock:
             job = jobs[job_id]
@@ -754,7 +765,8 @@ def regenerate(payload: dict) -> dict:
         target=_run_render_inline,
         args=(job_id, image_id, prompt),
         kwargs=dict(location=side.get("location"), difficulty=side.get("difficulty"),
-                    target_zone=side.get("target_zone"), clues=side.get("clues")),
+                    target_zone=side.get("target_zone"), clues=side.get("clues"),
+                    clue_words=side.get("clue_words")),
         daemon=True,
     ).start()
     return {"job_id": job_id, "image_id": image_id, "from": source_id}

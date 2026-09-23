@@ -142,3 +142,48 @@ def test_a_rejected_draft_fails_that_job_without_rendering(monkeypatch):
         assert "no illustration style" in detail["error"]
     finally:
         _cleanup(ids)
+
+
+def test_each_image_in_a_batch_knows_what_the_earlier_ones_took(monkeypatch):
+    """Two drafts in one batch picked Sydney.
+
+    The used list was computed once and handed to every draft, so nothing told
+    the second image what the first had chosen — and not reusing a location is
+    what the manual's whole first section is about.
+    """
+    monkeypatch.setattr(server, "render_once", _fake_render)
+
+    seen_used = []
+    cities = iter(["Prague", "Vienna", "Porto"])
+
+    def spy(**kw):
+        seen_used.append(list(kw["used"]))
+        return dict(DRAFT, city=next(cities), country="X")
+
+    monkeypatch.setattr(prompts, "draft", spy)
+
+    body = client.post("/api/generate", json={"count": 3}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert len(seen_used) == 3
+        assert "Prague, X" in seen_used[1], seen_used
+        assert "Prague, X" in seen_used[2] and "Vienna, X" in seen_used[2], seen_used
+    finally:
+        _cleanup(ids)
+
+
+def test_a_generated_render_records_the_words_its_filename_needs(monkeypatch):
+    """Approve refuses a render with no clue words, so generating without them
+    would have made every generated image unapprovable."""
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert side["clue_words"] == DRAFT["clue_words"]
+    finally:
+        _cleanup(ids)
