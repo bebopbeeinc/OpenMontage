@@ -362,6 +362,28 @@ def _used_locations() -> list[str]:
     return seen
 
 
+@app.post("/api/draft")
+def draft_only(payload: dict) -> dict:
+    """Write a prompt and stop, without rendering it.
+
+    Prompt quality is what decides whether a render passes its checks, so
+    iterating on it must not cost a render. This is also the only way to see
+    what the writer does across several attempts without paying for each one.
+    """
+    used = _used_locations()
+    zone = payload.get("target_zone") or next_zone([], int(
+        payload.get("viewframe_pct", 70)))["target_zone"]
+    spec = payload.get("city")
+    city, country = _split_location(spec) if spec else (None, None)
+    try:
+        d = prompt_writer.draft(difficulty=payload.get("difficulty", 1),
+                                target_zone=zone, used=used,
+                                city=city, country=country)
+    except Exception as exc:                          # noqa: BLE001 - shown in the UI
+        return JSONResponse({"error": f"{exc}"}, status_code=400)
+    return {**d, "target_zone": zone}
+
+
 @app.post("/api/generate")
 def generate(payload: dict) -> dict:
     """Write the prompts and render them. The operator supplies no prompt.
