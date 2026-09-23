@@ -1,3 +1,5 @@
+import pytest
+
 from scripts.chonky.geometry import (
     IMG_W, IMG_H, VF_W, VF_H, VF_X0, VF_Y0, VF_X1, VF_Y1,
     classify_zone, size_verdict,
@@ -111,3 +113,46 @@ def test_omitting_the_size_keeps_the_reference_behaviour():
     assert geometry.viewframe_box() == (geometry.VF_X0, geometry.VF_Y0,
                                         geometry.VF_X1, geometry.VF_Y1)
     assert geometry.size_band() == (geometry.CHONKY_MIN_H, geometry.CHONKY_MAX_H)
+
+
+# --------------------------------------------------------------------------
+# The source aspect is now the operator's choice, so the ViewFrame has to mean
+# something in a frame that is not 4:5.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("size", [(2048, 2560), (1344, 1680), (1080, 1920),
+                                  (1920, 1080), (1024, 1024), (2560, 1080)])
+def test_the_viewframe_fits_inside_any_offered_aspect(size):
+    x0, y0, x1, y1 = geometry.viewframe_box(size)
+    assert 0 <= x0 < x1 <= size[0], f"escapes horizontally at {size}"
+    assert 0 <= y0 < y1 <= size[1], f"escapes vertically at {size}"
+
+
+@pytest.mark.parametrize("size", [(2048, 2560), (1080, 1920), (1920, 1080),
+                                  (1024, 1024)])
+def test_the_viewframe_is_always_a_phone_shaped_window(size):
+    """It stands for the phone screen, so its shape cannot drift with the source."""
+    x0, y0, x1, y1 = geometry.viewframe_box(size)
+    assert abs((x1 - x0) / (y1 - y0) - geometry.VF_W / geometry.VF_H) < 0.02
+
+
+@pytest.mark.parametrize("size", [(2048, 2560), (1080, 1920), (1920, 1080)])
+def test_there_is_always_room_left_to_pan(size):
+    """Everything outside the ViewFrame is the pan reward; it must not vanish."""
+    x0, y0, x1, y1 = geometry.viewframe_box(size)
+    assert (x1 - x0) * (y1 - y0) < size[0] * size[1] * 0.95
+
+
+def test_the_four_five_reference_is_unchanged_by_the_generalisation():
+    """The authored numbers must survive: they are quoted in the manual."""
+    assert geometry.viewframe_box((2048, 2560)) == (424, 213, 1624, 2346)
+    assert geometry.size_band((2048, 2560)) == (65, 105)
+
+
+def test_the_band_follows_the_viewframe_not_the_source():
+    """The rule is a share of what the player sees, whatever the source shape."""
+    for size in [(2048, 2560), (1080, 1920), (1920, 1080)]:
+        _, y0, _, y1 = geometry.viewframe_box(size)
+        lo, hi = geometry.size_band(size)
+        assert abs(lo / (y1 - y0) - geometry.CHONKY_MIN_H / geometry.VF_H) < 0.01
+        assert abs(hi / (y1 - y0) - geometry.CHONKY_MAX_H / geometry.VF_H) < 0.01
