@@ -121,3 +121,17 @@ def test_health_never_leaks_secrets():
     assert "BEGIN PRIVATE KEY" not in raw
     # a configured id must be shown masked, never in full
     assert "1GVpjyHEI40y2ewy6ksXKA88EdnYl1oN2" not in raw
+
+
+def test_health_reports_which_interpreter_is_serving():
+    """"Dependency missing" is ambiguous on a machine with several Pythons.
+
+    An install can succeed and still leave the check failing, because it went
+    into a different interpreter than the one running the server. Reporting
+    sys.executable turns a confusing result into an obvious one.
+    """
+    import sys
+
+    detail = client.get("/api/health").json()["ready"]["python"]["detail"]
+    assert sys.executable in detail
+    assert sys.version.split()[0] in detail
