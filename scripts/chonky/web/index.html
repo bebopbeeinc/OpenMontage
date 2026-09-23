@@ -212,6 +212,13 @@ function render(row, job, body) {
       el('span', 'b ' + (zoneOk ? 'ok' : 'bad'), `${v.zone} (assigned ${row.target_zone})`),
       el('span', 'b', `x ${v.box[0]}–${v.box[2]}, y ${v.box[1]}–${v.box[3]}`)
     );
+    // A colour-sourced box is a guess, not a measurement: it has put the
+    // rectangle on a pedestrian under a sunlit arch. Say so, so the reviewer
+    // drags the box instead of trusting the numbers beside it.
+    if (v.detector === 'colour') {
+      badges.append(el('span', 'b bad',
+        'box from the colour fallback — check it and drag if wrong'));
+    }
     approve.disabled = !(sizeOk && zoneOk);
     current = v;
   }

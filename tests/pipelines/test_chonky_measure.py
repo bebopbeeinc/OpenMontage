@@ -2,6 +2,7 @@ from PIL import Image
 
 from scripts.chonky.geometry import IMG_W, IMG_H
 from scripts.chonky.measure import _detect_by_colour, detect_chonky, verify
+from scripts.chonky import measure
 
 
 def _blank():
@@ -143,3 +144,68 @@ def test_detection_falls_back_to_colour_when_no_model(monkeypatch):
     box = m.detect_chonky(img)
     assert box is not None, "must still find him via the colour fallback"
     assert abs((box[3] - box[1]) - 89) <= 4
+
+
+# --------------------------------------------------------------------------
+# The silent-fallback bug
+#
+# A real Prague render came back measured at 278 px "too_big", and the box was
+# on a pedestrian under a sunlit arch, not on the cat. YOLO takes the
+# highest-confidence cat, so it could not have produced that box — the colour
+# heuristic did, because the model failed to load and nothing said so.
+# --------------------------------------------------------------------------
+
+def test_verify_says_which_method_produced_the_box():
+    """A colour box is a guess; a YOLO box is a measurement. They must not look alike."""
+    img = Image.new("RGB", (2048, 2560), (120, 120, 120))
+    result = measure.verify(img, detector=lambda _i: (900, 1000, 980, 1090))
+    assert result["detector"] == "injected"
+
+    manual = measure.verify(img, box=(900, 1000, 980, 1090))
+    assert manual["detector"] == "manual"
+
+
+def test_colour_fallback_is_labelled_as_colour(monkeypatch):
+    """When the model is unavailable the result must admit which method ran."""
+    monkeypatch.setattr(measure, "_detect_by_model", lambda _img: None)
+    monkeypatch.setattr(measure, "_detect_by_colour", lambda _img: (900, 1000, 980, 1090))
+    img = Image.new("RGB", (2048, 2560), (120, 120, 120))
+    assert measure.verify(img)["detector"] == "colour"
+
+
+def test_yolo_box_is_labelled_as_yolo(monkeypatch):
+    monkeypatch.setattr(measure, "_detect_by_model", lambda _img: (900, 1000, 980, 1090))
+    img = Image.new("RGB", (2048, 2560), (120, 120, 120))
+    assert measure.verify(img)["detector"] == "yolo"
+
+
+def test_a_broken_dependency_is_reported_not_swallowed(monkeypatch):
+    """`ImportError` is not only "not installed" — it is also "installed but broken".
+
+    Swallowing it is what let the pipeline keep running on the colour heuristic
+    with a green health check beside it.
+    """
+    monkeypatch.setattr(measure, "_model", None)
+    monkeypatch.setattr(measure, "_model_error", None)
+
+    import builtins
+    real_import = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name.startswith("ultralytics"):
+            raise ImportError("libtorch_cpu.dylib: incompatible architecture")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", boom)
+    status = measure.detector_status()
+    assert status["ok"] is False
+    assert "incompatible architecture" in status["error"]
+
+
+def test_detector_status_reports_ok_when_the_model_loads(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(measure, "_model", sentinel)
+    monkeypatch.setattr(measure, "_model_error", None)
+    status = measure.detector_status()
+    assert status["ok"] is True
+    assert status["error"] is None
