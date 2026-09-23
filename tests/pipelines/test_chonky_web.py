@@ -202,3 +202,11 @@ def test_measure_reports_the_viewframe_for_the_render():
     finally:
         (srv.LIBRARY / "vf-probe.png").unlink(missing_ok=True)
         srv._images.pop("vf-probe", None)
+
+
+def test_the_model_sheet_is_servable_for_comparison():
+    """Likeness is the one check no code can make, so the reviewer must see him."""
+    r = client.get("/api/reference")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert len(r.content) > 10_000
