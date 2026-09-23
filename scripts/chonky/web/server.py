@@ -80,6 +80,9 @@ class Job:
     submission: list[str] = field(default_factory=list)
 
 
+# The five difficulty levels the game has.
+LEVELS = (1, 2, 3, 4, 5)
+
 jobs: dict[str, Job] = {}
 _images: dict[str, Path] = {}
 _lock = threading.Lock()
@@ -415,7 +418,24 @@ def generate(payload: dict) -> dict:
     OpenArt: a bad prompt is cheap, a render is not.
     """
     count = max(1, min(int(payload.get("count", 1)), 12))
-    difficulty = payload.get("difficulty", 1)
+    # "all" means the count for EACH level, not the count divided between
+    # them: a batch of three at every level is fifteen images, and saying so
+    # is the operator's decision to make rather than ours to soften.
+    requested = payload.get("difficulty", 1)
+    if str(requested).strip().lower() == "all":
+        levels = list(LEVELS)
+    else:
+        try:
+            level = int(requested)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"error": f"difficulty must be a level or 'all', got {requested!r}"},
+                status_code=400)
+        if level not in LEVELS:
+            return JSONResponse(
+                {"error": f"difficulty must be one of {LEVELS} or 'all'"},
+                status_code=400)
+        levels = [level]
     cities = payload.get("cities") or []
     pct = int(payload.get("viewframe_pct", 70))
     weights = payload.get("weights") or {}
@@ -431,24 +451,29 @@ def generate(payload: dict) -> dict:
     history: list[dict] = []
     plan = []
     out = []
+    # The zone split is a property of the batch as a whole, so the ledger runs
+    # across every level rather than restarting at each one.
     for i in range(count):
-        decision = next_zone(history, pct)
-        history.append({"chonky_zone": decision["target_zone"]})
-        image_id = uuid.uuid4().hex[:8]
-        job_id = uuid.uuid4().hex[:8]
-        with _lock:
-            jobs[job_id] = Job(id=job_id, slug=image_id, image_id=image_id,
-                               status="drafting")
-        spec = (cities[i] if i < len(cities) else None) or None
-        city, country = _split_location(spec) if spec else (None, None)
-        plan.append((job_id, image_id, decision["target_zone"], city, country))
-        out.append({"job_id": job_id, "image_id": image_id,
-                    "target_zone": decision["target_zone"]})
+        for level in levels:
+            decision = next_zone(history, pct)
+            history.append({"chonky_zone": decision["target_zone"]})
+            image_id = uuid.uuid4().hex[:8]
+            job_id = uuid.uuid4().hex[:8]
+            with _lock:
+                jobs[job_id] = Job(id=job_id, slug=image_id, image_id=image_id,
+                                   status="drafting")
+            spec = (cities[i] if i < len(cities) else None) or None
+            city, country = _split_location(spec) if spec else (None, None)
+            plan.append((job_id, image_id, decision["target_zone"], city, country,
+                         level))
+            out.append({"job_id": job_id, "image_id": image_id,
+                        "target_zone": decision["target_zone"],
+                        "difficulty": level})
 
     def _draft_all() -> None:
-        for job_id, image_id, zone, city, country in plan:
+        for job_id, image_id, zone, city, country, level in plan:
             try:
-                d = prompt_writer.draft(difficulty=difficulty, target_zone=zone,
+                d = prompt_writer.draft(difficulty=level, target_zone=zone,
                                         used=used, city=city, country=country,
                                         weights=weights)
             except Exception as exc:              # noqa: BLE001 - shown in the UI
@@ -466,7 +491,7 @@ def generate(payload: dict) -> dict:
             threading.Thread(
                 target=_run_render_inline,
                 args=(job_id, image_id, d["prompt"]),
-                kwargs=dict(location=location, difficulty=difficulty,
+                kwargs=dict(location=location, difficulty=level,
                             target_zone=zone, clues=d["clues"],
                             clue_words=d.get("clue_words"),
                             aspect=aspect, resolution=resolution,
