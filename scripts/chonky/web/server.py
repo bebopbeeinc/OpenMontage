@@ -182,6 +182,10 @@ def _readiness() -> dict:
                   else f"missing at {sa} — Drive and Sheets writes will fail",
     }
 
+    # Invalidate first: a package installed while this process was already
+    # running is invisible until the path cache is refreshed, which makes a
+    # successful install look like a failed one.
+    importlib.invalidate_caches()
     has_yolo = importlib.util.find_spec("ultralytics") is not None
     checks["detector"] = {
         "ok": has_yolo,
@@ -194,6 +198,16 @@ def _readiness() -> dict:
     checks["workspace"] = {
         "ok": True,
         "detail": os.environ.get("CHONKY_OPENART_WORKSPACE", "R N (default)"),
+    }
+
+    # Which interpreter is actually serving this. Without it, "dependency
+    # missing" is ambiguous between a failed install and an install that
+    # landed in a different Python — the usual cause on a machine with
+    # several.
+    import sys as _sys
+    checks["python"] = {
+        "ok": True,
+        "detail": f"{_sys.executable} ({_sys.version.split()[0]})",
     }
     return checks
 
