@@ -81,6 +81,18 @@
               overflow:auto;flex:1 1 auto;min-height:0}
   .modal-img{flex:1 1 320px;min-width:260px}
   .modal-edit{flex:1 1 380px;min-width:280px;display:flex;flex-direction:column}
+  .shot{position:relative;line-height:0}
+  .phone{position:absolute;border:1px solid #f85149;pointer-events:none;
+         box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+  button.danger{background:#5a1f1c;color:#ffb4ae}
+  button.danger:hover{background:#7a2a26}
+  .weights{display:grid;gap:8px 16px;margin:10px 0 2px;
+           grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}
+  .weights label{color:var(--muted);font-size:12px;display:flex;
+                 justify-content:space-between;align-items:center;gap:8px}
+  select{background:#0f1115;color:var(--ink);border:1px solid var(--line);
+         border-radius:6px;padding:4px 6px;font-size:12px}
+  summary{cursor:pointer}
   .modal-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;
               margin-top:14px;flex:none;padding-top:14px;
               border-top:1px solid var(--line)}
@@ -106,8 +118,14 @@
     <label class="geo">ViewFrame share
       <input id="pct" type="number" value="70" min="0" max="100" style="width:64px">%
     </label>
+    <label class="geo">Ratio <select id="aspect"></select></label>
+    <label class="geo">Resolution <select id="resolution"></select></label>
     <button id="generate">Generate</button>
   </div>
+  <details id="weights-box">
+    <summary class="geo">Clue emphasis — leave any at Default to keep the manual's own weighting</summary>
+    <div id="weights" class="weights"></div>
+  </details>
   <div class="row">
     <label class="geo" style="flex:1">Specific cities (optional, one per line — blank means the tool chooses)
       <textarea id="cities" style="height:60px" placeholder="Prague, Czech Republic"></textarea>
@@ -132,7 +150,53 @@ async function api(path, body) {
   return r.json();
 }
 
+function fillSelect(el, options, selected) {
+  el.innerHTML = '';
+  options.forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o; opt.textContent = o;
+    if (o === selected) opt.selected = true;
+    el.appendChild(opt);
+  });
+}
+
+// The dropdowns are filled from the server, which takes them from OpenArt's
+// own form schema. A second hand-kept copy here is how a dropdown ends up
+// offering something the model rejects.
+function fillControls(h) {
+  fillSelect(document.getElementById('aspect'), h.aspect_ratios, h.default_aspect);
+  fillSelect(document.getElementById('resolution'), h.resolution_tiers, h.default_resolution);
+
+  const host = document.getElementById('weights');
+  host.innerHTML = '';
+  Object.entries(h.clue_families || {}).forEach(([key, label]) => {
+    const wrap = document.createElement('label');
+    wrap.append(document.createTextNode(label));
+    const sel = document.createElement('select');
+    sel.dataset.family = key;
+    // "Default" is not a weight of zero. It means the operator has no opinion,
+    // and the family keeps exactly the standing the manual gives it.
+    ['Default', '1', '2', '3', '4', '5'].forEach(v => {
+      const o = document.createElement('option');
+      o.value = v === 'Default' ? '' : v;
+      o.textContent = v;
+      sel.appendChild(o);
+    });
+    wrap.appendChild(sel);
+    host.appendChild(wrap);
+  });
+}
+
+function collectWeights() {
+  const out = {};
+  document.querySelectorAll('#weights select').forEach(sel => {
+    if (sel.value) out[sel.dataset.family] = +sel.value;
+  });
+  return out;
+}
+
 api('api/health').then(h => {
+  fillControls(h);
   document.getElementById('geo').textContent =
     `${h.image} · ViewFrame ${h.viewframe} · Chonky ${h.chonky_height_px} px`;
   VF = h.viewframe_box;
@@ -150,6 +214,9 @@ generateBtn.onclick = async () => {
     count: +document.getElementById('count').value,
     difficulty: +document.getElementById('difficulty').value,
     viewframe_pct: +document.getElementById('pct').value,
+    aspect: document.getElementById('aspect').value,
+    resolution: document.getElementById('resolution').value,
+    weights: collectWeights(),
     cities,
   };
   const res = await api('api/generate', body);
@@ -176,6 +243,10 @@ function tile(r) {
   const t = el('div', 'tile');
   t.appendChild(el('div', 'cap', r.location || r.image_id));
 
+  // The red rectangle is the phone screen: what the player opens on, before
+  // they pan or zoom. Everything outside it is the exploration reward, so a
+  // clue's worth depends entirely on which side of this line it falls.
+  const shot = el('div', 'shot');
   const a = document.createElement('a');
   a.href = `api/frame/${r.image_id}`;
   a.target = '_blank';
@@ -183,7 +254,20 @@ function tile(r) {
   im.src = `api/frame/${r.image_id}`;
   im.style.cssText = 'width:100%;display:block';
   a.appendChild(im);
-  t.appendChild(a);
+  shot.appendChild(a);
+
+  const vfb = m && m.viewframe_box;
+  const frame = m && m.frame_size;
+  if (vfb && frame) {
+    const phone = el('div', 'phone');
+    phone.style.left = (100 * vfb[0] / frame[0]) + '%';
+    phone.style.top = (100 * vfb[1] / frame[1]) + '%';
+    phone.style.width = (100 * (vfb[2] - vfb[0]) / frame[0]) + '%';
+    phone.style.height = (100 * (vfb[3] - vfb[1]) / frame[1]) + '%';
+    phone.title = 'What the player sees before panning or zooming';
+    shot.appendChild(phone);
+  }
+  t.appendChild(shot);
 
   const badge = el('span', 'b ' + (m ? (m.ok ? 'ok' : 'bad') : ''),
     m ? `${m.height_px} px · ${m.size} · ${m.zone}` : 'not measured');
@@ -206,9 +290,30 @@ function tile(r) {
   const approve = el('button', null, 'Approve');
   const rejectBtn = el('button', 'ghost', 'Reject');
   const edit = el('button', 'ghost', 'Edit');
+  const del = el('button', 'danger', 'Delete');
   const note = el('span', 'wc', '');
-  actions.append(approve, rejectBtn, edit, note);
+  actions.append(approve, rejectBtn, edit, del, note);
   t.appendChild(actions);
+
+  // Delete reaches Drive and the sheet as well as the library, and none of
+  // that comes back. The second click is the point.
+  del.onclick = async () => {
+    const where = r.approved
+      ? 'This will delete the image from Drive, its row from the sheet, and the render itself.'
+      : 'This will delete the render. It was never delivered, so nothing on Drive or the sheet changes.';
+    if (!window.confirm(`${where}\n\n${r.location || r.image_id}\n\nDelete it?`)) return;
+    del.disabled = true;
+    note.textContent = 'deleting…';
+    const res = await api('api/delete', {image_id: r.image_id});
+    if (res.error) { note.textContent = res.error; del.disabled = false; return; }
+    const d = res.delivery;
+    if (d && (d.drive === false || d.sheet === false)) {
+      window.alert('The render is gone, but part of the delivery was not removed:\n\n' +
+        (d.drive_error ? `Drive: ${d.drive_error}\n` : '') +
+        (d.sheet_error ? `Sheet: ${d.sheet_error}` : ''));
+    }
+    loadGallery();
+  };
 
   // Approve is the only write path: Drive plus the sheet row.
   approve.disabled = !(m && m.ok) || r.approved;

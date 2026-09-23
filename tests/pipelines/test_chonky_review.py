@@ -110,8 +110,8 @@ def test_reject_marks_the_render_and_keeps_the_file(monkeypatch):
 def test_regenerate_renders_the_edited_prompt_as_a_new_image(monkeypatch):
     """The original stays; an edit is a new attempt, not a rewrite of history."""
     monkeypatch.setattr(server, "render_once",
-                        lambda p, o, log=None: (Image.new("RGB", (1344, 1680),
-                                                          (9, 9, 9)).save(o), o)[1])
+                        lambda p, o, log=None, **kw: (Image.new("RGB", (1344, 1680),
+                                                                (9, 9, 9)).save(o), o)[1])
     _render("regen-a")
     made = []
     try:

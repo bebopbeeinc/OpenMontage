@@ -24,7 +24,7 @@ DRAFT = {
 }
 
 
-def _fake_render(prompt, out, log=None):
+def _fake_render(prompt, out, log=None, **kw):
     Image.new("RGB", (1344, 1680), (150, 150, 150)).save(out)
     return out
 

@@ -46,7 +46,10 @@ from scripts.chonky.deliver import deliver  # noqa: E402
 from scripts.chonky.deliver import remove as remove_delivery  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
-from scripts.chonky.render import CHARACTER, render_once  # noqa: E402
+from scripts.chonky.render import (  # noqa: E402
+    ASPECT, ASPECT_RATIOS, CHARACTER, RESOLUTION, RESOLUTION_TIERS,
+    normalise_aspect, normalise_tier, render_once,
+)
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
 from scripts.chonky import prompts as prompt_writer  # noqa: E402
@@ -235,6 +238,14 @@ def health() -> dict:
         "chonky_height_px": f"{geo.CHONKY_MIN_H}-{geo.CHONKY_MAX_H} at that size; "
                             f"each render is measured in its own",
         "viewframe_box": [geo.VF_X0, geo.VF_Y0, geo.VF_X1, geo.VF_Y1],
+        # Straight from the render module, which takes them from OpenArt's own
+        # form schema. A second hand-maintained copy in the page is how a
+        # dropdown ends up offering something the model rejects.
+        "aspect_ratios": list(ASPECT_RATIOS),
+        "resolution_tiers": list(RESOLUTION_TIERS),
+        "default_aspect": ASPECT,
+        "default_resolution": RESOLUTION,
+        "clue_families": prompt_writer.CLUE_FAMILIES,
         "all_ready": all(c["ok"] for c in ready.values()),
         "ready": ready,
     }
@@ -379,7 +390,8 @@ def draft_only(payload: dict) -> dict:
     try:
         d = prompt_writer.draft(difficulty=payload.get("difficulty", 1),
                                 target_zone=zone, used=used,
-                                city=city, country=country)
+                                city=city, country=country,
+                                weights=payload.get("weights") or {})
     except Exception as exc:                          # noqa: BLE001 - shown in the UI
         return JSONResponse({"error": f"{exc}"}, status_code=400)
     return {**d, "target_zone": zone}
@@ -401,6 +413,12 @@ def generate(payload: dict) -> dict:
     difficulty = payload.get("difficulty", 1)
     cities = payload.get("cities") or []
     pct = int(payload.get("viewframe_pct", 70))
+    weights = payload.get("weights") or {}
+    try:
+        aspect = normalise_aspect(payload.get("aspect"))
+        resolution = normalise_tier(payload.get("resolution"))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     used = _used_locations()
     history: list[dict] = []
@@ -424,7 +442,8 @@ def generate(payload: dict) -> dict:
         for job_id, image_id, zone, city, country in plan:
             try:
                 d = prompt_writer.draft(difficulty=difficulty, target_zone=zone,
-                                        used=used, city=city, country=country)
+                                        used=used, city=city, country=country,
+                                        weights=weights)
             except Exception as exc:              # noqa: BLE001 - shown in the UI
                 with _lock:
                     job = jobs[job_id]
@@ -442,7 +461,8 @@ def generate(payload: dict) -> dict:
                 args=(job_id, image_id, d["prompt"]),
                 kwargs=dict(location=location, difficulty=difficulty,
                             target_zone=zone, clues=d["clues"],
-                            clue_words=d.get("clue_words")),
+                            clue_words=d.get("clue_words"),
+                            aspect=aspect, resolution=resolution),
                 daemon=True,
             ).start()
 
@@ -452,11 +472,12 @@ def generate(payload: dict) -> dict:
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
-                       clue_words=None) -> None:
+                       clue_words=None, aspect=None, resolution=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
-        render_once(prompt, out, log=submission)
+        render_once(prompt, out, log=submission, aspect=aspect,
+                    resolution=resolution)
         with Image.open(out) as im:
             result = verify(im)
         with _lock:
@@ -469,7 +490,8 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
         # without them Approve refuses the render it just made.
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
-                       clues=clues, clue_words=clue_words, measurement=result)
+                       clues=clues, clue_words=clue_words, measurement=result,
+                       aspect=aspect, resolution=resolution)
     except Exception as exc:                          # surfaced to the UI as-is
         with _lock:
             job = jobs[job_id]

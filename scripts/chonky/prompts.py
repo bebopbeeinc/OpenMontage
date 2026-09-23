@@ -31,6 +31,26 @@ MODEL = os.environ.get("CHONKY_PROMPT_MODEL", "claude-sonnet-5")
 
 _REQUIRED = ("city", "country", "prompt", "clues", "clue_words")
 
+# The manual's own ranked list of clue families (section 5.3), in its order.
+# An operator can ask for more of one without it costing the others: these are
+# emphases, not a budget being divided up.
+CLUE_FAMILIES = {
+    "road_markings": "Road markings",
+    "road_signs": "Road signs",
+    "language": "Language and writing system",
+    "driving_side": "Driving side",
+    "licence_plates": "Licence plates",
+    "flags": "Flags",
+    "landmark": "Famous landmark or monument",
+    "bollards": "Bollards and roadside posts",
+    "utility_poles": "Utility poles",
+    "transit": "Transit",
+    "architecture": "Architecture and building materials",
+    "street_furniture": "Street furniture",
+    "vegetation": "Vegetation, climate, terrain",
+    "infrastructure": "Distinctive local infrastructure",
+}
+
 
 class DraftError(RuntimeError):
     """The model's reply cannot be used as a prompt.
@@ -91,6 +111,21 @@ Two things are checked on your answer, and it is rejected without them:
      of furniture. Naming a prop as his surface makes the prop the
      subject and brings both toward the camera. Put the prop in the
      scene and put him on the ground near it.
+
+NOT A CROWD SCENE. These images keep coming back packed with tourists,
+and a crowd is the worst thing that can happen to this game: it hides
+the clues the player is meant to read, it hides Chonky, and it dates the
+photograph to a moment rather than a place. Write a quiet moment. A
+handful of people at most, often none at all, and never a queue, a
+throng or a busy square.
+
+Be careful here, because rule 1 pulls the other way: people are the
+easiest thing to put between the camera and Chonky, and reaching for
+them is how the frame fills up. Depth can be measured against anything
+already standing in the scene — "beyond the last market stall", "behind
+the far lamppost", "further down the quay than the moored boats",
+"deeper in than the second archway". Use those first, and people only
+when the place genuinely has a few.
 
 =====================================================================
 """
@@ -253,8 +288,41 @@ def _check(prompt: str) -> None:
             "the furthest one, or far beyond all of them", prompt)
 
 
+def _weights_section(weights: Optional[dict]) -> list[str]:
+    """Render the operator's emphases, or say nothing at all.
+
+    Saying nothing is the default on purpose: an unset family must behave
+    exactly as the manual already describes, so the absence of an opinion must
+    not arrive as an opinion.
+    """
+    if not weights:
+        return []
+
+    lines = []
+    for key, weight in weights.items():
+        if key not in CLUE_FAMILIES:
+            raise ValueError(
+                f"unknown clue family {key!r}; expected one of "
+                f"{', '.join(sorted(CLUE_FAMILIES))}")
+        if not isinstance(weight, int) or isinstance(weight, bool) or not 1 <= weight <= 5:
+            raise ValueError(
+                f"weight for {key!r} must be a whole number from 1 to 5, got {weight!r}")
+        lines.append(f"  - {CLUE_FAMILIES[key]}: {weight}")
+
+    if not lines:
+        return []
+    return ["", "Emphasis requested for this image, 1 to 5 where 5 is strongest:"] + \
+        sorted(lines) + [
+        "",
+        "These are additions, not a share-out. A high weight on one family "
+        "does not reduce any other, and a family not listed here keeps exactly "
+        "the weight the manual gives it — do not drop it or play it down.",
+    ]
+
+
 def _user_message(difficulty: int, target_zone: str, used: list[str],
-                  city: Optional[str], country: Optional[str]) -> str:
+                  city: Optional[str], country: Optional[str],
+                  weights: Optional[dict] = None) -> str:
     lines = [
         f"Write ONE image prompt for difficulty {difficulty}.",
         "",
@@ -270,6 +338,7 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
         lines += ["", "These locations are already used. Do not reuse any of them, "
                       "and do not use a different viewpoint in the same city:"]
         lines += [f"  - {u}" for u in used]
+    lines += _weights_section(weights)
     lines += [
         "",
         "Reply with JSON only, no prose around it:",
@@ -291,6 +360,7 @@ MAX_ATTEMPTS = 3
 
 def draft(*, difficulty: int, target_zone: str, used: list[str],
           city: Optional[str] = None, country: Optional[str] = None,
+          weights: Optional[dict] = None,
           caller: Optional[Callable] = None, model: Optional[str] = None) -> dict:
     """Write one prompt, retrying with the reason when one is rejected.
 
@@ -301,7 +371,7 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
     """
     caller = caller or _default_caller
     system = writer_manual()
-    ask = _user_message(difficulty, target_zone, used, city, country)
+    ask = _user_message(difficulty, target_zone, used, city, country, weights)
 
     last: Optional[DraftError] = None
     for _ in range(MAX_ATTEMPTS):
