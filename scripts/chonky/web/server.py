@@ -500,7 +500,8 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
                        clues=clues, clue_words=clue_words, measurement=result,
-                       aspect=aspect, resolution=resolution)
+                       aspect=aspect, resolution=resolution,
+                       width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is
         with _lock:
             job = jobs[job_id]
@@ -653,6 +654,9 @@ def renders():
             "target_zone": side.get("target_zone"),
             "clues": side.get("clues"),
             "clue_words": side.get("clue_words"),
+            "aspect": side.get("aspect"),
+            "width": side.get("width"),
+            "height": side.get("height"),
             "approved": side.get("approved", False),
             "rejected": side.get("rejected", False),
             "reject_reason": side.get("reject_reason"),
@@ -824,7 +828,11 @@ def regenerate(payload: dict) -> dict:
     is what makes it possible to see which edit changed what.
     """
     source_id = payload.get("image_id", "")
-    prompt = (payload.get("prompt") or "").strip()
+    side = _read_sidecar(source_id)
+    # No prompt means "the same image again". Making the caller resend it is
+    # how a stale copy from an open tab becomes the thing rendered — a silent
+    # edit nobody made.
+    prompt = (payload.get("prompt") or side.get("prompt") or "").strip()
     if not prompt:
         return JSONResponse({"error": "prompt is empty"}, status_code=400)
 
@@ -835,7 +843,6 @@ def regenerate(payload: dict) -> dict:
     except prompt_writer.DraftError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    side = _read_sidecar(source_id)
     image_id = uuid.uuid4().hex[:8]
     job_id = uuid.uuid4().hex[:8]
     with _lock:
@@ -844,9 +851,14 @@ def regenerate(payload: dict) -> dict:
     threading.Thread(
         target=_run_render_inline,
         args=(job_id, image_id, prompt),
+        # The size travels with the reroll: a second attempt that quietly
+        # comes back at a different resolution is not a second attempt at the
+        # same image.
         kwargs=dict(location=side.get("location"), difficulty=side.get("difficulty"),
                     target_zone=side.get("target_zone"), clues=side.get("clues"),
-                    clue_words=side.get("clue_words")),
+                    clue_words=side.get("clue_words"),
+                    aspect=side.get("aspect"), resolution=side.get("resolution"),
+                    width=side.get("width"), height=side.get("height")),
         daemon=True,
     ).start()
     return {"job_id": job_id, "image_id": image_id, "from": source_id}
