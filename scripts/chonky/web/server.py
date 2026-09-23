@@ -43,7 +43,7 @@ if str(REPO) not in sys.path:
 from scripts.chonky import geometry as geo  # noqa: E402
 from scripts.chonky.deliver import deliver  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
-from scripts.chonky.measure import verify  # noqa: E402
+from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import render_once  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
@@ -186,13 +186,16 @@ def _readiness() -> dict:
     # running is invisible until the path cache is refreshed, which makes a
     # successful install look like a failed one.
     importlib.invalidate_caches()
-    has_yolo = importlib.util.find_spec("ultralytics") is not None
+    # Then actually load it. "The name resolves on disk" and "this imports and
+    # a model can be constructed" are different claims, and the gap between
+    # them is invisible from outside: the pipeline keeps running, quietly
+    # measuring with the colour heuristic instead.
+    det = detector_status()
     checks["detector"] = {
-        "ok": has_yolo,
-        "detail": "ultralytics installed" if has_yolo
-                  else "ultralytics missing — measurement falls back to a colour "
-                       "heuristic that is unreliable on sunlit scenes "
-                       "(pip install -r requirements-detect.txt)",
+        "ok": det["ok"],
+        "detail": f"{det['model']} ready" if det["ok"]
+                  else f"detector unusable, falling back to the colour "
+                       f"heuristic (unreliable on sunlit scenes) — {det['error']}",
     }
 
     checks["workspace"] = {

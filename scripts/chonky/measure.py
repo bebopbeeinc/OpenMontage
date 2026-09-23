@@ -191,11 +191,12 @@ def verify(img: Image.Image, box: Optional[Box] = None, detector=None) -> dict:
     injectable so callers and tests can choose how the box is found when none
     is supplied.
     """
+    source = "manual"
     if box is None:
-        box = detect_chonky(img, detector=detector)
+        box, source = detect_with_source(img, detector=detector)
     if box is None:
         return {"box": None, "height_px": None, "size": "not_found",
-                "zone": "not_found", "ok": False}
+                "zone": "not_found", "ok": False, "detector": source}
 
     x0, y0, x1, y1 = box
     height = y1 - y0
@@ -207,6 +208,9 @@ def verify(img: Image.Image, box: Optional[Box] = None, detector=None) -> dict:
         "size": size,
         "zone": zone,
         "ok": size == "ok" and zone in ("viewframe", "margin"),
+        # Which method produced this box. A colour-sourced box is a guess and
+        # the reviewer needs to know before trusting the numbers beside it.
+        "detector": source,
     }
 
 
@@ -220,18 +224,44 @@ _INFER_SIZE = 2560             # downscaling below this loses him entirely
 _MIN_CONF = 0.10               # a true 89 px cat scored 0.32; leave headroom
 
 _model = None
+_model_error: Optional[str] = None
 
 
 def _load_model():
-    """Load the detector once per process. None if ultralytics is absent."""
-    global _model
+    """Load the detector once per process. None if it cannot be loaded.
+
+    The reason is kept in `_model_error` rather than discarded. `ImportError`
+    here does not only mean "ultralytics is not installed" — it is also what a
+    broken dependency underneath it raises, and swallowing that silently
+    downgrades every later measurement to the colour heuristic with nothing
+    said. That is how a pedestrian came back as the cat.
+    """
+    global _model, _model_error
     if _model is None:
         try:
             from ultralytics import YOLO
-        except ImportError:
+        except Exception as exc:                  # noqa: BLE001 - reported, not raised
+            _model_error = f"{type(exc).__name__}: {exc}"
             return None
-        _model = YOLO(_MODEL_NAME)
+        try:
+            _model = YOLO(_MODEL_NAME)
+        except Exception as exc:                  # noqa: BLE001 - weights download, etc.
+            _model_error = f"{type(exc).__name__}: {exc}"
+            return None
+        _model_error = None
     return _model
+
+
+def detector_status() -> dict:
+    """Whether the real detector can actually be used, and why not if it cannot.
+
+    Deliberately imports rather than checking `importlib.util.find_spec`:
+    find_spec proves the name resolves on disk, which is not the same claim as
+    "this imports", and the gap between those two is where a silent fallback
+    lives.
+    """
+    model = _load_model()
+    return {"ok": model is not None, "model": _MODEL_NAME, "error": _model_error}
 
 
 def _detect_by_model(img: Image.Image) -> Optional[Box]:
@@ -250,13 +280,22 @@ def _detect_by_model(img: Image.Image) -> Optional[Box]:
     return max(cats)[1]
 
 
-def detect_chonky(img: Image.Image, detector=None) -> Optional[Box]:
-    """Locate the single cat in the frame.
+def detect_with_source(img: Image.Image, detector=None) -> tuple[Optional[Box], str]:
+    """Locate the cat, and say which method found him.
 
-    `detector` is injectable so tests never load a model. Falls back to the
-    colour heuristic when no model is available.
+    The source travels with the box because the two methods are not of equal
+    standing: `yolo` agrees with hand measurement to a few pixels, while
+    `colour` is a documented-unreliable fallback. A caller that cannot tell
+    them apart will treat a guess as a measurement.
     """
     if detector is not None:
-        return detector(img)
+        return detector(img), "injected"
     box = _detect_by_model(img)
-    return box if box is not None else _detect_by_colour(img)
+    if box is not None:
+        return box, "yolo"
+    return _detect_by_colour(img), "colour"
+
+
+def detect_chonky(img: Image.Image, detector=None) -> Optional[Box]:
+    """Locate the single cat in the frame."""
+    return detect_with_source(img, detector=detector)[0]
