@@ -125,6 +125,7 @@ def deliver(
     gag: str = "",
     batch_no: int = 1,
     openart_url: str = "",
+    status: Optional[str] = None,
     uploader: Optional[Callable[[bytes, str], str]] = None,
     sheet_writer: Optional[Callable[[dict], None]] = None,
 ) -> dict:
@@ -145,10 +146,14 @@ def deliver(
             size = size_verdict(h, frame)
             zone = classify_zone(box[0], box[2], box[1], box[3], frame)
         if size != "ok" or zone not in ("viewframe", "margin"):
-            raise ValueError(
-                f"image is not verified (size={size}, zone={zone}); "
-                "reroll it rather than delivering it"
-            )
+            # A caller that has decided to file a near miss says so by passing
+            # a status. Without one this stays a refusal, so a failing image
+            # cannot be delivered by accident.
+            if status is None:
+                raise ValueError(
+                    f"image is not verified (size={size}, zone={zone}); "
+                    "reroll it rather than delivering it"
+                )
 
     filename = build_filename(difficulty, city, country, clue_words)
     data, quality = encode_delivery(img)
@@ -180,7 +185,9 @@ def deliver(
         "filename": filename,
         "drive_link": drive_link,
         "openart_url": openart_url,
-        "status": "verified",
+        # "verified" is a claim about the checks, so an image that failed them
+        # must not carry it. The sheet is the record other people read.
+        "status": status or "verified",
         "chonky_zone": zone,
         "chonky_px_h": measurement.get("height_px"),
         # The pixel height only means something next to the frame it was

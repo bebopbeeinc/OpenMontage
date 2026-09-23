@@ -734,10 +734,14 @@ def approve(payload: dict) -> dict:
     # and a hard constraint that a caller can assert its way past is not one.
     x0, y0, x1, y1 = (int(v) for v in box)
     verdict = verify(img, box=(x0, y0, x1, y1))
-    if not verdict["ok"]:
-        return JSONResponse({"error": (
-            f"render failed its checks: {verdict['height_px']} px "
-            f"{verdict['size']}, zone {verdict['zone']}")}, status_code=400)
+    failed = (f"{verdict['height_px']} px {verdict['size']}, "
+              f"zone {verdict['zone']}") if not verdict["ok"] else None
+    if failed and not payload.get("override"):
+        # The reviewer can overrule the band, but only by saying so. A caller
+        # that merely asserts a passing verdict is a different thing, and that
+        # is the one this refuses.
+        return JSONResponse({"error": f"render failed its checks: {failed}",
+                             "can_override": True}, status_code=400)
     measurement = verdict
 
     clue_words = payload.get("clue_words") or side.get("clue_words")
@@ -760,11 +764,15 @@ def approve(payload: dict) -> dict:
             scene_type=payload.get("scene_type", ""),
             gag=payload.get("gag", ""),
             batch_no=int(payload.get("batch_no", 1)),
+            # Stated rather than defaulted: this is the code that recomputed
+            # the verdict, so it is the one that should say what it found.
+            status=f"approved despite {failed}" if failed else "verified",
         )
     except Exception as exc:
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
 
     _write_sidecar(image_id, approved=True, rejected=False,
+                   approved_despite=failed,
                    drive_url=result.get("drive_url") or result.get("drive_link"),
                    drive_file_id=result.get("drive_file_id"),
                    filename=result.get("filename"))
