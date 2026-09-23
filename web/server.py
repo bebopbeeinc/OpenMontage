@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -302,6 +303,97 @@ async def jobs_active():
     """Lets the UI disable the Deploy button while pipeline runs are in flight."""
     active = _scan_active_jobs()
     return {"count": len(active), "jobs": active}
+
+
+_install_state: dict = {
+    "state": "idle",      # idle | running | done | failed
+    "log": "",
+    "returncode": None,
+    "files": [],
+}
+_install_lock = threading.Lock()
+
+
+def _requirements_files() -> list[str]:
+    """The repo's committed requirements files, as git knows them.
+
+    Deliberately read from `git ls-files` rather than a filesystem glob: the
+    installer executes whatever these files name, so it must only ever see
+    files that are actually in the repository, never a stray one left in the
+    working tree.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "requirements*.txt"],
+        cwd=str(REPO), capture_output=True, text=True, timeout=30,
+    )
+    return sorted(f for f in out.stdout.split() if f)
+
+
+def _run_install() -> None:
+    files = _requirements_files()
+    args = [sys.executable, "-m", "pip", "install"]
+    for f in files:
+        args += ["-r", f]
+    log = f"$ {' '.join(args)}\n\n"
+    try:
+        proc = subprocess.run(
+            args, cwd=str(REPO), capture_output=True, text=True, timeout=3600
+        )
+        log += proc.stdout + proc.stderr
+        rc = proc.returncode
+    except Exception as exc:                       # noqa: BLE001 - surfaced to the UI
+        log += f"\n{type(exc).__name__}: {exc}"
+        rc = -1
+    with _install_lock:
+        _install_state.update(
+            state="done" if rc == 0 else "failed",
+            log=log[-20000:],
+            returncode=rc,
+            files=files,
+        )
+
+
+@app.get("/api/install-deps")
+async def install_deps_status():
+    with _install_lock:
+        return dict(_install_state)
+
+
+@app.post("/api/install-deps")
+async def install_deps():
+    """Install the repo's requirements into the interpreter that is serving.
+
+    This exists because a dependency added in git is useless until something
+    installs it on the box, and `git pull` + restart never does. Doing it here
+    means it lands in `sys.executable` by construction — the failure this
+    replaces was an install that succeeded into a *different* Python than the
+    server runs, which looks identical to a failed install from outside.
+
+    Takes no package names. It installs the committed requirements files and
+    nothing else, so an HTTP caller cannot choose what gets executed on the
+    build machine.
+    """
+    with _install_lock:
+        if _install_state["state"] == "running":
+            return JSONResponse(status_code=409, content={
+                "ok": False, "reason": "already_running",
+                "message": "An install is already in progress.",
+            })
+
+    active = _scan_active_jobs()
+    if active:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "reason": "active_jobs", "active_jobs": active,
+            "message": (
+                f"{len(active)} pipeline job(s) still running. Installing now "
+                "could swap a library out from under them."
+            ),
+        })
+
+    with _install_lock:
+        _install_state.update(state="running", log="", returncode=None, files=[])
+    threading.Thread(target=_run_install, daemon=True).start()
+    return {"ok": True, "state": "running", "python": sys.executable}
 
 
 @app.post("/api/deploy")
