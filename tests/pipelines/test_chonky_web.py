@@ -135,3 +135,28 @@ def test_health_reports_which_interpreter_is_serving():
     detail = client.get("/api/health").json()["ready"]["python"]["detail"]
     assert sys.executable in detail
     assert sys.version.split()[0] in detail
+
+
+def test_a_render_survives_a_restart(tmp_path, monkeypatch):
+    """A deploy must not make an image you already paid credits for unreviewable.
+
+    The in-memory index is a cache of the library, not the record of it.
+    """
+    from PIL import Image as _Image
+
+    from scripts.chonky.web import server as srv
+
+    img = _Image.new("RGB", (2048, 2560), (90, 90, 90))
+    img.save(srv.LIBRARY / "restart-probe.png")
+    try:
+        srv._images.pop("restart-probe", None)      # as if the process just started
+        assert srv._open("restart-probe") is not None
+    finally:
+        (srv.LIBRARY / "restart-probe.png").unlink(missing_ok=True)
+        srv._images.pop("restart-probe", None)
+
+
+def test_an_image_that_was_never_rendered_is_still_unknown():
+    from scripts.chonky.web import server as srv
+
+    assert srv._open("no-such-image-at-all") is None
