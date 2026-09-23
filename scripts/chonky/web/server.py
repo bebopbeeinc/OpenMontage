@@ -68,6 +68,8 @@ class Job:
     measurement: Optional[dict] = None
     error: Optional[str] = None
     trace: Optional[str] = None
+    # What the driver said it submitted — workspace and attached references.
+    submission: list[str] = field(default_factory=list)
 
 
 jobs: dict[str, Job] = {}
@@ -309,7 +311,8 @@ def run(payload: dict) -> dict:
     def _work() -> None:
         try:
             out = LIBRARY / f"{image_id}.png"
-            render_once(prompt, out)
+            submission: list[str] = []
+            render_once(prompt, out, log=submission)
             with Image.open(out) as im:
                 result = verify(im)
             with _lock:
@@ -317,6 +320,7 @@ def run(payload: dict) -> dict:
                 job = jobs[job_id]
                 job.status = "success"
                 job.measurement = result
+                job.submission = submission
         except Exception as exc:                      # surfaced to the UI as-is
             with _lock:
                 job = jobs[job_id]
@@ -336,7 +340,7 @@ def job(job_id: str) -> dict:
         return {"state": "unknown"}
     return {"state": {"success": "done", "error": "failed"}.get(j.status, j.status),
             "image_id": j.image_id, "measurement": j.measurement,
-            "error": j.error, "trace": j.trace}
+            "error": j.error, "trace": j.trace, "submission": j.submission}
 
 
 def _open(image_id: str) -> Optional[Image.Image]:

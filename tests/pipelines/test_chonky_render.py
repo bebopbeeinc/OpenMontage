@@ -1,3 +1,6 @@
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from scripts.chonky.render import ASPECT, CHARACTER, MODEL, RESOLUTION, render_once
@@ -89,3 +92,38 @@ def test_workspace_is_configurable(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("CHONKY_OPENART_WORKSPACE", raising=False)
         importlib.reload(r)
+
+
+def test_render_records_what_it_submitted():
+    """"Did the model sheet reach OpenArt?" must be answerable after the fact.
+
+    A render that comes back with the wrong character is otherwise a dead end:
+    nothing raised, so the only evidence that references were attached is that
+    nothing said they weren't.
+    """
+    import sys
+
+    def driver(**kwargs):
+        print("  → character stills: Chonky", file=sys.stderr)
+        print("  → reference image: 01-model-sheet.png", file=sys.stderr)
+        out = kwargs["output_paths"][0]
+        Path(out).write_bytes(b"x")
+        return [out]
+
+    log: list[str] = []
+    with tempfile.TemporaryDirectory() as td:
+        render_once("a prompt", Path(td) / "out.png", driver=driver, log=log)
+
+    joined = "\n".join(log)
+    assert "character stills: Chonky" in joined
+    assert "01-model-sheet.png" in joined
+
+
+def test_render_works_without_a_log():
+    def driver(**kwargs):
+        out = kwargs["output_paths"][0]
+        Path(out).write_bytes(b"x")
+        return [out]
+
+    with tempfile.TemporaryDirectory() as td:
+        assert render_once("p", Path(td) / "o.png", driver=driver).exists()

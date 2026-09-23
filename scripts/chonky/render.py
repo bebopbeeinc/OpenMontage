@@ -36,10 +36,18 @@ WORKSPACE = os.environ.get("CHONKY_OPENART_WORKSPACE", "R N")
 FALLBACK_WORKSPACES: tuple[str, ...] = ()
 
 
-def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = None) -> Path:
+def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = None,
+                log: Optional[list] = None) -> Path:
     """Render `prompt` to `out_path`. One submission, no retries.
 
-    `driver` is injectable so tests never reach OpenArt.
+    `driver` is injectable so tests never reach OpenArt. `log`, when given,
+    collects the driver's own account of the submission — which workspace,
+    and which visual references were attached.
+
+    That last part is not decoration. "Did the model sheet reach OpenArt?" is
+    the first question asked of any render that comes back with the wrong
+    character, and without this it can only be inferred from the fact that
+    nothing raised.
     """
     if driver is None:
         from scripts.trivia_images.openart_image_driver import generate_image
@@ -48,7 +56,37 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    saved = driver(
+    import contextlib
+    import io as _io
+
+    captured = _io.StringIO()
+    # The driver reports the references it attaches on stderr. Tee it rather
+    # than swallow it, so a terminal operator still sees progress.
+    with contextlib.redirect_stderr(_Tee(sys.stderr, captured)):
+        saved = _submit(driver, prompt, out_path)
+    if log is not None:
+        log.extend(captured.getvalue().splitlines())
+    return Path(saved[0])
+
+
+class _Tee:
+    """Write to both streams. `redirect_stderr` replaces the stream entirely."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for st in self._streams:
+            st.write(data)
+        return len(data)
+
+    def flush(self):
+        for st in self._streams:
+            st.flush()
+
+
+def _submit(driver, prompt: str, out_path: Path):
+    return driver(
         prompt=prompt,
         model=MODEL,
         output_paths=[out_path],
@@ -58,4 +96,3 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
         workspace=WORKSPACE,
         fallback_workspaces=FALLBACK_WORKSPACES,
     )
-    return Path(saved[0])
