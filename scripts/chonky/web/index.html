@@ -355,14 +355,29 @@ function tile(r) {
     loadGallery();
   };
 
-  // Approve is the only write path: Drive plus the sheet row.
-  approve.disabled = !(m && m.ok) || r.approved;
-  if (m && !m.ok) approve.title = 'This render failed its size or zone check.';
+  // Approve is the only write path: Drive plus the sheet row. It stays live
+  // even when the measurement failed — the band is the pipeline's opinion and
+  // the reviewer's is the deciding one — but the red badge still says what is
+  // wrong, and filing a failure takes a second, deliberate click.
+  approve.disabled = !m || r.approved;
+  if (m && !m.ok) {
+    approve.title = `This render failed: ${m.height_px} px ${m.size}, zone ${m.zone}.`;
+  }
 
   approve.onclick = async () => {
+    if (m && !m.ok) {
+      const band = m.band_px ? `${m.band_px[0]}–${m.band_px[1]} px` : 'the band';
+      if (!window.confirm(
+        `This render failed its checks:\n\n` +
+        `  Chonky is ${m.height_px} px (${m.size}) against ${band}\n` +
+        `  Zone: ${m.zone}\n\n` +
+        `Approving files it anyway. The sheet will record that it was ` +
+        `approved despite this, not that it passed.\n\nFile it?`)) return;
+    }
     approve.disabled = true;
     note.textContent = 'saving to Drive…';
-    const res = await api('api/approve', {image_id: r.image_id});
+    const res = await api('api/approve',
+      {image_id: r.image_id, override: !!(m && !m.ok)});
     if (res.error) { note.textContent = res.error; approve.disabled = false; return; }
     note.textContent = 'saved';
     loadGallery();

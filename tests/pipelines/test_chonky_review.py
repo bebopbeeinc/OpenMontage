@@ -326,3 +326,57 @@ def test_regenerate_keeps_the_size_the_original_was_rendered_at(monkeypatch):
         assert seen["width"] == 2048 and seen["height"] == 2048
     finally:
         _cleanup("regen-size", *made)
+
+
+def test_a_failing_render_can_be_approved_deliberately(monkeypatch):
+    """The band is the pipeline's opinion; the reviewer's is the deciding one.
+
+    It still takes saying so: a caller that simply asserts a passing verdict
+    is a different thing from a person choosing to file a near miss.
+    """
+    delivered = []
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: delivered.append(kw) or
+                        {"drive_url": "u", "filename": "f", "row": 2})
+    _render("appr-override", measurement=dict(MEASUREMENT, box=[500, 900, 560, 1200],
+                                              height_px=300, size="too_big", ok=False))
+    try:
+        refused = client.post("/api/approve", json={"image_id": "appr-override"})
+        assert refused.status_code == 400
+        assert delivered == []
+
+        ok = client.post("/api/approve", json={"image_id": "appr-override",
+                                               "override": True})
+        assert ok.status_code == 200, ok.text
+        assert len(delivered) == 1
+    finally:
+        _cleanup("appr-override")
+
+
+def test_an_overridden_approval_is_not_recorded_as_verified(monkeypatch):
+    """The sheet must not claim a render passed a check it failed."""
+    delivered = []
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: delivered.append(kw) or
+                        {"drive_url": "u", "filename": "f", "row": 2})
+    _render("appr-status", measurement=dict(MEASUREMENT, box=[500, 900, 560, 1200],
+                                            height_px=300, size="too_big", ok=False))
+    try:
+        client.post("/api/approve", json={"image_id": "appr-status", "override": True})
+        assert delivered[0]["status"] != "verified"
+        assert "300" in str(delivered[0]["status"]) or "too_big" in str(delivered[0]["status"])
+    finally:
+        _cleanup("appr-status")
+
+
+def test_a_passing_render_is_still_recorded_as_verified(monkeypatch):
+    delivered = []
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: delivered.append(kw) or
+                        {"drive_url": "u", "filename": "f", "row": 2})
+    _render("appr-clean")
+    try:
+        client.post("/api/approve", json={"image_id": "appr-clean"})
+        assert delivered[0]["status"] == "verified"
+    finally:
+        _cleanup("appr-clean")
