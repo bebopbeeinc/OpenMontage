@@ -101,11 +101,13 @@ def test_render_records_what_it_submitted():
     nothing raised, so the only evidence that references were attached is that
     nothing said they weren't.
     """
-    import sys
-
     def driver(**kwargs):
-        print("  → character stills: Chonky", file=sys.stderr)
-        print("  → reference image: 01-model-sheet.png", file=sys.stderr)
+        # The real driver reports through the `log` sink it is handed, rather
+        # than by writing to a stderr the caller has swapped out from under it.
+        sink = kwargs.get("log")
+        if sink is not None:
+            sink.append("  → character stills: Chonky")
+            sink.append("  → reference image: 01-model-sheet.png")
         out = kwargs["output_paths"][0]
         Path(out).write_bytes(b"x")
         return [out]

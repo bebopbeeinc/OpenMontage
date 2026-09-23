@@ -82,3 +82,12 @@ def test_refuses_while_pipeline_jobs_are_running():
 def test_status_is_readable_without_starting_one():
     body = client.get("/api/install-deps").json()
     assert body["state"] in {"idle", "running", "done", "failed"}
+
+
+def test_the_deploy_guard_counts_a_job_that_is_still_writing_its_prompt():
+    """Drafting is serialized, so a batch can sit in `drafting` for minutes.
+
+    A guard blind to that state lets a deploy restart kill the batch, and lets
+    an install swap libraries out from under renders about to start.
+    """
+    assert "drafting" in server.ACTIVE_JOB_STATUSES

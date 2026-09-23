@@ -676,19 +676,33 @@ def approve(payload: dict) -> dict:
         return JSONResponse({"error": "unknown image"}, status_code=404)
 
     side = _read_sidecar(image_id)
+    if side.get("approved"):
+        # Delivery is the one irreversible thing here. A double click, a stale
+        # tab or a retry must not buy a second Drive file and a second row.
+        return JSONResponse({"error": "this render has already been approved",
+                             "drive_url": side.get("drive_url")}, status_code=409)
+
     city, country = _split_city_country(side.get("location", ""))
     measurement = payload.get("measurement") or side.get("measurement")
 
-    if not measurement:
+    if not isinstance(measurement, dict):
         return JSONResponse({"error": "this render has not been measured"},
                             status_code=400)
-    if not measurement.get("ok"):
-        # The band and the zone are hard constraints. One click is exactly
-        # where they would quietly stop being hard.
+
+    box = measurement.get("box")
+    if not box or len(box) != 4:
+        return JSONResponse({"error": "this render has no measurement box"},
+                            status_code=400)
+
+    # Recompute rather than believe. The `ok` flag arrives from the browser,
+    # and a hard constraint that a caller can assert its way past is not one.
+    x0, y0, x1, y1 = (int(v) for v in box)
+    verdict = verify(img, box=(x0, y0, x1, y1))
+    if not verdict["ok"]:
         return JSONResponse({"error": (
-            f"render failed its checks: {measurement.get('height_px')} px "
-            f"{measurement.get('size')}, zone {measurement.get('zone')}")},
-            status_code=400)
+            f"render failed its checks: {verdict['height_px']} px "
+            f"{verdict['size']}, zone {verdict['zone']}")}, status_code=400)
+    measurement = verdict
 
     clue_words = payload.get("clue_words") or side.get("clue_words")
     if not clue_words or len(clue_words) != 3:

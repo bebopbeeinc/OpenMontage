@@ -164,19 +164,22 @@ def _strip_fence(text: str) -> str:
 # Phrasings that have each cost a render. Checked on the way back rather than
 # only asked for on the way out, because asking is not the same as getting.
 _BANNED = (
+    # (pattern, why, only_in_sentences_about_him)
     (re.compile(r"no illustration style", re.I),
      'the prompt says "no illustration style", which the model applies to the '
-     "cat and reads as \"not a stylised character\" — the reference is one"),
-    # Distance in metres, however the number is spelled — the first attempt at
-    # this only caught numerals and let "about fifteen metres from the camera"
-    # through, which is the exact phrasing that failed. Matching a sentence
-    # that mentions both metres and the camera covers every spelling and still
-    # leaves "a 200-metre bridge" alone.
-    (re.compile(r"[^.]*\b(?:metre|meter)s?\b[^.]*\bcamera\b|"
-                r"[^.]*\bcamera\b[^.]*\b(?:metre|meter)s?\b", re.I),
+     "cat and reads as \"not a stylised character\" — the reference is one",
+     False),
+    # Distance in metres, however the number is spelled: the first version of
+    # this caught only numerals and let "about fifteen metres from the camera"
+    # through, which is the exact phrasing that failed. Judged only in
+    # sentences about him, so "the camera looks down the 200-metre bridge"
+    # stays a fact about the bridge.
+    (re.compile(r"\b(?:metre|meter)s?\b[^.]*\bcamera\b|"
+                r"\bcamera\b[^.]*\b(?:metre|meter)s?\b", re.I),
      "the prompt measures his distance from the camera in metres; metres do "
      "not control distance (fifteen metres returned three times the size "
-     "band) — state depth as an ordering against things already in the scene"),
+     "band) — state depth as an ordering against things already in the scene",
+     True),
 )
 
 
@@ -194,35 +197,53 @@ _FURNITURE = (
 _ON_FURNITURE = re.compile(
     r"\b(?:sit|sits|sitting|sat|stand|stands|standing|stood|perch\w*|lie|lies|"
     r"lying|lay|settle[sd]?|settled|rest|rests|resting|curl\w*)\b[^.]{0,80}?"
-    r"\bon (?:the|a|an|top of)\s+(?:[a-z\-]+\s+){0,3}(" + "|".join(_FURNITURE) + r")\b",
+    r"\b(?:on|upon|atop|on top of)\s+(?:the|a|an)?\s*"
+    r"(?:[a-z\-]+\s+){0,3}(" + "|".join(_FURNITURE) + r")\b",
     re.I,
 )
 
+# Whether a sentence is about Chonky at all. Without this the furniture rule
+# fired on "a dozen tourists sit on the steps" and on "taxis stand on the
+# kerb", and the retry then told the writer to fix a placement it had never
+# written — three draft cycles spent on a misdiagnosis.
+_ABOUT_HIM = re.compile(r"\b(?:chonky|he|him|his)\b", re.I)
+
+
+def _sentences(text: str) -> list[str]:
+    return [t for t in re.split(r"(?<=[.!?])\s+|\n+", text) if t.strip()]
+
+
 # Depth has to be stated as an ordering against something already in the
-# scene; metres do not control it. The manual names these forms explicitly, so
-# requiring one of them is a fair check rather than a guess at phrasing.
+# scene; metres do not control it. A plain comparative says exactly that and
+# was being rejected, which is worse than letting a loose phrasing through.
 _ORDERING = re.compile(
     r"between the camera and (?:him|chonky)|"
     r"behind the (?:furthest|farthest|last|rearmost)|"
     r"(?:far )?beyond (?:all|them|every)|"
-    r"further (?:away|back|down) than|farther (?:away|back|down) than|"
-    r"no closer (?:to the camera )?than|"
-    r"deeper into the scene than",
+    r"\b(?:further|farther|deeper)\b[^.]{0,60}?\bthan\b|"
+    r"no closer (?:to the camera )?than",
     re.I,
 )
 
-
 def _check(prompt: str) -> None:
-    for pattern, why in _BANNED:
-        if pattern.search(prompt):
+    # The banned phrasings are judged per sentence too, so that a fact about
+    # the scene — "the camera looks down the 200-metre-long bridge" — is not
+    # read as a placement for him.
+    his = [s for s in _sentences(prompt) if _ABOUT_HIM.search(s)]
+
+    for pattern, why, his_only in _BANNED:
+        haystack = his if his_only else [prompt]
+        if any(pattern.search(t) for t in haystack):
             raise DraftError(why, prompt)
 
-    seated = _ON_FURNITURE.search(prompt)
-    if seated:
-        raise DraftError(
-            f"the prompt seats him on the {seated.group(1)}; a prop named as his "
-            "surface is understood as the thing being photographed and the model "
-            "brings both forward — put him on the ground near it instead", prompt)
+    for sentence in his:
+        seated = _ON_FURNITURE.search(sentence)
+        if seated:
+            raise DraftError(
+                f"the prompt seats him on the {seated.group(1)}; a prop named as "
+                "his surface is understood as the thing being photographed and "
+                "the model brings both forward — put him on the ground near it "
+                "instead", prompt)
 
     if not _ORDERING.search(prompt):
         raise DraftError(

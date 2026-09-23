@@ -56,36 +56,14 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    import contextlib
-    import io as _io
-
-    captured = _io.StringIO()
-    # The driver reports the references it attaches on stderr. Tee it rather
-    # than swallow it, so a terminal operator still sees progress.
-    with contextlib.redirect_stderr(_Tee(sys.stderr, captured)):
-        saved = _submit(driver, prompt, out_path)
-    if log is not None:
-        log.extend(captured.getvalue().splitlines())
-    return Path(saved[0])
+    # The driver appends its progress to `log` directly. Capturing it by
+    # swapping sys.stderr was a process-global change made from one of several
+    # concurrent render threads: the real stderr was never restored, and one
+    # render's references were recorded against another's job.
+    return Path(_submit(driver, prompt, out_path, log=log)[0])
 
 
-class _Tee:
-    """Write to both streams. `redirect_stderr` replaces the stream entirely."""
-
-    def __init__(self, *streams):
-        self._streams = streams
-
-    def write(self, data):
-        for st in self._streams:
-            st.write(data)
-        return len(data)
-
-    def flush(self):
-        for st in self._streams:
-            st.flush()
-
-
-def _submit(driver, prompt: str, out_path: Path):
+def _submit(driver, prompt: str, out_path: Path, *, log=None):
     return driver(
         prompt=prompt,
         model=MODEL,
@@ -95,4 +73,5 @@ def _submit(driver, prompt: str, out_path: Path):
         character=CHARACTER,
         workspace=WORKSPACE,
         fallback_workspaces=FALLBACK_WORKSPACES,
+        log=log,
     )
