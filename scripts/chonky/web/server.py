@@ -371,6 +371,11 @@ def redetect(image_id: str, imgsz: int = 0):
             })
         candidates.sort(key=lambda c: -c["conf"])
     return {"measurement": result,
+            # The band and the ViewFrame are both expressed in 2048x2560
+            # pixels. If the render is not that size, every number downstream
+            # is being read against the wrong ruler.
+            "image_size": list(img.size),
+            "expected_size": [geo.IMG_W, geo.IMG_H],
             "imgsz": imgsz or _m._INFER_SIZE,
             "detector_status": _m.detector_status(),
             "candidates": candidates[:25]}
