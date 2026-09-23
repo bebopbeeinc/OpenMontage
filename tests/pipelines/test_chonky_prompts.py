@@ -29,7 +29,10 @@ def _client(payload):
 VALID = {
     "city": "Prague",
     "country": "Czech Republic",
-    "prompt": "A photograph of Charles Bridge ...",
+    # A compliant prompt: depth stated as an ordering, and he is on the ground.
+    "prompt": ("A photograph of Charles Bridge. Tourists walk ahead of the "
+               "camera and Chonky sits far beyond all of them, on the "
+               "cobblestones."),
     "clues": ["the bridge tower", "the castle on the hill", "baroque statues"],
     "clue_words": ["tower", "castle", "statues"],
 }
@@ -112,3 +115,152 @@ def test_a_prompt_that_places_him_in_metres_is_rejected():
     with pytest.raises(prompts.DraftError):
         prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                       caller=lambda s, u, model=None: json.dumps(bad))
+
+
+# --------------------------------------------------------------------------
+# The rules the manual states, checked on the way back.
+#
+# The writer had all of these in its system prompt and wrote "sitting on the
+# stone parapet of the terrace balustrade" anyway. That render came back at
+# 115 px against a 43-69 px band. Asking is not the same as getting.
+# --------------------------------------------------------------------------
+
+def _reply(prompt):
+    return lambda s, u, model=None: json.dumps(dict(VALID, prompt=prompt))
+
+
+ORDERING = ("A dozen tourists walk ahead of the camera. Chonky sits far beyond "
+            "all of them, behind the furthest walking tourist, so every one of "
+            "those people is between the camera and him. ")
+
+
+def test_a_prompt_that_seats_him_on_furniture_is_rejected():
+    """A prop named as his surface makes the prop the subject and brings both forward."""
+    with pytest.raises(prompts.DraftError) as exc:
+        prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                      caller=_reply(ORDERING + "He is sitting on the stone parapet."))
+    assert "parapet" in str(exc.value)
+
+
+def test_the_furniture_rule_covers_the_usual_suspects():
+    for surface in ["bench", "balustrade", "ledge", "crate", "step",
+                    "windowsill", "railing", "wall"]:
+        with pytest.raises(prompts.DraftError):
+            prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=_reply(ORDERING + f"He sits on the {surface}."))
+
+
+def test_a_prompt_with_no_depth_ordering_is_rejected():
+    """Metres do not work, so an ordering against the scene is the only control."""
+    with pytest.raises(prompts.DraftError) as exc:
+        prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                      caller=_reply("A bridge. Chonky sits on the cobblestones."))
+    assert "depth" in str(exc.value).lower() or "ordering" in str(exc.value).lower()
+
+
+def test_a_compliant_prompt_passes():
+    """The check must not reject the shape the manual actually asks for."""
+    good = ORDERING + ("He sits on all fours on the open cobblestones beside an "
+                       "open violin case, at true cat scale.")
+    draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=_reply(good))
+    assert draft["prompt"] == good
+
+
+def test_standing_on_the_ground_is_not_furniture():
+    """Ground, cobbles, pavement and sand are where he is supposed to be."""
+    for surface in ["cobblestones", "ground", "pavement", "sand", "grass", "path"]:
+        good = ORDERING + f"He sits on the {surface} at true cat scale."
+        assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                             caller=_reply(good))["prompt"] == good
+
+
+# --------------------------------------------------------------------------
+# What the writer is actually sent.
+#
+# Three drafts followed the placement rules zero times. The manual they were
+# sent is written for a different agent doing a different job: it says to
+# write six prompts, to run a whole batch without stopping, to call tools the
+# writer does not have, and to answer as TSV — while the request asks for one
+# prompt as JSON.
+# --------------------------------------------------------------------------
+
+def test_the_writer_is_not_told_to_do_a_job_it_cannot_do():
+    system = prompts.writer_manual()
+    for instruction in ["write_rows", "inspect_render", "save_image",
+                        "openart_creation_wait", "RUN THE WHOLE BATCH",
+                        "six prompts", "as TSV"]:
+        assert instruction not in system, f"still telling the writer to {instruction!r}"
+
+
+def test_the_craft_rules_survive_the_trim():
+    """Everything the writer needs to write one good prompt stays."""
+    system = prompts.writer_manual()
+    for rule in ["DEPTH IS INSTRUCTABLE",
+                 "HE MUST NOT SIT ON OR IN THE GAG PROP",
+                 "no illustration style",
+                 "WHO HE IS",
+                 "REFERENCE-LOCKED GEOGRAPHY",
+                 "EVERY IMAGE NEEDS AT LEAST TWO REAL CLUES"]:
+        assert rule in system, f"trimmed away a rule the writer needs: {rule!r}"
+
+
+def test_the_trim_actually_removes_a_large_share_of_the_manual():
+    full = prompts._manual_text()
+    assert len(prompts.writer_manual()) < len(full) * 0.8
+
+
+def test_the_writer_is_told_the_two_checks_its_answer_must_pass():
+    """A check the writer was never told about is a trap, not a rule."""
+    system = prompts.writer_manual()
+    assert "between the camera and him" in system
+    assert "on the ground" in system.lower()
+
+
+# --------------------------------------------------------------------------
+# A rejection has to teach the writer something, or the check is just a wall.
+# --------------------------------------------------------------------------
+
+GOOD = ("Tourists walk ahead of the camera and Chonky sits far beyond all of "
+        "them, on the cobblestones beside an open violin case.")
+BAD = "Chonky sits on the stone parapet, looking out over the river."
+
+
+def test_a_rejected_draft_is_retried_with_the_reason():
+    replies = [json.dumps(dict(VALID, prompt=BAD)),
+               json.dumps(dict(VALID, prompt=GOOD))]
+    asks = []
+
+    def caller(system, user, *, model=None):
+        asks.append(user)
+        return replies.pop(0)
+
+    draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=caller)
+    assert draft["prompt"] == GOOD
+    assert len(asks) == 2, "a rejected draft must be asked again"
+    assert "parapet" in asks[1], "the retry must say what was wrong"
+    assert BAD in asks[1], "the retry must show the prompt that was rejected"
+
+
+def test_it_gives_up_rather_than_retry_forever():
+    calls = []
+
+    def caller(system, user, *, model=None):
+        calls.append(user)
+        return json.dumps(dict(VALID, prompt=BAD))
+
+    with pytest.raises(prompts.DraftError):
+        prompts.draft(difficulty=1, target_zone="viewframe", used=[], caller=caller)
+    assert 2 <= len(calls) <= 4, f"retried {len(calls)} times"
+
+
+def test_a_first_draft_that_passes_is_not_retried():
+    calls = []
+
+    def caller(system, user, *, model=None):
+        calls.append(user)
+        return json.dumps(dict(VALID, prompt=GOOD))
+
+    prompts.draft(difficulty=1, target_zone="viewframe", used=[], caller=caller)
+    assert len(calls) == 1

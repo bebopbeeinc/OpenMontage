@@ -113,7 +113,9 @@ def test_regenerate_renders_the_edited_prompt_as_a_new_image(monkeypatch):
     made = []
     try:
         body = client.post("/api/regenerate", json={
-            "image_id": "regen-a", "prompt": "an edited prompt"}).json()
+            "image_id": "regen-a",
+            "prompt": ("An edited prompt. The crowd walks ahead and Chonky "
+                       "sits far beyond all of them on the cobblestones.")}).json()
         made.append(body["image_id"])
         assert body["image_id"] != "regen-a"
         end = time.time() + 10
@@ -122,7 +124,7 @@ def test_regenerate_renders_the_edited_prompt_as_a_new_image(monkeypatch):
                 break
             time.sleep(0.05)
         side = json.loads((server.LIBRARY / f"{body['image_id']}.json").read_text())
-        assert side["prompt"] == "an edited prompt"
+        assert side["prompt"].startswith("An edited prompt")
         assert side["location"] == "Paris, France"
         assert side["clues"] == json.loads(
             (server.LIBRARY / "regen-a.json").read_text())["clues"]
@@ -150,7 +152,9 @@ def test_regenerate_refuses_an_edit_that_breaks_the_manual(monkeypatch):
 
 def test_the_writer_is_asked_for_three_filename_words():
     """The filename needs three single words; parsing them back out of prose guesses."""
-    payload = {"city": "Paris", "country": "France", "prompt": "p",
+    payload = {"city": "Paris", "country": "France",
+               "prompt": ("The crowd walks ahead and Chonky sits far beyond "
+                          "all of them on the cobblestones."),
                "clues": ["a", "b", "c"], "clue_words": ["tower", "flag", "fountain"]}
     draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                           caller=lambda s, u, model=None: json.dumps(payload))

@@ -18,9 +18,9 @@ manual wins. Follow it literally.
 0.2  Never reuse any location, city, viewpoint, gag, or scene concept
      that appears in "used". Near-misses count: a different overlook in
      a city already used is still a reuse of that city.
-0.3  Each of the six prompts you write must stand completely alone. It
-     will be executed in a brand new image job with NO access to this
-     manual, this conversation, or the other five prompts.
+0.3  Every prompt you write must stand completely alone. It will be
+     executed in a brand new image job with NO access to this manual,
+     this conversation, or any other prompt.
 0.4  Self-containment gate. Before a prompt is accepted it must satisfy
      ALL of these. Rewrite from scratch any prompt that fails; do not patch.
        (a) It names its own location and camera viewpoint explicitly.
@@ -29,8 +29,8 @@ manual wins. Follow it literally.
            previous image", "the other city", "like before", "as described".
        (d) It never refers to this manual, to GPT, to a model sheet by
            name, or to any attachment.
-       (e) Read it as if you had never seen the other five. If anything is
-           ambiguous without them, it fails.
+       (e) Read it as if you had never seen any other prompt. If anything
+           is ambiguous without them, it fails.
 
 ---------------------------------------------------------------------
 1. THE BATCH WORKFLOW
