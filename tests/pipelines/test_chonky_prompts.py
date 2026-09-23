@@ -31,6 +31,7 @@ VALID = {
     "country": "Czech Republic",
     "prompt": "A photograph of Charles Bridge ...",
     "clues": ["the bridge tower", "the castle on the hill", "baroque statues"],
+    "clue_words": ["tower", "castle", "statues"],
 }
 
 

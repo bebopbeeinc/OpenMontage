@@ -49,6 +49,36 @@
   .err{color:var(--bad);font-size:12px;white-space:pre-wrap;
        font-family:ui-monospace,Menlo,monospace}
   .hint{color:var(--muted);font-size:12px;margin-top:6px}
+
+  /* The gallery is a grid, not a flex row: tiles now carry clues and three
+     actions, so they need a column each rather than whatever width is left. */
+  #gallery{display:grid;gap:16px;
+           grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:12px;display:flex;flex-direction:column}
+  .tile .cap{color:var(--muted);font-size:11px;margin-bottom:6px;
+             text-transform:uppercase;letter-spacing:.06em}
+  .tile img{border:1px solid var(--line);border-radius:8px}
+  .clues{margin:4px 0 10px;padding-left:18px;color:var(--ink);font-size:12px}
+  .clues li{margin:4px 0}
+  .state{font-size:12px;margin:2px 0 8px}
+  .ok-txt{color:var(--ok)}
+  .bad-txt{color:var(--bad)}
+  .actions{display:flex;gap:8px;align-items:center;margin-top:auto;flex-wrap:wrap}
+  .actions button{padding:6px 12px;font-size:12px}
+
+  .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:50;
+              display:flex;align-items:center;justify-content:center;padding:28px}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+         padding:18px;width:min(1100px,100%);max-height:92vh;overflow:auto;
+         position:relative}
+  .modal h2{font-size:15px;margin:0 0 12px;padding-right:40px}
+  .modal .x{position:absolute;top:12px;right:12px;padding:4px 10px}
+  .modal-body{display:flex;gap:16px;align-items:stretch;flex-wrap:wrap}
+  .modal-img{flex:1 1 320px;min-width:260px}
+  .modal-edit{flex:1 1 380px;min-width:280px;display:flex;flex-direction:column}
+  .modal-foot{display:flex;justify-content:flex-end;align-items:center;gap:12px;
+              margin-top:14px}
 </style>
 </head>
 <body>
@@ -83,7 +113,7 @@
 
   <h2 style="font-size:14px;margin:26px 0 0">Everything rendered so far</h2>
   <p class="sub" id="gallery-sub">loading…</p>
-  <div id="gallery" class="imgs"></div>
+  <div id="gallery"></div>
 </main>
 
 <script>
@@ -133,25 +163,124 @@ async function loadGallery() {
   if (!renders.length) { sub.textContent = 'Nothing rendered yet.'; return; }
   const passing = renders.filter(r => r.measurement && r.measurement.ok).length;
   sub.textContent = `${renders.length} render${renders.length === 1 ? '' : 's'} · ${passing} passing`;
-  renders.forEach(r => {
-    const t = el('div', 'pane');
-    const m = r.measurement;
-    t.appendChild(el('div', 'cap', r.location || r.image_id));
-    const a = document.createElement('a');
-    a.href = `api/frame/${r.image_id}`;
-    a.target = '_blank';
-    const im = new Image();
-    im.src = `api/frame/${r.image_id}`;
-    im.style.cssText = 'width:200px;display:block';
-    a.appendChild(im);
-    t.appendChild(a);
-    const badge = el('span', 'b ' + (m ? (m.ok ? 'ok' : 'bad') : ''),
-      m ? `${m.height_px} px · ${m.size} · ${m.zone}` : 'not measured');
-    badge.style.marginTop = '6px';
-    badge.style.display = 'inline-block';
-    t.appendChild(badge);
-    host.appendChild(t);
-  });
+  renders.forEach(r => host.appendChild(tile(r)));
+}
+
+function tile(r) {
+  const m = r.measurement;
+  const t = el('div', 'tile');
+  t.appendChild(el('div', 'cap', r.location || r.image_id));
+
+  const a = document.createElement('a');
+  a.href = `api/frame/${r.image_id}`;
+  a.target = '_blank';
+  const im = new Image();
+  im.src = `api/frame/${r.image_id}`;
+  im.style.cssText = 'width:100%;display:block';
+  a.appendChild(im);
+  t.appendChild(a);
+
+  const badge = el('span', 'b ' + (m ? (m.ok ? 'ok' : 'bad') : ''),
+    m ? `${m.height_px} px · ${m.size} · ${m.zone}` : 'not measured');
+  badge.style.cssText = 'margin:8px 0;display:inline-block';
+  t.appendChild(badge);
+
+  // The clues are the level. Judging a render without them means judging half
+  // of what was made.
+  if (r.clues && r.clues.length) {
+    const cl = el('ol', 'clues');
+    r.clues.forEach(c => cl.appendChild(el('li', null, c)));
+    t.appendChild(cl);
+  }
+
+  if (r.approved) t.appendChild(el('div', 'state ok-txt', '✓ approved — on Drive'));
+  if (r.rejected) t.appendChild(el('div', 'state bad-txt',
+    '✕ rejected' + (r.reject_reason ? ` — ${r.reject_reason}` : '')));
+
+  const actions = el('div', 'actions');
+  const approve = el('button', null, 'Approve');
+  const rejectBtn = el('button', 'ghost', 'Reject');
+  const edit = el('button', 'ghost', 'Edit');
+  const note = el('span', 'wc', '');
+  actions.append(approve, rejectBtn, edit, note);
+  t.appendChild(actions);
+
+  // Approve is the only write path: Drive plus the sheet row.
+  approve.disabled = !(m && m.ok) || r.approved;
+  if (m && !m.ok) approve.title = 'This render failed its size or zone check.';
+
+  approve.onclick = async () => {
+    approve.disabled = true;
+    note.textContent = 'saving to Drive…';
+    const res = await api('api/approve', {image_id: r.image_id});
+    if (res.error) { note.textContent = res.error; approve.disabled = false; return; }
+    note.textContent = 'saved';
+    loadGallery();
+  };
+
+  rejectBtn.onclick = async () => {
+    const reason = window.prompt('Why is this one rejected?', '') ?? null;
+    if (reason === null) return;
+    await api('api/reject', {image_id: r.image_id, reason});
+    loadGallery();
+  };
+
+  edit.onclick = () => openEditor(r);
+  return t;
+}
+
+// The prompt beside the picture it produced, so an edit is made looking at
+// what the last one actually did.
+function openEditor(r) {
+  const back = el('div', 'modal-back');
+  const box = el('div', 'modal');
+
+  const close = el('button', 'ghost x', '✕');
+  close.title = 'Close';
+  box.appendChild(close);
+
+  box.appendChild(el('h2', null, r.location || r.image_id));
+
+  const split = el('div', 'modal-body');
+  const left = el('div', 'modal-img');
+  const im = new Image();
+  im.src = `api/frame/${r.image_id}`;
+  im.style.cssText = 'width:100%;display:block;border-radius:8px';
+  left.appendChild(im);
+  split.appendChild(left);
+
+  const right = el('div', 'modal-edit');
+  right.appendChild(el('div', 'cap', 'Prompt'));
+  const ta = document.createElement('textarea');
+  ta.value = r.prompt || '';
+  ta.style.cssText = 'width:100%;height:100%;min-height:340px';
+  right.appendChild(ta);
+  split.appendChild(right);
+  box.appendChild(split);
+
+  const foot = el('div', 'modal-foot');
+  const note = el('span', 'wc', '');
+  const regen = el('button', null, 'Regenerate');
+  foot.append(note, regen);
+  box.appendChild(foot);
+
+  const shut = () => back.remove();
+  close.onclick = shut;
+  back.onclick = e => { if (e.target === back) shut(); };
+
+  regen.onclick = async () => {
+    regen.disabled = true;
+    note.textContent = 'rendering…';
+    const res = await api('api/regenerate', {image_id: r.image_id, prompt: ta.value});
+    if (res.error) { note.textContent = res.error; regen.disabled = false; return; }
+    shut();
+    const host = document.getElementById('cards');
+    host.prepend(card({job_id: res.job_id, image_id: res.image_id,
+                       target_zone: r.target_zone}, r.difficulty));
+  };
+
+  back.appendChild(box);
+  document.body.appendChild(back);
 }
 
 function el(tag, cls, text) {

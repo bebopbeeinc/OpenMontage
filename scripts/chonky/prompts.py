@@ -29,7 +29,7 @@ if str(REPO) not in sys.path:
 MANUAL = Path(__file__).resolve().parent / "docs" / "manual.md"
 MODEL = os.environ.get("CHONKY_PROMPT_MODEL", "claude-sonnet-5")
 
-_REQUIRED = ("city", "country", "prompt", "clues")
+_REQUIRED = ("city", "country", "prompt", "clues", "clue_words")
 
 
 class DraftError(RuntimeError):
@@ -139,11 +139,14 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
         "",
         "Reply with JSON only, no prose around it:",
         '{"city": "...", "country": "...", "prompt": "...", '
-        '"clues": ["...", "...", "..."]}',
+        '"clues": ["...", "...", "..."], '
+        '"clue_words": ["...", "...", "..."]}',
         "",
         "`prompt` is the complete self-contained image prompt. `clues` are the "
         "three Level Win clue messages, each naming something a player can "
-        "actually see in the scene you described.",
+        "actually see in the scene you described. `clue_words` are those same "
+        "three clues as ONE lowercase word each — they become the filename, so "
+        "no spaces and no punctuation.",
     ]
     return "\n".join(lines)
 
@@ -169,6 +172,9 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
         raise DraftError(f"reply is missing {', '.join(missing)}")
     if not isinstance(data["clues"], list) or len(data["clues"]) != 3:
         raise DraftError(f"expected exactly three clues, got {data['clues']!r}")
+    if not isinstance(data["clue_words"], list) or len(data["clue_words"]) != 3:
+        raise DraftError(
+            f"expected exactly three clue_words, got {data['clue_words']!r}")
 
     _check(data["prompt"])
     return {
@@ -176,4 +182,5 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
         "country": data["country"],
         "prompt": data["prompt"],
         "clues": [str(c) for c in data["clues"]],
+        "clue_words": [str(w) for w in data["clue_words"]],
     }

@@ -97,3 +97,21 @@ def test_a_finished_render_records_itself_beside_the_file():
         assert side["measurement"] is not None
     finally:
         _cleanup(image_id)
+
+
+def test_a_tile_gets_everything_it_has_to_show():
+    """Clues, the verdict already recorded, and whether it was judged."""
+    try:
+        _write_render("gal-full", measurement={"height_px": 60, "ok": True},
+                      location="Paris, France", prompt="a prompt",
+                      clues=["one", "two", "three"],
+                      clue_words=["tower", "flag", "fountain"],
+                      rejected=True, reject_reason="he is too big")
+        row = next(r for r in client.get("/api/renders").json()["renders"]
+                   if r["image_id"] == "gal-full")
+        assert row["clues"] == ["one", "two", "three"]
+        assert row["clue_words"] == ["tower", "flag", "fountain"]
+        assert row["rejected"] is True
+        assert row["reject_reason"] == "he is too big"
+    finally:
+        _cleanup("gal-full")
