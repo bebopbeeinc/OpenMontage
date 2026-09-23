@@ -328,6 +328,40 @@ def _open(image_id: str) -> Optional[Image.Image]:
     return Image.open(path)
 
 
+@app.get("/api/redetect/{image_id}")
+def redetect(image_id: str):
+    """Re-run detection on a stored render and show its working.
+
+    Exists because "the box is wrong" is not a diagnosis. A box can be wrong
+    because the detector was never consulted, because it found nothing, or
+    because it found the wrong thing confidently — and those need different
+    fixes. Listing the candidates it considered tells them apart without
+    spending another render.
+    """
+    img = _open(image_id)
+    if img is None:
+        return JSONResponse({"error": "unknown image"}, status_code=404)
+
+    from scripts.chonky import measure as _m
+
+    result = verify(img)
+    candidates = []
+    model = _m._load_model()
+    if model is not None:
+        raw = model.predict(img, verbose=False, conf=0.05, imgsz=_m._INFER_SIZE)[0]
+        for b in raw.boxes:
+            candidates.append({
+                "cls": int(b.cls),
+                "name": raw.names.get(int(b.cls), "?"),
+                "conf": round(float(b.conf), 3),
+                "box": [round(v) for v in b.xyxy[0].tolist()],
+            })
+        candidates.sort(key=lambda c: -c["conf"])
+    return {"measurement": result,
+            "detector_status": _m.detector_status(),
+            "candidates": candidates[:25]}
+
+
 @app.get("/api/frame/{image_id}")
 def frame(image_id: str):
     """The full render, downscaled for the browser."""
