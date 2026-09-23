@@ -322,7 +322,19 @@ def job(job_id: str) -> dict:
 
 
 def _open(image_id: str) -> Optional[Image.Image]:
+    """The render for this id, from memory or from disk.
+
+    `_images` is only a per-process index, so on its own it loses every render
+    the moment the server restarts — a deploy would make images that cost real
+    credits unreviewable while the files sat on disk untouched. The library is
+    the actual record; the dict is just a cache of it.
+    """
     path = _images.get(image_id)
+    if path is None:
+        candidate = LIBRARY / f"{image_id}.png"
+        if candidate.exists():
+            path = candidate
+            _images[image_id] = path
     if path is None or not path.exists():
         return None
     return Image.open(path)
