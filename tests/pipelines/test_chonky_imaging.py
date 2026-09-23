@@ -5,6 +5,7 @@ from PIL import Image
 
 from scripts.chonky.geometry import IMG_W, IMG_H, VF_W, VF_H, VF_X0, VF_Y0
 from scripts.chonky.imaging import encode_delivery, viewframe_crop
+from scripts.chonky import imaging
 
 
 def _photo_like():
@@ -52,3 +53,22 @@ def test_encode_delivery_prefers_the_highest_quality_that_fits():
     data, quality = encode_delivery(_photo_like(), max_kb=1200)
     assert len(data) // 1024 <= 1200
     assert quality <= 92
+
+
+def test_the_viewframe_crop_stays_inside_a_smaller_render():
+    """PIL pads a crop that runs past the edge with black instead of failing.
+
+    Against the reference constants a 1344x1680 render would be cropped 666 px
+    below its own bottom edge, and the delivered image would carry a black bar
+    that nothing in the pipeline would have flagged.
+    """
+    img = Image.new("RGB", (1344, 1680), (200, 180, 140))
+    crop = imaging.viewframe_crop(img)
+
+    assert crop.width <= img.width and crop.height <= img.height
+    assert abs(crop.width / crop.height - 1200 / 2133) < 0.01, "not 9:16"
+
+    # No padded black anywhere: every pixel came from the picture.
+    assert crop.getextrema() != ((0, 0), (0, 0), (0, 0))
+    darkest = min(min(ch) for ch in crop.getextrema())
+    assert darkest > 0, "crop ran past the edge and was padded with black"
