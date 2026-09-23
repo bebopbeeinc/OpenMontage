@@ -44,7 +44,7 @@ from scripts.chonky import geometry as geo  # noqa: E402
 from scripts.chonky.deliver import deliver  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
-from scripts.chonky.render import render_once  # noqa: E402
+from scripts.chonky.render import CHARACTER, render_once  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -68,6 +68,8 @@ class Job:
     measurement: Optional[dict] = None
     error: Optional[str] = None
     trace: Optional[str] = None
+    # What the driver said it submitted — workspace and attached references.
+    submission: list[str] = field(default_factory=list)
 
 
 jobs: dict[str, Job] = {}
@@ -309,7 +311,8 @@ def run(payload: dict) -> dict:
     def _work() -> None:
         try:
             out = LIBRARY / f"{image_id}.png"
-            render_once(prompt, out)
+            submission: list[str] = []
+            render_once(prompt, out, log=submission)
             with Image.open(out) as im:
                 result = verify(im)
             with _lock:
@@ -317,6 +320,7 @@ def run(payload: dict) -> dict:
                 job = jobs[job_id]
                 job.status = "success"
                 job.measurement = result
+                job.submission = submission
         except Exception as exc:                      # surfaced to the UI as-is
             with _lock:
                 job = jobs[job_id]
@@ -336,7 +340,7 @@ def job(job_id: str) -> dict:
         return {"state": "unknown"}
     return {"state": {"success": "done", "error": "failed"}.get(j.status, j.status),
             "image_id": j.image_id, "measurement": j.measurement,
-            "error": j.error, "trace": j.trace}
+            "error": j.error, "trace": j.trace, "submission": j.submission}
 
 
 def _open(image_id: str) -> Optional[Image.Image]:
@@ -397,6 +401,37 @@ def redetect(image_id: str, imgsz: int = 0):
             "imgsz": imgsz or _m._INFER_SIZE,
             "detector_status": _m.detector_status(),
             "candidates": candidates[:25]}
+
+
+@app.get("/api/reference")
+def reference():
+    """The Chonky model sheet, for comparison beside a render.
+
+    Size and zone are measured; likeness is not, and cannot be — it is the
+    reviewer's call. Making them hold the character in their head while
+    judging is how a plausible ginger cat gets approved.
+    """
+    # openart_characters lives in scripts/common, which the OpenArt driver
+    # puts on sys.path when it loads. Do it here too rather than depend on
+    # that having happened: this route can be the first thing a fresh process
+    # serves.
+    _common = str(REPO / "scripts" / "common")
+    if _common not in sys.path:
+        sys.path.insert(0, _common)
+    import openart_characters as _chars
+
+    try:
+        stills = _chars.stills(CHARACTER)
+    except Exception:                              # noqa: BLE001
+        stills = []
+    if not stills:
+        return JSONResponse({"error": "no model sheet in character_library"},
+                            status_code=404)
+    img = Image.open(stills[0])
+    img.thumbnail((1200, 1200))
+    buf = __import__("io").BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=88)
+    return Response(buf.getvalue(), media_type="image/jpeg")
 
 
 @app.get("/api/frame/{image_id}")

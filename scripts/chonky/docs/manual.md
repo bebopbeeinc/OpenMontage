@@ -318,6 +318,40 @@ Do not invent or approximate a location.
      its plain studio background, its even studio lighting, its poses.
      Take the character; light him with the scene.
 
+4.2c TWO PHRASINGS THAT HAVE EACH KILLED A RENDER. Both were written by
+     someone who had read 4.2b and still wrote them, so they are listed
+     here as literal text to never put in a prompt.
+
+     (a) "photoreal, no illustration style" as a GLOBAL instruction.
+         Written about the scene, the model applies it to the cat too,
+         and "not an illustration" is read as "not a stylised
+         character" — which is the reference. The result is a real fat
+         ginger cat standing in an accurate street: every scene rule
+         satisfied, the main character gone. Say what is photoreal:
+         "photographic scene and lighting", never "no illustration
+         style".
+
+     (b) Anything that makes Chonky "a cat" before it makes him HIM.
+         "One cat sits on the cobbles" invites the model's idea of a
+         cat. Name him as the character first and describe the
+         silhouette, then place him.
+
+     The test for a finished prompt: if you deleted the reference image
+     and rendered it, would you get an ordinary ginger cat? If yes, the
+     prompt is leaning on the reference to do work the words should be
+     doing, and the reference will not win that argument.
+
+4.3b HE MUST NOT SIT ON OR IN THE GAG PROP. A prop named as his surface
+     — a violin case, a bench, a crate, a step — is understood as the
+     thing being photographed, and the model brings BOTH forward to
+     show it. A Prague render placed him in an open violin case stated
+     to be twelve metres away and returned him at four times the size
+     band, filling a sixth of the frame.
+
+     Put the prop where it belongs in the scene and put Chonky on the
+     ground NEAR it. The gag survives the separation; the distance does
+     not survive the contact.
+
 4.4  Give him ONE distinct visual gag with a visible setup or a visible
      consequence. Prefer natural cat behaviour that accidentally mirrors
      nearby human activity.
