@@ -187,3 +187,66 @@ def test_a_generated_render_records_the_words_its_filename_needs(monkeypatch):
         assert side["clue_words"] == DRAFT["clue_words"]
     finally:
         _cleanup(ids)
+
+
+def test_all_levels_generates_the_count_for_each_level(monkeypatch):
+    """"All" means the count per level, not the count split across them."""
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    seen = []
+
+    def spy(**kw):
+        seen.append(kw["difficulty"])
+        return dict(DRAFT)
+
+    monkeypatch.setattr(prompts, "draft", spy)
+
+    body = client.post("/api/generate", json={"count": 2, "difficulty": "all"}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        assert len(body["jobs"]) == 10, "2 per level across 5 levels"
+        _drain([j["job_id"] for j in body["jobs"]], timeout=30)
+        assert sorted(seen) == [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]
+    finally:
+        _cleanup(ids)
+
+
+def test_each_job_reports_the_level_it_is_for(monkeypatch):
+    """The page shows the level on the card while it is still rendering."""
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    body = client.post("/api/generate", json={"count": 1, "difficulty": "all"}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        assert sorted(j["difficulty"] for j in body["jobs"]) == [1, 2, 3, 4, 5]
+        _drain([j["job_id"] for j in body["jobs"]], timeout=30)
+    finally:
+        _cleanup(ids)
+
+
+def test_the_level_reaches_the_record_beside_the_render(monkeypatch):
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    body = client.post("/api/generate", json={"count": 1, "difficulty": 4}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert side["difficulty"] == 4
+    finally:
+        _cleanup(ids)
+
+
+def test_a_single_level_still_makes_exactly_that_many(monkeypatch):
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    body = client.post("/api/generate", json={"count": 3, "difficulty": 2}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        assert len(body["jobs"]) == 3
+        assert {j["difficulty"] for j in body["jobs"]} == {2}
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+    finally:
+        _cleanup(ids)

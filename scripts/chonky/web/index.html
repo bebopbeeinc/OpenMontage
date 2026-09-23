@@ -112,9 +112,7 @@
     <label class="geo">How many
       <input id="count" type="number" value="1" min="1" max="12" style="width:64px">
     </label>
-    <label class="geo">Difficulty
-      <input id="difficulty" type="number" value="1" min="1" max="6" style="width:64px">
-    </label>
+    <label class="geo">Difficulty <select id="difficulty"></select></label>
     <label class="geo">ViewFrame share
       <input id="pct" type="number" value="70" min="0" max="100" style="width:64px">%
     </label>
@@ -178,6 +176,10 @@ function fillSizes(aspect) {
 }
 
 function fillControls(h) {
+  // All means the count at EVERY level, so the total is the count times five.
+  // The option says so, because one click here is five batches of renders.
+  fillSelect(document.getElementById('difficulty'),
+             ['1', '2', '3', '4', '5', 'All levels (1-5)'], '1');
   SIZES = h.sizes || {};
   DEFAULT_SIZE = h.default_size;
   const aspect = document.getElementById('aspect');
@@ -230,7 +232,8 @@ generateBtn.onclick = async () => {
     .split('\n').map(s => s.trim()).filter(Boolean);
   const body = {
     count: +document.getElementById('count').value,
-    difficulty: +document.getElementById('difficulty').value,
+    difficulty: document.getElementById('difficulty').value.startsWith('All')
+      ? 'all' : +document.getElementById('difficulty').value,
     viewframe_pct: +document.getElementById('pct').value,
     aspect: document.getElementById('aspect').value,
     width: +document.getElementById('resolution').value.split('x')[0],
@@ -239,8 +242,10 @@ generateBtn.onclick = async () => {
     cities,
   };
   const res = await api('api/generate', body);
+  if (res.error) { generateBtn.disabled = false; window.alert(res.error); return; }
   const host = document.getElementById('cards');
-  res.jobs.forEach(j => host.prepend(card(j, body.difficulty)));
+  // Each job carries its own level: with All, they are not all the same.
+  res.jobs.forEach(j => host.prepend(card(j, j.difficulty)));
   generateBtn.disabled = false;
 };
 
