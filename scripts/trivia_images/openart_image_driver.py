@@ -153,7 +153,11 @@ def generate_image(
             "prompt": prompt,
             "imageCount": len(output_paths),
             "aspectRatio": aspect,
-            "resolution": resolution,
+            # OpenArt's field is `resolutionTier`, with lowercase 1k/2k/4k, and
+            # the schema forbids unknown keys. Sent as `resolution` this was
+            # dropped without a word, so every render came back at the 2k
+            # default however high a tier the caller asked for.
+            "resolutionTier": str(resolution).lower(),
         }
         if references:
             params["visualReferences"] = references

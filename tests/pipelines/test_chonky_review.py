@@ -221,3 +221,53 @@ def test_approving_twice_delivers_once(monkeypatch):
         assert len(calls) == 1, f"delivered {len(calls)} times"
     finally:
         _cleanup("appr-twice")
+
+
+def test_delete_removes_the_render_from_everywhere(monkeypatch):
+    """Delete has to reach Drive, the sheet and the library.
+
+    A local render left behind keeps its location in the "already used" list,
+    so the writer goes on avoiding a place that no longer exists anywhere.
+    """
+    removed = {}
+    monkeypatch.setattr(server, "remove_delivery",
+                        lambda **kw: removed.update(kw) or
+                        {"filename": kw["filename"], "drive": True, "sheet": True})
+    _render("del-a", approved=True, filename="f.jpg", drive_file_id="id-1")
+    try:
+        r = client.post("/api/delete", json={"image_id": "del-a"})
+        assert r.status_code == 200, r.text
+        assert removed["filename"] == "f.jpg"
+        assert removed["drive_file_id"] == "id-1"
+        assert not (server.LIBRARY / "del-a.png").exists()
+        assert not (server.LIBRARY / "del-a.json").exists()
+    finally:
+        _cleanup("del-a")
+
+
+def test_deleting_a_render_that_was_never_delivered_touches_no_drive(monkeypatch):
+    """Nothing was uploaded, so there is nothing out there to undo."""
+    called = []
+    monkeypatch.setattr(server, "remove_delivery", lambda **kw: called.append(kw))
+    _render("del-b")            # not approved, no filename
+    try:
+        r = client.post("/api/delete", json={"image_id": "del-b"})
+        assert r.status_code == 200, r.text
+        assert called == []
+        assert not (server.LIBRARY / "del-b.png").exists()
+    finally:
+        _cleanup("del-b")
+
+
+def test_delete_reports_a_drive_failure_instead_of_swallowing_it(monkeypatch):
+    monkeypatch.setattr(server, "remove_delivery",
+                        lambda **kw: {"filename": kw["filename"], "drive": False,
+                                      "drive_error": "RuntimeError: 404",
+                                      "sheet": True})
+    _render("del-c", approved=True, filename="f.jpg")
+    try:
+        body = client.post("/api/delete", json={"image_id": "del-c"}).json()
+        assert body["delivery"]["drive"] is False
+        assert "404" in body["delivery"]["drive_error"]
+    finally:
+        _cleanup("del-c")

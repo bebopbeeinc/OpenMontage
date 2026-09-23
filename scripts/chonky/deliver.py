@@ -59,6 +59,11 @@ COLUMNS = [
     "scene_type", "gag", "prompt", "clue1", "clue2", "clue3",
     "filename", "drive_link", "openart_url", "status",
     "chonky_zone", "chonky_px_h", "chonky_x", "chonky_y",
+    # Appended rather than inserted: the sheet already has these columns in
+    # this order. A pixel height means nothing without the frame it was
+    # measured in, and this was being written into the row and then dropped
+    # because COLUMNS never listed it.
+    "frame_size",
 ]
 
 
@@ -88,7 +93,10 @@ def _default_uploader(data: bytes, filename: str) -> str:
         fields="id,name,webViewLink",
         supportsAllDrives=True,
     ).execute()
-    return created["webViewLink"]
+    # The id as well as the link: deleting by name works only until two files
+    # share one, and two renders of the same city with the same three clue
+    # words produce exactly that.
+    return {"id": created["id"], "link": created["webViewLink"]}
 
 
 def _default_sheet_writer(row: dict) -> None:
@@ -128,9 +136,14 @@ def deliver(
         from scripts.chonky.geometry import classify_zone, size_verdict
         h = measurement.get("height_px")
         box = measurement.get("box")
+        # In the frame it was measured in, not the reference one. Renders do
+        # not all arrive at the reference size, and judging one against the
+        # other is how a cat filling a sixth of the frame reads as a near miss.
+        frame = measurement.get("frame_size")
+        frame = tuple(frame) if frame else None
         if h is not None and box:
-            size = size_verdict(h)
-            zone = classify_zone(box[0], box[2], box[1], box[3])
+            size = size_verdict(h, frame)
+            zone = classify_zone(box[0], box[2], box[1], box[3], frame)
         if size != "ok" or zone not in ("viewframe", "margin"):
             raise ValueError(
                 f"image is not verified (size={size}, zone={zone}); "
@@ -141,7 +154,13 @@ def deliver(
     data, quality = encode_delivery(img)
 
     upload = uploader or _default_uploader
-    drive_link = upload(data, filename)
+    uploaded = upload(data, filename)
+    # An uploader may return just the link, which is the older contract.
+    if isinstance(uploaded, dict):
+        drive_link = uploaded.get("link", "")
+        drive_file_id = uploaded.get("id")
+    else:
+        drive_link, drive_file_id = uploaded, None
 
     box = measurement.get("box") or (None, None, None, None)
     clues = clues or ["", "", ""]
@@ -175,4 +194,87 @@ def deliver(
     (sheet_writer or _default_sheet_writer)(row)
 
     return {"filename": filename, "kb": len(data) // 1024, "quality": quality,
-            "drive_link": drive_link, "row": row}
+            "drive_link": drive_link, "drive_file_id": drive_file_id, "row": row}
+
+
+# --------------------------------------------------------------------------
+# Removal
+# --------------------------------------------------------------------------
+
+def _default_deleter(file_id: Optional[str], filename: str) -> None:
+    """Delete the Drive file, by id when known and by name when not."""
+    drive, _ = _clients()
+    folder = _require("CHONKY_DRIVE_FOLDER_ID", DRIVE_FOLDER_ID)
+    if not file_id:
+        found = drive.files().list(
+            q=f"name = '{filename}' and '{folder}' in parents and trashed = false",
+            fields="files(id)", supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        ).execute().get("files", [])
+        if not found:
+            raise FileNotFoundError(f"no Drive file named {filename}")
+        file_id = found[0]["id"]
+    drive.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+
+
+def _default_sheet_remover(filename: str) -> None:
+    """Delete the row whose filename column matches.
+
+    Matched by filename rather than by a row number recorded at write time:
+    rows shift when anything above them is removed, so a stored index goes
+    stale the first time someone deletes an earlier image.
+    """
+    _, sheets = _clients()
+    sheet_id = _require("CHONKY_SHEET_ID", SHEET_ID)
+    values = sheets.spreadsheets().values().get(
+        spreadsheetId=sheet_id, range=f"{BATCHES_TAB}!A:Z",
+    ).execute().get("values", [])
+
+    col = COLUMNS.index("filename")
+    target = next((i for i, row in enumerate(values)
+                   if len(row) > col and row[col] == filename), None)
+    if target is None:
+        raise FileNotFoundError(f"no sheet row for {filename}")
+
+    meta = sheets.spreadsheets().get(spreadsheetId=sheet_id).execute()
+    tab = next((s for s in meta["sheets"]
+                if s["properties"]["title"] == BATCHES_TAB), None)
+    if tab is None:
+        raise FileNotFoundError(f"no tab named {BATCHES_TAB}")
+
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={"requests": [{"deleteDimension": {"range": {
+            "sheetId": tab["properties"]["sheetId"], "dimension": "ROWS",
+            "startIndex": target, "endIndex": target + 1}}}]},
+    ).execute()
+
+
+def remove(*, filename: str, drive_file_id: Optional[str] = None,
+           deleter: Optional[Callable] = None,
+           sheet_remover: Optional[Callable] = None) -> dict:
+    """Undo a delivery: the Drive file and the sheet row.
+
+    Each half is attempted independently and reported separately. Stopping at
+    the first failure leaves the worst state of the three — a row pointing at
+    a file that is gone, or a file nothing references — and the caller cannot
+    tell which happened.
+    """
+    if not filename:
+        raise ValueError("filename is required to remove a delivery")
+
+    out = {"filename": filename, "drive": False, "sheet": False}
+
+    try:
+        (deleter or _default_deleter)(drive_file_id, filename)
+        out["drive"] = True
+    except Exception as exc:                          # noqa: BLE001 - reported
+        out["drive_error"] = f"{type(exc).__name__}: {exc}"
+
+    try:
+        (sheet_remover or _default_sheet_remover)(filename)
+        out["sheet"] = True
+    except Exception as exc:                          # noqa: BLE001 - reported
+        out["sheet_error"] = f"{type(exc).__name__}: {exc}"
+
+    return out

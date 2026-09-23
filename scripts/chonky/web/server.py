@@ -43,6 +43,7 @@ if str(REPO) not in sys.path:
 
 from scripts.chonky import geometry as geo  # noqa: E402
 from scripts.chonky.deliver import deliver  # noqa: E402
+from scripts.chonky.deliver import remove as remove_delivery  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import CHARACTER, render_once  # noqa: E402
@@ -729,8 +730,42 @@ def approve(payload: dict) -> dict:
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
 
     _write_sidecar(image_id, approved=True, rejected=False,
-                   drive_url=result.get("drive_url"),
+                   drive_url=result.get("drive_url") or result.get("drive_link"),
+                   drive_file_id=result.get("drive_file_id"),
                    filename=result.get("filename"))
+    return result
+
+
+@app.post("/api/delete")
+def delete(payload: dict) -> dict:
+    """Remove a render from everywhere it went.
+
+    Drive and the sheet first, then the local file. Leaving the local render
+    behind would keep its location in the "already used" list, so the writer
+    would go on avoiding a place that no longer exists anywhere — and the
+    gallery would keep showing an image whose Drive file is gone.
+
+    A render that was never approved was never uploaded, so there is nothing
+    out there to undo and only the local file goes.
+    """
+    image_id = payload.get("image_id", "")
+    png = LIBRARY / f"{image_id}.png"
+    if not png.exists():
+        return JSONResponse({"error": "unknown image"}, status_code=404)
+
+    side = _read_sidecar(image_id)
+    result = {"image_id": image_id, "delivery": None}
+
+    if side.get("approved") and side.get("filename"):
+        result["delivery"] = remove_delivery(
+            filename=side["filename"],
+            drive_file_id=side.get("drive_file_id"),
+        )
+
+    png.unlink(missing_ok=True)
+    _sidecar_path(image_id).unlink(missing_ok=True)
+    with _lock:
+        _images.pop(image_id, None)
     return result
 
 
