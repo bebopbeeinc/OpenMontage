@@ -69,7 +69,8 @@ FALLBACK_WORKSPACES: tuple[str, ...] = ()
 
 def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = None,
                 log: Optional[list] = None, aspect: Optional[str] = None,
-                resolution: Optional[str] = None) -> Path:
+                resolution: Optional[str] = None,
+                width: Optional[int] = None, height: Optional[int] = None) -> Path:
     """Render `prompt` to `out_path`. One submission, no retries.
 
     `driver` is injectable so tests never reach OpenArt. `log`, when given,
@@ -94,11 +95,13 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
     # render's references were recorded against another's job.
     return Path(_submit(driver, prompt, out_path, log=log,
                         aspect=normalise_aspect(aspect),
-                        resolution=normalise_tier(resolution))[0])
+                        resolution=normalise_tier(resolution),
+                        width=width, height=height)[0])
 
 
 def _submit(driver, prompt: str, out_path: Path, *, log=None,
-            aspect: str = ASPECT, resolution: str = RESOLUTION):
+            aspect: str = ASPECT, resolution: str = RESOLUTION,
+            width=None, height=None):
     return driver(
         prompt=prompt,
         model=MODEL,
@@ -109,4 +112,6 @@ def _submit(driver, prompt: str, out_path: Path, *, log=None,
         workspace=WORKSPACE,
         fallback_workspaces=FALLBACK_WORKSPACES,
         log=log,
+        width=width,
+        height=height,
     )

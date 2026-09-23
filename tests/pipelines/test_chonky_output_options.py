@@ -75,3 +75,49 @@ def test_the_driver_sends_the_field_openart_defined():
     assert "resolutionTier" in captured, f"sent {sorted(captured)}"
     assert captured["resolutionTier"] == "4k"
     assert "resolution" not in captured, "the unknown key must not be sent"
+
+
+def test_an_exact_size_reaches_openart_as_custom_dimensions():
+    """OpenArt's schema has customWidth/customHeight and lockAspectRatio.
+
+    Whether it honours them is a question about OpenArt, not about us; this
+    only asserts that we ask, and ask in the field names the schema defines.
+    """
+    from pathlib import Path as _P
+
+    from scripts.trivia_images import openart_image_driver as drv
+
+    captured = {}
+
+    def fake_generate(*, media, model_display, mode, params, output_paths, **kw):
+        captured.update(params())
+        return output_paths
+
+    drv.api.generate = fake_generate
+    drv.generate_image(prompt="p", model="GPT Image 2.5 Sunburst",
+                       output_paths=[_P("/tmp/x.png")],
+                       width=2048, height=2048)
+
+    assert captured["customWidth"] == 2048
+    assert captured["customHeight"] == 2048
+    assert captured["lockAspectRatio"] is False
+
+
+def test_no_exact_size_means_no_custom_fields_are_sent():
+    """The tier path must stay exactly as it is when nobody asked for a size."""
+    from pathlib import Path as _P
+
+    from scripts.trivia_images import openart_image_driver as drv
+
+    captured = {}
+
+    def fake_generate(*, media, model_display, mode, params, output_paths, **kw):
+        captured.update(params())
+        return output_paths
+
+    drv.api.generate = fake_generate
+    drv.generate_image(prompt="p", model="GPT Image 2.5 Sunburst",
+                       output_paths=[_P("/tmp/x.png")])
+
+    assert "customWidth" not in captured
+    assert "lockAspectRatio" not in captured

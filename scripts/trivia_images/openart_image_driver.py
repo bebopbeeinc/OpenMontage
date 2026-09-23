@@ -73,6 +73,8 @@ def generate_image(
     character: Optional[str] = None,
     fallback_workspaces: tuple[str, ...] = OPENART_FALLBACK_WORKSPACES,
     log: Optional[list] = None,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
 ) -> list[Path]:
     """Generate `len(output_paths)` image variants on OpenArt.
 
@@ -159,6 +161,14 @@ def generate_image(
             # default however high a tier the caller asked for.
             "resolutionTier": str(resolution).lower(),
         }
+        # An exact size, when the caller asked for one. The tiers are named
+        # 1k/2k/4k but the pixels they produce are OpenArt's business and are
+        # not round numbers — 4:5 at 4k comes back 2048x2560 — so a caller who
+        # needs a specific size has to say it.
+        if width and height:
+            params["customWidth"] = int(width)
+            params["customHeight"] = int(height)
+            params["lockAspectRatio"] = False
         if references:
             params["visualReferences"] = references
         return params
