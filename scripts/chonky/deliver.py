@@ -164,6 +164,11 @@ def deliver(
         "status": "verified",
         "chonky_zone": zone,
         "chonky_px_h": measurement.get("height_px"),
+        # The pixel height only means something next to the frame it was
+        # measured in: renders do not all arrive at the reference size, and a
+        # bare number invites comparing two different rulers.
+        "frame_size": "x".join(str(v) for v in measurement.get("frame_size", []))
+                      or None,
         "chonky_x": box[0],
         "chonky_y": box[1],
     }

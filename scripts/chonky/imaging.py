@@ -10,7 +10,7 @@ import io
 
 from PIL import Image
 
-from scripts.chonky.geometry import VF_H, VF_W, VF_X0, VF_Y0
+from scripts.chonky.geometry import viewframe_box
 
 # Descending quality ladder. 92 usually overshoots the size target and 70 is
 # visibly soft on fine clues like road markings, so the useful range is between.
@@ -18,8 +18,13 @@ _QUALITY_LADDER = (92, 88, 85, 82, 78, 74, 70)
 
 
 def viewframe_crop(img: Image.Image) -> Image.Image:
-    """The 9:16 window the player opens on, before any panning."""
-    return img.crop((VF_X0, VF_Y0, VF_X0 + VF_W, VF_Y0 + VF_H))
+    """The 9:16 window the player opens on, before any panning.
+
+    Taken in the render's own coordinates: against the reference constants a
+    1344x1680 frame would be cropped past its own bottom edge, and PIL pads
+    that overhang with black rather than complaining.
+    """
+    return img.crop(viewframe_box(img.size))
 
 
 def _encode(img: Image.Image, quality: int) -> bytes:

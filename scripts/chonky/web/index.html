@@ -144,7 +144,13 @@ async function poll(jobId, row, body, status, go) {
 function render(row, job, body) {
   body.innerHTML = '';
   const m = job.measurement || {};
-  let box = m.box || [VF[0] + 100, VF[1] + 100, VF[0] + 190, VF[1] + 190];
+  // The render is not always the reference size, so the overlay, the drag
+  // maths and the ViewFrame rectangle all work in THIS frame's coordinates.
+  // Using the reference constants on a 1344x1680 render drew the ViewFrame
+  // past the bottom of the picture and scaled every dragged box by 1.5.
+  const FRAME = m.frame_size || IMG;
+  const VFB = m.viewframe_box || VF;
+  let box = m.box || [VFB[0] + 100, VFB[1] + 100, VFB[0] + 190, VFB[1] + 190];
 
   const imgs = el('div', 'imgs');
 
@@ -156,9 +162,9 @@ function render(row, job, body) {
   const im = new Image();
   im.src = `api/frame/${job.image_id}`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', `0 0 ${IMG[0]} ${IMG[1]}`);
+  svg.setAttribute('viewBox', `0 0 ${FRAME[0]} ${FRAME[1]}`);
   svg.setAttribute('preserveAspectRatio', 'none');
-  const vfRect = mkRect(VF[0], VF[1], VF[2] - VF[0], VF[3] - VF[1], '#4c8dff', '6 10');
+  const vfRect = mkRect(VFB[0], VFB[1], VFB[2] - VFB[0], VFB[3] - VFB[1], '#4c8dff', '6 10');
   const catRect = mkRect(box[0], box[1], box[2] - box[0], box[3] - box[1], '#f85149', null);
   svg.append(vfRect, catRect);
   stage.append(im, svg);
@@ -229,13 +235,13 @@ function render(row, job, body) {
   let start = null;
   stage.onpointerdown = e => {
     const r = stage.getBoundingClientRect();
-    start = [(e.clientX - r.left) / r.width * IMG[0], (e.clientY - r.top) / r.height * IMG[1]];
+    start = [(e.clientX - r.left) / r.width * FRAME[0], (e.clientY - r.top) / r.height * FRAME[1]];
     stage.setPointerCapture(e.pointerId);
   };
   stage.onpointermove = e => {
     if (!start) return;
     const r = stage.getBoundingClientRect();
-    const now = [(e.clientX - r.left) / r.width * IMG[0], (e.clientY - r.top) / r.height * IMG[1]];
+    const now = [(e.clientX - r.left) / r.width * FRAME[0], (e.clientY - r.top) / r.height * FRAME[1]];
     box = [Math.round(Math.min(start[0], now[0])), Math.round(Math.min(start[1], now[1])),
            Math.round(Math.max(start[0], now[0])), Math.round(Math.max(start[1], now[1]))];
     setRect(catRect, box);
@@ -243,7 +249,7 @@ function render(row, job, body) {
   stage.onpointerup = async () => {
     if (!start) return;
     start = null;
-    paint(await api('api/measure', {box}));
+    paint(await api('api/measure', {box, image_id: job.image_id}));
   };
 
   approve.onclick = async () => {

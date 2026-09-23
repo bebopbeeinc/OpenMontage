@@ -259,16 +259,34 @@ def prompts(payload: dict) -> dict:
 
 @app.post("/api/measure")
 def measure(payload: dict) -> dict:
-    """Judge a box without needing the image — the maths is pure geometry."""
+    """Judge a box the operator dragged, in the frame they dragged it on.
+
+    `image_id` is how the frame size is known. Without it the box is assumed
+    to be in reference coordinates, which is only true when the render came
+    back at the reference size — and the correction a human makes is supposed
+    to be the authoritative one, so it must not be the one judged by the
+    wrong ruler.
+    """
     box = payload.get("box")
     if not box or len(box) != 4:
         return JSONResponse({"error": "box must be [x0, y0, x1, y1]"}, status_code=400)
     x0, y0, x1, y1 = (int(v) for v in box)
+
+    frame = None
+    image_id = payload.get("image_id")
+    if image_id:
+        img = _open(image_id)
+        if img is not None:
+            frame = img.size
+
     height = y1 - y0
-    size = geo.size_verdict(height)
-    zone = geo.classify_zone(x0, x1, y0, y1)
+    size = geo.size_verdict(height, frame)
+    zone = geo.classify_zone(x0, x1, y0, y1, frame)
     return {"box": [x0, y0, x1, y1], "height_px": height, "size": size,
-            "zone": zone, "ok": size == "ok" and zone in ("viewframe", "margin")}
+            "zone": zone, "ok": size == "ok" and zone in ("viewframe", "margin"),
+            "frame_size": list(frame) if frame else None,
+            "band_px": list(geo.size_band(frame)),
+            "viewframe_box": list(geo.viewframe_box(frame))}
 
 
 @app.post("/api/run")

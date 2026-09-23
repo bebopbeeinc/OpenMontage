@@ -160,3 +160,45 @@ def test_an_image_that_was_never_rendered_is_still_unknown():
     from scripts.chonky.web import server as srv
 
     assert srv._open("no-such-image-at-all") is None
+
+
+def test_measure_judges_a_dragged_box_in_the_render_it_was_dragged_on():
+    """The human correction is authoritative, so it must not be the one mis-scaled."""
+    from PIL import Image as _Image
+
+    from scripts.chonky.web import server as srv
+
+    _Image.new("RGB", (1344, 1680), (150, 150, 150)).save(srv.LIBRARY / "scale-probe.png")
+    try:
+        srv._images.pop("scale-probe", None)
+        # 60 px tall: in band for a 1344x1680 frame, "too small" against 2048x2560.
+        body = client.post("/api/measure",
+                           json={"box": [500, 1000, 560, 1060],
+                                 "image_id": "scale-probe"}).json()
+        assert body["frame_size"] == [1344, 1680]
+        assert body["size"] == "ok", body
+
+        without = client.post("/api/measure", json={"box": [500, 1000, 560, 1060]}).json()
+        assert without["size"] == "too_small"
+    finally:
+        (srv.LIBRARY / "scale-probe.png").unlink(missing_ok=True)
+        srv._images.pop("scale-probe", None)
+
+
+def test_measure_reports_the_viewframe_for_the_render():
+    from PIL import Image as _Image
+
+    from scripts.chonky.web import server as srv
+
+    _Image.new("RGB", (1344, 1680), (150, 150, 150)).save(srv.LIBRARY / "vf-probe.png")
+    try:
+        srv._images.pop("vf-probe", None)
+        body = client.post("/api/measure",
+                           json={"box": [500, 1000, 560, 1060],
+                                 "image_id": "vf-probe"}).json()
+        x0, y0, x1, y1 = body["viewframe_box"]
+        assert 0 <= x0 < x1 <= 1344
+        assert 0 <= y0 < y1 <= 1680
+    finally:
+        (srv.LIBRARY / "vf-probe.png").unlink(missing_ok=True)
+        srv._images.pop("vf-probe", None)

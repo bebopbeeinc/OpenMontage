@@ -35,7 +35,9 @@ from typing import Optional
 
 from PIL import Image
 
-from scripts.chonky.geometry import classify_zone, size_verdict
+from scripts.chonky.geometry import (
+    classify_zone, size_band, size_verdict, viewframe_box,
+)
 
 Box = tuple[int, int, int, int]
 
@@ -200,11 +202,21 @@ def verify(img: Image.Image, box: Optional[Box] = None, detector=None) -> dict:
 
     x0, y0, x1, y1 = box
     height = y1 - y0
-    size = size_verdict(height)
-    zone = classify_zone(x0, x1, y0, y1)
+    # Judge in the frame the box was actually measured in. Renders do not
+    # always arrive at the reference size, and the constants describe that
+    # reference, not whatever turned up.
+    frame = img.size
+    size = size_verdict(height, frame)
+    zone = classify_zone(x0, x1, y0, y1, frame)
+    band = size_band(frame)
     return {
         "box": (x0, y0, x1, y1),
         "height_px": height,
+        "frame_size": list(frame),
+        "band_px": list(band),
+        # In the render's own coordinates, so the reviewer's overlay and drag
+        # maths never have to guess the scale.
+        "viewframe_box": list(viewframe_box(frame)),
         "size": size,
         "zone": zone,
         "ok": size == "ok" and zone in ("viewframe", "margin"),
