@@ -58,16 +58,32 @@
 </header>
 
 <main>
-  <p class="sub">Paste the prompt TSV (Difficulty, Location, prompt). Each image
-  gets a Chonky zone assigned so the batch converges on the configured split.</p>
-  <textarea id="tsv" placeholder="1&#9;Lisbon, Portugal&#9;A colourful travel photograph of…"></textarea>
+  <p class="sub">Say how many images you want. The tool picks locations that
+  aren't already used, writes each prompt to the manual's rules, renders it
+  once and measures Chonky. You review what comes back.</p>
   <div class="row">
-    <button id="parse">Parse prompts</button>
+    <label class="geo">How many
+      <input id="count" type="number" value="1" min="1" max="12" style="width:64px">
+    </label>
+    <label class="geo">Difficulty
+      <input id="difficulty" type="number" value="1" min="1" max="6" style="width:64px">
+    </label>
     <label class="geo">ViewFrame share
       <input id="pct" type="number" value="70" min="0" max="100" style="width:64px">%
     </label>
+    <button id="generate">Generate</button>
   </div>
+  <div class="row">
+    <label class="geo" style="flex:1">Specific cities (optional, one per line — blank means the tool chooses)
+      <textarea id="cities" style="height:60px" placeholder="Prague, Czech Republic"></textarea>
+    </label>
+  </div>
+
   <div id="cards"></div>
+
+  <h2 style="font-size:14px;margin:26px 0 0">Everything rendered so far</h2>
+  <p class="sub" id="gallery-sub">loading…</p>
+  <div id="gallery" class="imgs"></div>
 </main>
 
 <script>
@@ -87,14 +103,56 @@ api('api/health').then(h => {
   VF = h.viewframe_box;
 });
 
-document.getElementById('parse').onclick = async () => {
-  const tsv = document.getElementById('tsv').value;
-  const pct = +document.getElementById('pct').value;
-  const res = await api('api/prompts', {tsv, viewframe_pct: pct});
+loadGallery();
+
+const generateBtn = document.getElementById('generate');
+
+generateBtn.onclick = async () => {
+  generateBtn.disabled = true;
+  const cities = document.getElementById('cities').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+  const body = {
+    count: +document.getElementById('count').value,
+    difficulty: +document.getElementById('difficulty').value,
+    viewframe_pct: +document.getElementById('pct').value,
+    cities,
+  };
+  const res = await api('api/generate', body);
   const host = document.getElementById('cards');
-  host.innerHTML = '';
-  res.rows.forEach(row => host.appendChild(card(row)));
+  res.jobs.forEach(j => host.prepend(card(j, body.difficulty)));
+  generateBtn.disabled = false;
 };
+
+// The page must never open empty: renders cost credits and outlive the
+// process that made them, so what is on disk is what the page opens on.
+async function loadGallery() {
+  const {renders} = await api('api/renders');
+  const host = document.getElementById('gallery');
+  const sub = document.getElementById('gallery-sub');
+  host.innerHTML = '';
+  if (!renders.length) { sub.textContent = 'Nothing rendered yet.'; return; }
+  const passing = renders.filter(r => r.measurement && r.measurement.ok).length;
+  sub.textContent = `${renders.length} render${renders.length === 1 ? '' : 's'} · ${passing} passing`;
+  renders.forEach(r => {
+    const t = el('div', 'pane');
+    const m = r.measurement;
+    t.appendChild(el('div', 'cap', r.location || r.image_id));
+    const a = document.createElement('a');
+    a.href = `api/frame/${r.image_id}`;
+    a.target = '_blank';
+    const im = new Image();
+    im.src = `api/frame/${r.image_id}`;
+    im.style.cssText = 'width:200px;display:block';
+    a.appendChild(im);
+    t.appendChild(a);
+    const badge = el('span', 'b ' + (m ? (m.ok ? 'ok' : 'bad') : ''),
+      m ? `${m.height_px} px · ${m.size} · ${m.zone}` : 'not measured');
+    badge.style.marginTop = '6px';
+    badge.style.display = 'inline-block';
+    t.appendChild(badge);
+    host.appendChild(t);
+  });
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -103,42 +161,59 @@ function el(tag, cls, text) {
   return n;
 }
 
-function card(row) {
+function card(job, difficulty) {
+  const row = {
+    id: job.image_id,
+    difficulty,
+    target_zone: job.target_zone,
+    location: 'choosing a location…',
+  };
   const c = el('div', 'card');
-  c.appendChild(el('h2', null, `Difficulty ${row.difficulty} — ${row.location}`));
-  c.appendChild(el('div', 'sub', `Chonky zone: ${row.target_zone} · ${row.zone_reason}`));
+  const head = el('h2', null, `Difficulty ${difficulty} — writing the prompt…`);
+  c.appendChild(head);
+  c.appendChild(el('div', 'sub', `Chonky zone: ${job.target_zone}`));
 
   const bar = el('div', 'row');
-  const go = el('button', null, 'Render');
-  const status = el('span', 'wc', '');
-  bar.append(go, status);
+  const status = el('span', 'wc', 'writing the prompt…');
+  bar.append(status);
   c.appendChild(bar);
 
   const body = el('div');
   c.appendChild(body);
 
-  go.onclick = async () => {
-    // One click is one submission — the button stays disabled from here on.
-    go.disabled = true;
-    status.textContent = 'rendering…';
-    const {job_id} = await api('api/run', {id: row.id, prompt: row.prompt});
-    poll(job_id, row, body, status, go);
-  };
+  poll(job.job_id, row, body, status, head);
   return c;
 }
 
-async function poll(jobId, row, body, status, go) {
+async function poll(jobId, row, body, status, head) {
   const j = await api(`api/jobs/${jobId}`);
-  if (j.state === 'running') { status.textContent = 'rendering…'; return setTimeout(() => poll(jobId, row, body, status, go), 2000); }
+  if (j.state === 'drafting') {
+    status.textContent = 'writing the prompt…';
+    return setTimeout(() => poll(jobId, row, body, status, head), 2000);
+  }
+  if (j.state === 'running') {
+    status.textContent = 'rendering…';
+    return setTimeout(() => poll(jobId, row, body, status, head), 2000);
+  }
   if (j.state === 'failed') {
     status.textContent = 'failed';
     body.innerHTML = '';
     body.appendChild(el('div', 'err', j.error + '\n\n' + (j.trace || '')));
-    go.disabled = false;   // a real failure may be retried, deliberately
     return;
   }
   status.textContent = 'rendered';
+  // The prompt and location were written by the tool, so they are only known
+  // once the job is done. Fill them in from what it recorded.
+  const side = (await api('api/renders')).renders
+    .find(r => r.image_id === j.image_id) || {};
+  if (side.location) {
+    row.location = side.location;
+    head.textContent = `Difficulty ${row.difficulty} — ${side.location}`;
+  }
+  row.prompt = side.prompt;
+  row.clues = side.clues;
   render(row, j, body);
+  loadGallery();
 }
 
 function render(row, job, body) {
@@ -196,6 +271,20 @@ function render(row, job, body) {
   imgs.appendChild(ref);
 
   body.appendChild(imgs);
+
+  if (row.prompt) {
+    const det = document.createElement('details');
+    det.style.margin = '10px 0';
+    const sum = document.createElement('summary');
+    sum.textContent = 'The prompt the tool wrote';
+    sum.style.cssText = 'color:var(--muted);font-size:12px;cursor:pointer';
+    det.appendChild(sum);
+    const pre = el('div', 'err');
+    pre.style.color = 'var(--muted)';
+    pre.textContent = row.prompt;
+    det.appendChild(pre);
+    body.appendChild(det);
+  }
 
   const badges = el('div', 'badges');
   body.appendChild(badges);

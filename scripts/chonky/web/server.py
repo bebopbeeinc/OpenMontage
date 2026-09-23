@@ -23,6 +23,7 @@ What it surfaces:
 """
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -45,6 +46,9 @@ from scripts.chonky.deliver import deliver  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import CHARACTER, render_once  # noqa: E402
+# Imported under another name: the TSV route below is also called
+# `prompts`, and being defined later it silently replaced the module.
+from scripts.chonky import prompts as prompt_writer  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -221,10 +225,14 @@ def _readiness() -> dict:
 def health() -> dict:
     ready = _readiness()
     return {
-        "image": f"{geo.IMG_W}x{geo.IMG_H}",
+        # Labelled as the reference, because renders do not arrive at this
+        # size — the header read as a claim about the last render and was
+        # wrong about every one of them.
+        "image": f"reference {geo.IMG_W}x{geo.IMG_H}",
         "viewframe": (f"{geo.VF_W}x{geo.VF_H} at x {geo.VF_X0}-{geo.VF_X1}, "
                       f"y {geo.VF_Y0}-{geo.VF_Y1}"),
-        "chonky_height_px": f"{geo.CHONKY_MIN_H}-{geo.CHONKY_MAX_H}",
+        "chonky_height_px": f"{geo.CHONKY_MIN_H}-{geo.CHONKY_MAX_H} at that size; "
+                            f"each render is measured in its own",
         "viewframe_box": [geo.VF_X0, geo.VF_Y0, geo.VF_X1, geo.VF_Y1],
         "all_ready": all(c["ok"] for c in ready.values()),
         "ready": ready,
@@ -301,6 +309,10 @@ def run(payload: dict) -> dict:
     """
     image_id = payload.get("id") or uuid.uuid4().hex[:8]
     prompt = payload.get("prompt", "")
+    location = payload.get("location")
+    difficulty = payload.get("difficulty")
+    target_zone = payload.get("target_zone")
+    clues = payload.get("clues")
     if not prompt.strip():
         return JSONResponse({"error": "prompt is empty"}, status_code=400)
 
@@ -321,6 +333,9 @@ def run(payload: dict) -> dict:
                 job.status = "success"
                 job.measurement = result
                 job.submission = submission
+            _write_sidecar(image_id, prompt=prompt, location=location,
+                           difficulty=difficulty, target_zone=target_zone,
+                           clues=clues, measurement=result)
         except Exception as exc:                      # surfaced to the UI as-is
             with _lock:
                 job = jobs[job_id]
@@ -330,6 +345,103 @@ def run(payload: dict) -> dict:
 
     threading.Thread(target=_work, daemon=True).start()
     return {"job_id": job_id, "image_id": image_id}
+
+
+def _used_locations() -> list[str]:
+    """Locations already rendered, from the library's own record.
+
+    Reuse is what the manual spends its first section on, and the writer can
+    only avoid it if it is told. Read from disk rather than from this process
+    so a restart does not wipe the memory of what has been made.
+    """
+    seen: list[str] = []
+    for side in LIBRARY.glob("*.json"):
+        loc = _read_sidecar(side.stem).get("location")
+        if loc and loc not in seen:
+            seen.append(loc)
+    return seen
+
+
+@app.post("/api/generate")
+def generate(payload: dict) -> dict:
+    """Write the prompts and render them. The operator supplies no prompt.
+
+    Each image is drafted in its own thread and rendered as soon as its draft
+    is ready, so a slow draft does not hold up the others. A draft that fails
+    the manual's checks fails that job and never reaches OpenArt — a bad
+    prompt is cheap, a render is not.
+    """
+    count = max(1, min(int(payload.get("count", 1)), 12))
+    difficulty = payload.get("difficulty", 1)
+    cities = payload.get("cities") or []
+    pct = int(payload.get("viewframe_pct", 70))
+
+    used = _used_locations()
+    history: list[dict] = []
+    out = []
+    for i in range(count):
+        decision = next_zone(history, pct)
+        history.append({"chonky_zone": decision["target_zone"]})
+        image_id = uuid.uuid4().hex[:8]
+        job_id = uuid.uuid4().hex[:8]
+        with _lock:
+            jobs[job_id] = Job(id=job_id, slug=image_id, image_id=image_id,
+                               status="drafting")
+        out.append({"job_id": job_id, "image_id": image_id,
+                    "target_zone": decision["target_zone"]})
+
+        spec = (cities[i] if i < len(cities) else None) or None
+        city, country = _split_location(spec) if spec else (None, None)
+
+        def _draft_then_render(job_id=job_id, image_id=image_id,
+                               zone=decision["target_zone"],
+                               city=city, country=country) -> None:
+            try:
+                d = prompt_writer.draft(difficulty=difficulty, target_zone=zone,
+                                  used=used, city=city, country=country)
+            except Exception as exc:                  # noqa: BLE001 - shown in the UI
+                with _lock:
+                    job = jobs[job_id]
+                    job.status = "error"
+                    job.error = f"{type(exc).__name__}: {exc}"
+                return
+            location = f"{d['city']}, {d['country']}"
+            with _lock:
+                jobs[job_id].status = "running"
+            # Render on this thread: the job already exists and is being
+            # polled, so handing off to another one buys nothing.
+            _run_render_inline(job_id, image_id, d["prompt"], location=location,
+                               difficulty=difficulty, target_zone=zone,
+                               clues=d["clues"])
+
+        threading.Thread(target=_draft_then_render, daemon=True).start()
+
+    return {"jobs": out}
+
+
+def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
+                       difficulty=None, target_zone=None, clues=None) -> None:
+    try:
+        out = LIBRARY / f"{image_id}.png"
+        submission: list[str] = []
+        render_once(prompt, out, log=submission)
+        with Image.open(out) as im:
+            result = verify(im)
+        with _lock:
+            _images[image_id] = out
+            job = jobs[job_id]
+            job.status = "success"
+            job.measurement = result
+            job.submission = submission
+        _write_sidecar(image_id, prompt=prompt, location=location,
+                       difficulty=difficulty, target_zone=target_zone,
+                       clues=clues, measurement=result)
+    except Exception as exc:                          # surfaced to the UI as-is
+        with _lock:
+            job = jobs[job_id]
+            job.status = "error"
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.trace = traceback.format_exc()[-2000:]
 
 
 @app.get("/api/jobs/{job_id}")
@@ -432,6 +544,54 @@ def reference():
     buf = __import__("io").BytesIO()
     img.convert("RGB").save(buf, format="JPEG", quality=88)
     return Response(buf.getvalue(), media_type="image/jpeg")
+
+
+def _sidecar_path(image_id: str) -> Path:
+    return LIBRARY / f"{image_id}.json"
+
+
+def _read_sidecar(image_id: str) -> dict:
+    try:
+        return json.loads(_sidecar_path(image_id).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_sidecar(image_id: str, **fields) -> None:
+    """Record a render's own account of itself next to the file.
+
+    The library is what survives a restart, so what a render was and how it
+    measured has to live there too — held only in the process, it disappears
+    on the next deploy and the image becomes an anonymous PNG.
+    """
+    data = _read_sidecar(image_id)
+    data.update(image_id=image_id, **fields)
+    _sidecar_path(image_id).write_text(json.dumps(data, indent=2))
+
+
+@app.get("/api/renders")
+def renders():
+    """Every render on disk, newest first.
+
+    Reads the library rather than a dict of this process's own work: the page
+    must show renders made before the last restart, and by other people.
+    """
+    out = []
+    for png in LIBRARY.glob("*.png"):
+        side = _read_sidecar(png.stem)
+        out.append({
+            "image_id": png.stem,
+            "measurement": side.get("measurement"),
+            "prompt": side.get("prompt"),
+            "location": side.get("location"),
+            "difficulty": side.get("difficulty"),
+            "target_zone": side.get("target_zone"),
+            "clues": side.get("clues"),
+            "approved": side.get("approved", False),
+            "created_at": png.stat().st_mtime,
+        })
+    out.sort(key=lambda r: r["created_at"], reverse=True)
+    return {"renders": out}
 
 
 @app.get("/api/frame/{image_id}")
