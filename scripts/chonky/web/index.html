@@ -311,12 +311,29 @@ function tile(r) {
 
   const actions = el('div', 'actions');
   const approve = el('button', null, 'Approve');
+  const regen = el('button', 'ghost', 'Regen');
+  regen.title = 'Render this prompt again, unchanged';
   const rejectBtn = el('button', 'ghost', 'Reject');
   const edit = el('button', 'ghost', 'Edit');
   const del = el('button', 'danger', 'Delete');
   const note = el('span', 'wc', '');
-  actions.append(approve, rejectBtn, edit, del, note);
+  actions.append(approve, regen, rejectBtn, edit, del, note);
   t.appendChild(actions);
+
+  // Another roll of the same prompt. The prompt is not sent: the server uses
+  // the one it recorded, so an open tab holding a stale copy cannot turn a
+  // reroll into an edit nobody made. Size and ratio travel with it.
+  regen.onclick = async () => {
+    regen.disabled = true;
+    note.textContent = 'rendering…';
+    const res = await api('api/regenerate', {image_id: r.image_id});
+    if (res.error) { note.textContent = res.error; regen.disabled = false; return; }
+    note.textContent = 'rerolling — see the top of the page';
+    document.getElementById('cards').prepend(
+      card({job_id: res.job_id, image_id: res.image_id, target_zone: r.target_zone},
+           r.difficulty));
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  };
 
   // Delete reaches Drive and the sheet as well as the library, and none of
   // that comes back. The second click is the point.

@@ -19,6 +19,9 @@ client = TestClient(server.app)
 MEASUREMENT = {"box": [500, 900, 560, 960], "height_px": 60, "size": "ok",
                "zone": "viewframe", "ok": True, "frame_size": [1344, 1680]}
 
+COMPLIANT = ("A quiet square. Chonky sits far beyond all of them, on the "
+             "cobblestones beside a market stall.")
+
 
 def _render(image_id, **side):
     Image.new("RGB", (1344, 1680), (150, 150, 150)).save(server.LIBRARY / f"{image_id}.png")
@@ -271,3 +274,55 @@ def test_delete_reports_a_drive_failure_instead_of_swallowing_it(monkeypatch):
         assert "404" in body["delivery"]["drive_error"]
     finally:
         _cleanup("del-c")
+
+
+def test_regenerate_without_a_prompt_reuses_the_one_that_was_written(monkeypatch):
+    """Rerolling an unchanged prompt must not require the caller to resend it.
+
+    Resending is how a stale copy from an open tab ends up being the thing
+    rendered, which is a silent edit nobody made.
+    """
+    seen = {}
+    monkeypatch.setattr(server, "render_once",
+                        lambda p, o, log=None, **kw: (seen.update(prompt=p, **kw),
+                                                      Image.new("RGB", (64, 80)).save(o),
+                                                      o)[2])
+    # A compliant prompt: a reroll re-checks what it is about to spend a
+    # render on, even when nobody edited it.
+    _render("regen-same", prompt=COMPLIANT)
+    made = []
+    try:
+        body = client.post("/api/regenerate", json={"image_id": "regen-same"}).json()
+        made.append(body["image_id"])
+        end = time.time() + 10
+        while time.time() < end:
+            if client.get(f"/api/jobs/{body['job_id']}").json()["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert seen["prompt"] == COMPLIANT
+    finally:
+        _cleanup("regen-same", *made)
+
+
+def test_regenerate_keeps_the_size_the_original_was_rendered_at(monkeypatch):
+    """A reroll that silently changes resolution is not a reroll of the same image."""
+    seen = {}
+    monkeypatch.setattr(server, "render_once",
+                        lambda p, o, log=None, **kw: (seen.update(kw),
+                                                      Image.new("RGB", (64, 80)).save(o),
+                                                      o)[2])
+    _render("regen-size", prompt=COMPLIANT, aspect="1:1", resolution="4k",
+            width=2048, height=2048)
+    made = []
+    try:
+        body = client.post("/api/regenerate", json={"image_id": "regen-size"}).json()
+        made.append(body["image_id"])
+        end = time.time() + 10
+        while time.time() < end:
+            if client.get(f"/api/jobs/{body['job_id']}").json()["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert seen["aspect"] == "1:1"
+        assert seen["width"] == 2048 and seen["height"] == 2048
+    finally:
+        _cleanup("regen-size", *made)
