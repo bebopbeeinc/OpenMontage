@@ -341,7 +341,7 @@ def _open(image_id: str) -> Optional[Image.Image]:
 
 
 @app.get("/api/redetect/{image_id}")
-def redetect(image_id: str):
+def redetect(image_id: str, imgsz: int = 0):
     """Re-run detection on a stored render and show its working.
 
     Exists because "the box is wrong" is not a diagnosis. A box can be wrong
@@ -360,7 +360,8 @@ def redetect(image_id: str):
     candidates = []
     model = _m._load_model()
     if model is not None:
-        raw = model.predict(img, verbose=False, conf=0.05, imgsz=_m._INFER_SIZE)[0]
+        raw = model.predict(img.convert("RGB"), verbose=False, conf=0.05,
+                            imgsz=imgsz or _m._INFER_SIZE)[0]
         for b in raw.boxes:
             candidates.append({
                 "cls": int(b.cls),
@@ -370,6 +371,7 @@ def redetect(image_id: str):
             })
         candidates.sort(key=lambda c: -c["conf"])
     return {"measurement": result,
+            "imgsz": imgsz or _m._INFER_SIZE,
             "detector_status": _m.detector_status(),
             "candidates": candidates[:25]}
 
