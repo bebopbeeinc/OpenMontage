@@ -352,6 +352,34 @@ Do not invent or approximate a location.
      ground NEAR it. The gag survives the separation; the distance does
      not survive the contact.
 
+4.3c DEPTH IS INSTRUCTABLE. LATERAL POSITION IS NOT. Measured over five
+     renders of one Prague scene, changing nothing but where he was told
+     to stand:
+
+       instruction given                      height   zone
+       ---------------------------------      ------   ------------
+       (sitting in the gag prop)               278 px  viewframe
+       "beside it, about fifteen metres"       231 px  viewframe
+       "far beyond all of them"                 72 px  centrestage
+       "off to the LEFT parapet"               164 px  margin
+       "to the RIGHT, a third in from the
+        parapet"                               236 px  straddling
+
+     Only the prompt that said nothing about lateral position got the
+     size right. Every instruction to put him to one SIDE pulled him
+     toward the camera — asking for him over there is read as asking to
+     SEE him over there, and the model obliges by bringing him closer.
+
+     So: state depth, and state it as an ORDERING against things already
+     in the scene — "every one of those people is between the camera and
+     him", "behind the furthest walking tourist". Metres do not work;
+     "fifteen metres" returned him at three times the band.
+
+     Do not then also tell him where to stand across the frame. To move
+     him out of the centre third, move the CAMERA or the SCENE — compose
+     so the arch, the crowd or the landmark sits off-centre — and let him
+     fall where the depth puts him.
+
 4.4  Give him ONE distinct visual gag with a visible setup or a visible
      consequence. Prefer natural cat behaviour that accidentally mirrors
      nearby human activity.
