@@ -163,9 +163,27 @@ function fillSelect(el, options, selected) {
 // The dropdowns are filled from the server, which takes them from OpenArt's
 // own form schema. A second hand-kept copy here is how a dropdown ends up
 // offering something the model rejects.
+let SIZES = {};
+let DEFAULT_SIZE = null;
+
+// The resolution list follows the ratio, because a size only means something
+// alongside the shape it belongs to. "4k" told you nothing: for 4:5 it is
+// 2048x2560, for 1:1 something else entirely.
+function fillSizes(aspect) {
+  const sel = document.getElementById('resolution');
+  const options = (SIZES[aspect] || []).map(([w, h]) => `${w}x${h}`);
+  const preferred = DEFAULT_SIZE ? `${DEFAULT_SIZE[0]}x${DEFAULT_SIZE[1]}` : null;
+  fillSelect(sel, options,
+    options.includes(preferred) ? preferred : options[options.length - 3]);
+}
+
 function fillControls(h) {
-  fillSelect(document.getElementById('aspect'), h.aspect_ratios, h.default_aspect);
-  fillSelect(document.getElementById('resolution'), h.resolution_tiers, h.default_resolution);
+  SIZES = h.sizes || {};
+  DEFAULT_SIZE = h.default_size;
+  const aspect = document.getElementById('aspect');
+  fillSelect(aspect, h.aspect_ratios, h.default_aspect);
+  fillSizes(h.default_aspect);
+  aspect.onchange = () => fillSizes(aspect.value);
 
   const host = document.getElementById('weights');
   host.innerHTML = '';
@@ -215,7 +233,8 @@ generateBtn.onclick = async () => {
     difficulty: +document.getElementById('difficulty').value,
     viewframe_pct: +document.getElementById('pct').value,
     aspect: document.getElementById('aspect').value,
-    resolution: document.getElementById('resolution').value,
+    width: +document.getElementById('resolution').value.split('x')[0],
+    height: +document.getElementById('resolution').value.split('x')[1],
     weights: collectWeights(),
     cities,
   };

@@ -48,7 +48,7 @@ from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import (  # noqa: E402
     ASPECT, ASPECT_RATIOS, CHARACTER, RESOLUTION, RESOLUTION_TIERS,
-    normalise_aspect, normalise_tier, render_once,
+    normalise_aspect, normalise_tier, render_once, sizes_for,
 )
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
@@ -243,8 +243,13 @@ def health() -> dict:
         # dropdown ends up offering something the model rejects.
         "aspect_ratios": list(ASPECT_RATIOS),
         "resolution_tiers": list(RESOLUTION_TIERS),
+        # Real pixel sizes per ratio. A tier name tells an operator nothing
+        # about what they will get — 4:5 at "4k" is 2048x2560 — and OpenArt
+        # honours exact dimensions, so the sizes are named outright.
+        "sizes": {a: [list(s) for s in sizes_for(a)] for a in ASPECT_RATIOS},
         "default_aspect": ASPECT,
         "default_resolution": RESOLUTION,
+        "default_size": [geo.IMG_W, geo.IMG_H],
         "clue_families": prompt_writer.CLUE_FAMILIES,
         "all_ready": all(c["ok"] for c in ready.values()),
         "ready": ready,
