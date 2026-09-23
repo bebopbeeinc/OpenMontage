@@ -33,11 +33,79 @@ _REQUIRED = ("city", "country", "prompt", "clues", "clue_words")
 
 
 class DraftError(RuntimeError):
-    """The model's reply cannot be used as a prompt."""
+    """The model's reply cannot be used as a prompt.
+
+    Carries the offending prompt so a retry can show the writer what it wrote
+    rather than only what was wrong with it.
+    """
+
+    def __init__(self, message: str, prompt: Optional[str] = None):
+        super().__init__(message)
+        self.prompt = prompt
 
 
 def _manual_text() -> str:
     return MANUAL.read_text()
+
+
+# Sections of the manual that describe a job this writer is not doing:
+# rendering, verifying pixels, delivering to Drive, and what to print for a
+# human operator. Sending them cost nothing but attention, and attention is
+# exactly what the placement rules were losing — three drafts followed them
+# zero times while being told, in the same breath, to write six prompts, run a
+# whole batch without stopping, call tools this writer does not have, and
+# answer as TSV.
+_NOT_THE_WRITERS_JOB = (
+    "1. THE BATCH WORKFLOW",
+    "6. RENDERING (STEP B)",
+    "7. VERIFICATION AND CLUE MESSAGES (STEP C)",
+    "8. FILENAMES AND DELIVERY (STEP D)",
+    "9. WHAT YOU SHOW THE OPERATOR, AND WHEN",
+)
+
+_SECTION = re.compile(r"^\d+\. [A-Z]", re.M)
+
+# Stated to the writer because both are checked on its answer, and a check the
+# writer was never told about is a trap rather than a rule.
+_WRITERS_BRIEF = """
+=====================================================================
+YOUR JOB
+=====================================================================
+You write ONE image prompt and answer with JSON. You render nothing, call
+no tools, and deliver nothing — another part of the pipeline does that.
+Ignore any instruction below about batches, rendering, verifying pixels,
+saving files, or printing for an operator; those belong to a different
+job. Everything below about the LOCATION, THE FRAME, CHONKY HIMSELF and
+THE CLUES is yours and is binding.
+
+Two things are checked on your answer, and it is rejected without them:
+
+  1. DEPTH AS AN ORDERING. Your prompt must place Chonky behind
+     something already in the scene, in so many words — "every one of
+     those people is between the camera and him", "he is behind the
+     furthest walking tourist", "far beyond all of them". Distances in
+     metres are rejected: they do not control how large he renders.
+
+  2. HE STANDS ON THE GROUND. Your prompt must not seat him on a
+     parapet, bench, ledge, step, wall, crate, case or any other piece
+     of furniture. Naming a prop as his surface makes the prop the
+     subject and brings both toward the camera. Put the prop in the
+     scene and put him on the ground near it.
+
+=====================================================================
+"""
+
+
+def writer_manual() -> str:
+    """The manual with the other agent's job removed, and the brief on top."""
+    text = _manual_text()
+    starts = [m.start() for m in _SECTION.finditer(text)] + [len(text)]
+    kept = []
+    for start, end in zip(starts, starts[1:]):
+        chunk = text[start:end]
+        if not any(chunk.startswith(h) for h in _NOT_THE_WRITERS_JOB):
+            kept.append(chunk)
+    return _WRITERS_BRIEF + text[:starts[0]] + "".join(kept)
 
 
 def _call_via_cli(system: str, user: str, *, model: Optional[str] = None) -> str:
@@ -112,10 +180,56 @@ _BANNED = (
 )
 
 
+# Things a prompt may name as his surface, and things it may not. Measured
+# over three drafts, the writer seated him on furniture in two of them and
+# stated depth as an ordering in none, with every one of these rules in its
+# system prompt. Asking is not the same as getting.
+_FURNITURE = (
+    "parapet", "balustrade", "bench", "ledge", "step", "steps", "stair", "stairs",
+    "windowsill", "sill", "railing", "rail", "wall", "table", "chair", "stool",
+    "case", "box", "crate", "barrel", "plinth", "pedestal", "kerb", "curb",
+    "planter", "bollard", "suitcase", "luggage", "cart", "stall", "counter",
+    "bin", "post", "pillar", "column", "roof", "bonnet", "hood", "boat", "bicycle",
+)
+_ON_FURNITURE = re.compile(
+    r"\b(?:sit|sits|sitting|sat|stand|stands|standing|stood|perch\w*|lie|lies|"
+    r"lying|lay|settle[sd]?|settled|rest|rests|resting|curl\w*)\b[^.]{0,80}?"
+    r"\bon (?:the|a|an|top of)\s+(?:[a-z\-]+\s+){0,3}(" + "|".join(_FURNITURE) + r")\b",
+    re.I,
+)
+
+# Depth has to be stated as an ordering against something already in the
+# scene; metres do not control it. The manual names these forms explicitly, so
+# requiring one of them is a fair check rather than a guess at phrasing.
+_ORDERING = re.compile(
+    r"between the camera and (?:him|chonky)|"
+    r"behind the (?:furthest|farthest|last|rearmost)|"
+    r"(?:far )?beyond (?:all|them|every)|"
+    r"further (?:away|back|down) than|farther (?:away|back|down) than|"
+    r"no closer (?:to the camera )?than|"
+    r"deeper into the scene than",
+    re.I,
+)
+
+
 def _check(prompt: str) -> None:
     for pattern, why in _BANNED:
         if pattern.search(prompt):
-            raise DraftError(why)
+            raise DraftError(why, prompt)
+
+    seated = _ON_FURNITURE.search(prompt)
+    if seated:
+        raise DraftError(
+            f"the prompt seats him on the {seated.group(1)}; a prop named as his "
+            "surface is understood as the thing being photographed and the model "
+            "brings both forward — put him on the ground near it instead", prompt)
+
+    if not _ORDERING.search(prompt):
+        raise DraftError(
+            "the prompt never states his depth as an ordering against something "
+            "already in the scene, which is the only thing that controls it — say "
+            "that the people are between the camera and him, or that he is behind "
+            "the furthest one, or far beyond all of them", prompt)
 
 
 def _user_message(difficulty: int, target_zone: str, used: list[str],
@@ -151,14 +265,38 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
     return "\n".join(lines)
 
 
+MAX_ATTEMPTS = 3
+
+
 def draft(*, difficulty: int, target_zone: str, used: list[str],
           city: Optional[str] = None, country: Optional[str] = None,
           caller: Optional[Callable] = None, model: Optional[str] = None) -> dict:
-    """Write one prompt. Raises DraftError rather than return something unusable."""
+    """Write one prompt, retrying with the reason when one is rejected.
+
+    A rejection that just fails the job teaches nothing and wastes the whole
+    draft; handing back what was wrong, with the prompt that was wrong, is what
+    turns the check into a correction. Drafting is cheap — it is the render
+    the check exists to protect.
+    """
     caller = caller or _default_caller
-    raw = caller(_manual_text(),
-                 _user_message(difficulty, target_zone, used, city, country),
-                 model=model)
+    system = writer_manual()
+    ask = _user_message(difficulty, target_zone, used, city, country)
+
+    last: Optional[DraftError] = None
+    for _ in range(MAX_ATTEMPTS):
+        try:
+            return _attempt(caller, system, ask, model)
+        except DraftError as exc:
+            last = exc
+            ask = (f"{ask}\n\n"
+                   f"Your previous answer was rejected: {exc}\n\n"
+                   f"The prompt that was rejected was:\n{exc.prompt or '(none)'}\n\n"
+                   "Write it again, fixing exactly that. Change nothing else.")
+    raise last  # type: ignore[misc]
+
+
+def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
+    raw = caller(system, ask, model=model)
 
     try:
         data = json.loads(_strip_fence(raw))
