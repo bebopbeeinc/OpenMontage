@@ -72,6 +72,7 @@
     </div>
     <div class="deploy">
       <button id="deploy-btn" type="button">Deploy latest</button>
+      <button id="install-btn" type="button" title="Install the repo's requirements into the Python that is serving this page.">Install deps</button>
       <div id="deploy-status" class="deploy-status"></div>
     </div>
   </div>
@@ -325,6 +326,42 @@ function hideForceButton() {
 }
 
 deployBtn.addEventListener("click", () => runDeploy({ force: false }));
+
+// Dependency install. A package added in git is inert until something installs
+// it on this machine, and deploy (pull + restart) never does. Running it here
+// puts it in the serving interpreter by construction.
+const installBtn = document.getElementById("install-btn");
+
+async function pollInstall() {
+  const r = await fetch("/api/install-deps");
+  const s = await r.json();
+  if (s.state === "running") {
+    setStatus("Installing dependencies… (torch and friends can take a few minutes)", "");
+    setTimeout(pollInstall, 3000);
+    return;
+  }
+  installBtn.disabled = false;
+  const tail = (s.log || "").trim().split("\n").slice(-3).join("\n");
+  if (s.state === "done") {
+    setStatus(`Installed ${(s.files || []).join(", ")}.\n${tail}`, "");
+  } else if (s.state === "failed") {
+    setStatus(`Install failed (exit ${s.returncode}).\n${tail}`, "warn");
+  }
+}
+
+installBtn.addEventListener("click", async () => {
+  installBtn.disabled = true;
+  setStatus("Starting install…", "");
+  const r = await fetch("/api/install-deps", { method: "POST" });
+  const body = await r.json();
+  if (!r.ok) {
+    installBtn.disabled = false;
+    setStatus(body.message || "Install refused.", "warn");
+    return;
+  }
+  setStatus(`Installing into ${body.python}…`, "");
+  setTimeout(pollInstall, 2000);
+});
 </script>
 </body>
 </html>
