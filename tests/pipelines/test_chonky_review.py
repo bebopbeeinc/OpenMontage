@@ -80,7 +80,10 @@ def test_approve_refuses_a_render_that_failed_its_checks(monkeypatch):
     """The band is a hard constraint; one click must not quietly bypass it."""
     monkeypatch.setattr(server, "deliver",
                         lambda img, **kw: {"drive_url": "u", "filename": "f", "row": 2})
-    _render("appr-bad", measurement=dict(MEASUREMENT, ok=False, size="too_big"))
+    # A box that genuinely fails: 300 px tall in a 1344x1680 frame, against a
+    # 43-69 px band. The flag is not what makes it fail — the pixels are.
+    _render("appr-bad", measurement=dict(MEASUREMENT, box=[500, 900, 560, 1200],
+                                         height_px=300, size="too_big", ok=False))
     try:
         r = client.post("/api/approve", json={"image_id": "appr-bad"})
         assert r.status_code == 400
@@ -167,3 +170,54 @@ def test_a_draft_without_clue_words_is_rejected():
     with pytest.raises(prompts.DraftError):
         prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                       caller=lambda s, u, model=None: json.dumps(payload))
+
+
+def test_approve_recomputes_the_verdict_instead_of_trusting_the_caller(monkeypatch):
+    """Approve is the only irreversible write; its guard must not be client-supplied.
+
+    A caller could post {"ok": true} for a render that failed, and the failing
+    image would land on Drive and in the sheet.
+    """
+    delivered = []
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: delivered.append(kw) or
+                        {"drive_url": "u", "filename": "f", "row": 2})
+    # 300 px tall in a 1344x1680 frame: far outside the band, whatever is claimed.
+    _render("appr-lie", measurement={"box": [500, 900, 560, 1200], "height_px": 300,
+                                     "size": "ok", "zone": "viewframe", "ok": True,
+                                     "frame_size": [1344, 1680]})
+    try:
+        r = client.post("/api/approve", json={"image_id": "appr-lie"})
+        assert r.status_code == 400, r.text
+        assert delivered == [], "a failing render reached Drive on the caller's say-so"
+    finally:
+        _cleanup("appr-lie")
+
+
+def test_approve_refuses_a_measurement_that_is_not_a_measurement(monkeypatch):
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: {"drive_url": "u", "filename": "f", "row": 2})
+    _render("appr-junk")
+    try:
+        r = client.post("/api/approve", json={"image_id": "appr-junk",
+                                              "measurement": "yes please"})
+        assert r.status_code == 400
+    finally:
+        _cleanup("appr-junk")
+
+
+def test_approving_twice_delivers_once(monkeypatch):
+    """A double click, a stale tab or a retry must not buy a second Drive file."""
+    calls = []
+    monkeypatch.setattr(server, "deliver",
+                        lambda img, **kw: calls.append(kw) or
+                        {"drive_url": "u", "filename": "f", "row": 2})
+    _render("appr-twice")
+    try:
+        first = client.post("/api/approve", json={"image_id": "appr-twice"})
+        assert first.status_code == 200, first.text
+        second = client.post("/api/approve", json={"image_id": "appr-twice"})
+        assert second.status_code == 409, second.text
+        assert len(calls) == 1, f"delivered {len(calls)} times"
+    finally:
+        _cleanup("appr-twice")

@@ -264,3 +264,51 @@ def test_a_first_draft_that_passes_is_not_retried():
 
     prompts.draft(difficulty=1, target_zone="viewframe", used=[], caller=caller)
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------
+# False positives cost three draft cycles and a failed job, and the retry then
+# tells the writer to fix something it never wrote. These are the phrasings a
+# review found being rejected wrongly, and the two that walked straight through.
+# --------------------------------------------------------------------------
+
+def test_other_people_may_sit_on_things():
+    """The rule is about Chonky's surface, not about the furniture in the scene."""
+    good = ("A dozen tourists sit on the steps of the cathedral. Chonky is far "
+            "beyond all of them, standing on the cobblestones.")
+    assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                         caller=_reply(good))["prompt"] == good
+
+
+def test_traffic_may_stand_at_the_kerb():
+    good = ("Taxis stand on the kerb in the foreground. Every one of those "
+            "people is between the camera and him; Chonky is on the gravel.")
+    assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                         caller=_reply(good))["prompt"] == good
+
+
+def test_upon_and_atop_are_the_same_rule():
+    for phrasing in ["Chonky sits upon the parapet.",
+                     "Chonky sits atop the stone bench.",
+                     "Chonky is perched on top of the crate."]:
+        with pytest.raises(prompts.DraftError):
+            prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=_reply(ORDERING + phrasing))
+
+
+def test_a_comparative_counts_as_an_ordering():
+    """"Further from the camera than the tourists" is the rule, stated plainly."""
+    for phrasing in ["Chonky is much further from the camera than the tourists.",
+                     "He sits deeper in the scene than the market stalls.",
+                     "Chonky is farther back than the furthest walking tourist."]:
+        good = phrasing + " He is on the cobblestones."
+        assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                             caller=_reply(good))["prompt"] == good
+
+
+def test_a_distance_in_metres_that_is_not_his_is_allowed():
+    """A 200-metre bridge is a fact about the bridge, not a placement for him."""
+    good = ("The camera looks down the 200-metre-long bridge. " + ORDERING +
+            "He is on the cobblestones.")
+    assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                         caller=_reply(good))["prompt"] == good

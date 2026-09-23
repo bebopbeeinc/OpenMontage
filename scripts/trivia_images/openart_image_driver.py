@@ -72,6 +72,7 @@ def generate_image(
     workspace: Optional[str] = OPENART_WORKSPACE,
     character: Optional[str] = None,
     fallback_workspaces: tuple[str, ...] = OPENART_FALLBACK_WORKSPACES,
+    log: Optional[list] = None,
 ) -> list[Path]:
     """Generate `len(output_paths)` image variants on OpenArt.
 
@@ -127,14 +128,26 @@ def generate_image(
 
     def build_params() -> dict:
         """Built per workspace attempt — uploads are workspace-scoped."""
+        def _say(line: str) -> None:
+            """Report progress to the console, and to the caller's sink.
+
+            A caller that wants a record of what was submitted takes it here.
+            Capturing it by swapping sys.stderr instead is a process-global
+            change, and made from one of several render threads it loses the
+            real stderr and files one render's references under another.
+            """
+            print(line, file=sys.stderr)
+            if log is not None:
+                log.append(line)
+
         references: list[dict] = []
         if character:
-            print(f"  → character stills: {character}", file=sys.stderr)
+            _say(f"  → character stills: {character}")
             references.extend(
                 characters.visual_references(character, purpose="create-image"),
             )
         if ref_path is not None:
-            print(f"  → reference image: {ref_path.name}", file=sys.stderr)
+            _say(f"  → reference image: {ref_path.name}")
             references.append(api.upload_reference(ref_path, "image", purpose="create-image"))
         params = {
             "prompt": prompt,

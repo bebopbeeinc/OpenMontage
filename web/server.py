@@ -265,7 +265,12 @@ SUPERVISED = bool(os.environ.get("OPENMONTAGE_LAUNCHER_SUPERVISED"))
 # should let the operator actually stop the server with Ctrl+C.
 RESTART_EXIT_CODE = 75
 
-ACTIVE_JOB_STATUSES = ("queued", "running")
+# "drafting" is a Chonky job whose prompt is still being written. It can
+# hold that state for minutes — drafting is serialized so a batch does not
+# pick the same location twice — and a guard blind to it lets a deploy
+# restart kill the batch, or an install swap a library out from under
+# renders that are about to start.
+ACTIVE_JOB_STATUSES = ("queued", "running", "drafting")
 
 
 def _scan_active_jobs() -> list[dict]:
