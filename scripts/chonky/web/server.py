@@ -587,7 +587,11 @@ def renders():
             "difficulty": side.get("difficulty"),
             "target_zone": side.get("target_zone"),
             "clues": side.get("clues"),
+            "clue_words": side.get("clue_words"),
             "approved": side.get("approved", False),
+            "rejected": side.get("rejected", False),
+            "reject_reason": side.get("reject_reason"),
+            "drive_url": side.get("drive_url"),
             "created_at": png.stat().st_mtime,
         })
     out.sort(key=lambda r: r["created_at"], reverse=True)
@@ -620,23 +624,55 @@ def viewframe(image_id: str):
     return Response(buf.getvalue(), media_type="image/jpeg")
 
 
+def _split_city_country(location: str) -> tuple[str, str]:
+    city, _, country = (location or "").partition(",")
+    return city.strip(), country.strip()
+
+
 @app.post("/api/approve")
 def approve(payload: dict) -> dict:
-    """Encode, upload to Drive, append the sheet row. The only write path."""
+    """Encode, upload to Drive, append the sheet row. The only write path.
+
+    Everything it needs was recorded beside the render when it was made, so a
+    reviewer clicking Approve on a tile supplies nothing but which tile. Fields
+    passed in the payload still win, for the case where someone corrected one.
+    """
     image_id = payload.get("image_id", "")
     img = _open(image_id)
     if img is None:
         return JSONResponse({"error": "unknown image"}, status_code=404)
+
+    side = _read_sidecar(image_id)
+    city, country = _split_city_country(side.get("location", ""))
+    measurement = payload.get("measurement") or side.get("measurement")
+
+    if not measurement:
+        return JSONResponse({"error": "this render has not been measured"},
+                            status_code=400)
+    if not measurement.get("ok"):
+        # The band and the zone are hard constraints. One click is exactly
+        # where they would quietly stop being hard.
+        return JSONResponse({"error": (
+            f"render failed its checks: {measurement.get('height_px')} px "
+            f"{measurement.get('size')}, zone {measurement.get('zone')}")},
+            status_code=400)
+
+    clue_words = payload.get("clue_words") or side.get("clue_words")
+    if not clue_words or len(clue_words) != 3:
+        return JSONResponse(
+            {"error": "this render has no three clue words, which the filename needs"},
+            status_code=400)
+
     try:
         result = deliver(
             img,
-            difficulty=payload["difficulty"],
-            city=payload["city"],
-            country=payload["country"],
-            clue_words=payload["clue_words"],
-            measurement=payload["measurement"],
-            clues=payload.get("clues"),
-            prompt=payload.get("prompt", ""),
+            difficulty=payload.get("difficulty") or side.get("difficulty"),
+            city=payload.get("city") or city,
+            country=payload.get("country") or country,
+            clue_words=clue_words,
+            measurement=measurement,
+            clues=payload.get("clues") or side.get("clues"),
+            prompt=payload.get("prompt") or side.get("prompt", ""),
             viewpoint=payload.get("viewpoint", ""),
             scene_type=payload.get("scene_type", ""),
             gag=payload.get("gag", ""),
@@ -644,7 +680,62 @@ def approve(payload: dict) -> dict:
         )
     except Exception as exc:
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
+
+    _write_sidecar(image_id, approved=True, rejected=False,
+                   drive_url=result.get("drive_url"),
+                   filename=result.get("filename"))
     return result
+
+
+@app.post("/api/reject")
+def reject(payload: dict) -> dict:
+    """Record that a render was rejected, and why.
+
+    The file stays. A rejected render is the evidence for what the prompt did
+    wrong, and the reason is the only record of a judgement no measurement
+    could make.
+    """
+    image_id = payload.get("image_id", "")
+    if not (LIBRARY / f"{image_id}.png").exists():
+        return JSONResponse({"error": "unknown image"}, status_code=404)
+    _write_sidecar(image_id, rejected=True, approved=False,
+                   reject_reason=payload.get("reason", ""))
+    return {"ok": True, "image_id": image_id}
+
+
+@app.post("/api/regenerate")
+def regenerate(payload: dict) -> dict:
+    """Render an edited prompt as a NEW image, keeping the original.
+
+    A reroll is a second attempt, not a correction of the first: keeping both
+    is what makes it possible to see which edit changed what.
+    """
+    source_id = payload.get("image_id", "")
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "prompt is empty"}, status_code=400)
+
+    # A hand-edited prompt gets the same check a written one gets. Both cost
+    # the same render.
+    try:
+        prompt_writer._check(prompt)
+    except prompt_writer.DraftError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    side = _read_sidecar(source_id)
+    image_id = uuid.uuid4().hex[:8]
+    job_id = uuid.uuid4().hex[:8]
+    with _lock:
+        jobs[job_id] = Job(id=job_id, slug=image_id, image_id=image_id)
+
+    threading.Thread(
+        target=_run_render_inline,
+        args=(job_id, image_id, prompt),
+        kwargs=dict(location=side.get("location"), difficulty=side.get("difficulty"),
+                    target_zone=side.get("target_zone"), clues=side.get("clues")),
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "image_id": image_id, "from": source_id}
 
 
 if __name__ == "__main__":  # pragma: no cover

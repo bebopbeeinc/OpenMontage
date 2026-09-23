@@ -20,6 +20,7 @@ DRAFT = {
     "country": "Czech Republic",
     "prompt": "A photograph of Charles Bridge, with Chonky far beyond the crowd.",
     "clues": ["the bridge tower", "the castle", "baroque statues"],
+    "clue_words": ["tower", "castle", "statues"],
 }
 
 
