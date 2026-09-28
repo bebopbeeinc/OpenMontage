@@ -491,7 +491,7 @@ function actionsCell(r) {
          <div class="act-col">${coverCol ? '<span class="act-label">Cover</span>' : ''}${coverCol}</div>
        </div>`
     : '';
-  // Generate spans BOTH columns — it (re)builds the video AND the cover.
+  // Generate spans BOTH columns (video only — the cover is built via its own button).
   const genRow = genBtn ? `<div class="act-gen">${genBtn}</div>` : '';
   const commonRow = common ? `<div class="act-common">${common}</div>` : '';
   return `<div class="act-grid">${cols}${genRow}${commonRow}</div>`;
@@ -684,7 +684,7 @@ async function runSelect(prefilledDay, prefilledSlug) {
 
 async function runGenerate(slug, isRegen=false) {
   if (!slug) return;
-  if (isRegen && !confirm(`Re-generate ${slug}? This spends new OpenArt credits and overwrites the local clip, render, and cover. Drive files (if any) are replaced in place.`)) return;
+  if (isRegen && !confirm(`Re-generate ${slug}? This spends new OpenArt credits and overwrites the local clip and render. Drive files (if any) are replaced in place.`)) return;
   try {
     const job = await api('api/run', {
       method: 'POST',

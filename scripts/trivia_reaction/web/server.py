@@ -299,8 +299,8 @@ async def _run_generate(job: Job) -> None:
     _emit(job, f"render ready for local review: {out_path.relative_to(REPO)}")
     _emit(job, "review frames + verify captions before clicking Publish.")
 
-    # Flip Queue!C -> Ready to publish.
-    existing = None
+    # Flip Queue!C -> Ready to publish. The cover is NOT built here — it's a
+    # separate, manual step (the Cover button → _run_cover).
     try:
         ws = queue_row.build_sheets(write=True)
         existing = next(
@@ -314,19 +314,6 @@ async def _run_generate(job: Job) -> None:
             _emit(job, f"  Queue!C{existing['row']} -> {queue_row.STATUS_READY_TO_PUBLISH}")
     except Exception as e:  # noqa: BLE001
         _emit(job, f"  ⚠ Queue status update skipped: {e}")
-
-    # Cover (non-fatal): build it from the fresh render + the row's saved cover
-    # prompt, so Generate produces BOTH the video and the cover in one click. A
-    # flaky cover never fails an otherwise-good render.
-    try:
-        cover_prompt = (existing.get("cover_prompt") or "").strip() if existing else ""
-        if cover_prompt:
-            _emit(job, "=== Cover: OpenArt Nano Banana Pro ===")
-            await _generate_and_upload_cover(job, job.slug, prompt=cover_prompt, variants=2)
-        else:
-            _emit(job, "· no cover prompt on the row — skipping cover (add one via ✎ Cover prompt)")
-    except Exception as e:  # noqa: BLE001
-        _emit(job, f"  ⚠ cover step skipped (the video render is fine): {e}")
 
 
 async def _run_publish(job: Job) -> None:
@@ -351,8 +338,8 @@ async def _generate_and_upload_cover(
 ):
     """Run cover_gen for `slug` (the render must already exist locally), then
     upload the canonical cover to Drive and persist the link + prompt to the
-    Queue. Returns the canonical Path. Raises on cover_gen failure. Shared by
-    the Cover button (_run_cover) and the Generate chain (_run_generate)."""
+    Queue. Returns the canonical Path. Raises on cover_gen failure. Used by
+    the Cover button (_run_cover)."""
     py = sys.executable
     cmd = [py, "scripts/trivia_reaction/cover_gen.py", slug, "--headless",
            "--variants", str(int(variants))]
