@@ -18,6 +18,30 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 MODEL = "GPT Image 2.5 Sunburst"
+
+# Models this pipeline may address. Named here rather than taken on trust so
+# an unrecognised one fails before it costs a render, the same way an
+# unrecognised aspect ratio does.
+MODELS = (
+    "GPT Image 2.5 Sunburst",
+    "GPT Image 2.5 Flare",
+    "GPT Image 2",
+    "Nano Banana Pro",
+    "Nano Banana 2",
+    # An editor rather than a renderer: give it a photograph and it changes
+    # part of it, instead of describing a new picture from scratch.
+    "Grok Imagine Image 2.0",
+)
+
+
+def normalise_model(model: Optional[str]) -> str:
+    if model is None:
+        return MODEL
+    cleaned = str(model).strip()
+    if cleaned not in MODELS:
+        raise ValueError(f"model {model!r} is not one of {', '.join(MODELS)}")
+    return cleaned
+
 ASPECT = "4:5"
 RESOLUTION = "4k"
 
@@ -115,7 +139,7 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
                 log: Optional[list] = None, aspect: Optional[str] = None,
                 resolution: Optional[str] = None,
                 width: Optional[int] = None, height: Optional[int] = None,
-                reference_image_path=None) -> Path:
+                reference_image_path=None, model: Optional[str] = None) -> Path:
     """Render `prompt` to `out_path`. One submission, no retries.
 
     `driver` is injectable so tests never reach OpenArt. `log`, when given,
@@ -142,15 +166,17 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
                         aspect=normalise_aspect(aspect),
                         resolution=normalise_tier(resolution),
                         width=width, height=height,
-                        reference_image_path=reference_image_path)[0])
+                        reference_image_path=reference_image_path,
+                        model=normalise_model(model))[0])
 
 
 def _submit(driver, prompt: str, out_path: Path, *, log=None,
             aspect: str = ASPECT, resolution: str = RESOLUTION,
-            width=None, height=None, reference_image_path=None):
+            width=None, height=None, reference_image_path=None,
+            model: str = MODEL):
     return driver(
         prompt=prompt,
-        model=MODEL,
+        model=model,
         output_paths=[out_path],
         aspect=aspect,
         resolution=resolution,

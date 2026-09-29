@@ -119,6 +119,7 @@
     <label class="geo">ViewFrame share
       <input id="pct" type="number" value="70" min="0" max="100" style="width:64px">%
     </label>
+    <label class="geo">Model <select id="model"></select></label>
     <label class="geo">Ratio <select id="aspect"></select></label>
     <label class="geo">Resolution <select id="resolution"></select></label>
     <button id="generate">Generate</button>
@@ -181,6 +182,7 @@ function fillSizes(aspect) {
 function fillControls(h) {
   // All means the count at EVERY level, so the total is the count times five.
   // The option says so, because one click here is five batches of renders.
+  fillSelect(document.getElementById('model'), h.models || [], h.default_model);
   fillSelect(document.getElementById('difficulty'),
              ['1', '2', '3', '4', '5', 'All levels (1-5)'], '1');
   SIZES = h.sizes || {};
@@ -238,6 +240,7 @@ generateBtn.onclick = async () => {
     difficulty: document.getElementById('difficulty').value.startsWith('All')
       ? 'all' : +document.getElementById('difficulty').value,
     viewframe_pct: +document.getElementById('pct').value,
+    model: document.getElementById('model').value,
     aspect: document.getElementById('aspect').value,
     width: +document.getElementById('resolution').value.split('x')[0],
     height: +document.getElementById('resolution').value.split('x')[1],
