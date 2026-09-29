@@ -52,6 +52,7 @@ from scripts.chonky.render import (  # noqa: E402
 )
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
+from scripts.chonky import inspect as render_inspector  # noqa: E402
 from scripts.chonky import prompts as prompt_writer  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
@@ -544,6 +545,20 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                     resolution=resolution, width=width, height=height)
         with Image.open(out) as im:
             result = verify(im)
+
+        # STEP C. The clues the writer produced are a prediction of the render;
+        # these are taken from the render itself. A failure here must not cost
+        # the image — it has already been paid for — so the prediction stands
+        # in, labelled as what it is.
+        seen = None
+        clue_error = None
+        city, _, country = (location or "").partition(",")
+        try:
+            seen = render_inspector.inspect_render(
+                out, city=city.strip(), country=country.strip(),
+                difficulty=difficulty or 1)
+        except Exception as exc:                      # noqa: BLE001 - reported
+            clue_error = f"{type(exc).__name__}: {exc}"
         with _lock:
             _images[image_id] = out
             job = jobs[job_id]
@@ -554,7 +569,14 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
         # without them Approve refuses the render it just made.
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
-                       clues=clues, clue_words=clue_words, measurement=result,
+                       clues=(seen or {}).get("clues") or clues,
+                       clue_words=(seen or {}).get("clue_words") or clue_words,
+                       clue_source="render" if seen else "prompt",
+                       clue_source_error=clue_error,
+                       names_the_place=(seen or {}).get("names_the_place", False),
+                       names_the_place_detail=(seen or {}).get(
+                           "names_the_place_detail", ""),
+                       measurement=result,
                        viewpoint=viewpoint,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
@@ -711,6 +733,10 @@ def renders():
             "clues": side.get("clues"),
             "clue_words": side.get("clue_words"),
             "viewpoint": side.get("viewpoint"),
+            "clue_source": side.get("clue_source"),
+            "clue_source_error": side.get("clue_source_error"),
+            "names_the_place": side.get("names_the_place", False),
+            "names_the_place_detail": side.get("names_the_place_detail"),
             "aspect": side.get("aspect"),
             "width": side.get("width"),
             "height": side.get("height"),

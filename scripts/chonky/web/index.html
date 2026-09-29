@@ -312,10 +312,24 @@ function tile(r) {
     t.appendChild(vp);
   }
 
+  // A render that spells its own answer is not a level: the player reads the
+  // place off a sign instead of deducing it.
+  if (r.names_the_place) {
+    t.appendChild(el('div', 'state bad-txt',
+      '⚠ names the place — ' + (r.names_the_place_detail || 'visible in the image')));
+  }
+
   if (r.clues && r.clues.length) {
     const cl = el('ol', 'clues');
     r.clues.forEach(c => cl.appendChild(el('li', null, c)));
     t.appendChild(cl);
+    // Clues taken from the render describe it; clues left over from the prompt
+    // only predict it, and that is how a plate nobody could read got cited.
+    if (r.clue_source === 'prompt') {
+      t.appendChild(el('div', 'state bad-txt',
+        '⚠ clues are from the prompt, not the image' +
+        (r.clue_source_error ? ` — ${r.clue_source_error}` : '')));
+    }
   }
 
   if (r.approved) t.appendChild(el('div', 'state ok-txt', '✓ approved — on Drive'));

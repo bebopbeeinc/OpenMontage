@@ -12,6 +12,10 @@ import pytest
 
 from scripts.chonky import prompts
 
+# Bound at import, before conftest's offline guard replaces the attribute:
+# this module is where the real implementation is under test.
+pick_locations = prompts.pick_locations
+
 
 def _reply(payload):
     return lambda system, user, *, model=None: json.dumps(payload)
@@ -23,7 +27,7 @@ THREE = {"locations": [{"city": "Prague", "country": "Czech Republic"},
 
 
 def test_one_location_per_slot():
-    got = prompts.pick_locations(slots=[1, 2, 3], used=[], caller=_reply(THREE))
+    got = pick_locations(slots=[1, 2, 3], used=[], caller=_reply(THREE))
     assert [g["city"] for g in got] == ["Prague", "Porto", "Osaka"]
 
 
@@ -35,7 +39,7 @@ def test_the_levels_are_named_so_the_choice_can_suit_them():
         seen["user"] = user
         return json.dumps(THREE)
 
-    prompts.pick_locations(slots=[1, 3, 5], used=[], caller=caller)
+    pick_locations(slots=[1, 3, 5], used=[], caller=caller)
     assert "1" in seen["user"] and "3" in seen["user"] and "5" in seen["user"]
 
 
@@ -46,7 +50,7 @@ def test_already_used_places_are_named():
         seen["user"] = user
         return json.dumps(THREE)
 
-    prompts.pick_locations(slots=[1], used=["Lisbon, Portugal"],
+    pick_locations(slots=[1], used=["Lisbon, Portugal"],
                            caller=lambda s, u, model=None: (seen.update(user=u),
                                                             json.dumps({"locations": [
                                                                 {"city": "Prague",
@@ -59,12 +63,12 @@ def test_a_reply_that_repeats_a_city_is_rejected():
     same = {"locations": [{"city": "Prague", "country": "Czech Republic"},
                           {"city": "Prague", "country": "Czech Republic"}]}
     with pytest.raises(prompts.DraftError):
-        prompts.pick_locations(slots=[1, 2], used=[], caller=_reply(same))
+        pick_locations(slots=[1, 2], used=[], caller=_reply(same))
 
 
 def test_a_reply_that_reuses_an_old_location_is_rejected():
     with pytest.raises(prompts.DraftError):
-        prompts.pick_locations(slots=[1], used=["Prague, Czech Republic"],
+        pick_locations(slots=[1], used=["Prague, Czech Republic"],
                                caller=_reply({"locations": [
                                    {"city": "Prague",
                                     "country": "Czech Republic"}]}))
@@ -72,7 +76,7 @@ def test_a_reply_that_reuses_an_old_location_is_rejected():
 
 def test_the_wrong_number_of_locations_is_rejected():
     with pytest.raises(prompts.DraftError):
-        prompts.pick_locations(slots=[1, 2, 3, 4], used=[], caller=_reply(THREE))
+        pick_locations(slots=[1, 2, 3, 4], used=[], caller=_reply(THREE))
 
 
 def test_a_rejected_pick_is_retried_with_the_reason():
@@ -87,7 +91,7 @@ def test_a_rejected_pick_is_retried_with_the_reason():
         asks.append(user)
         return replies.pop(0)
 
-    got = prompts.pick_locations(slots=[1, 2], used=[], caller=caller)
+    got = pick_locations(slots=[1, 2], used=[], caller=caller)
     assert [g["city"] for g in got] == ["Prague", "Porto"]
     assert len(asks) == 2
     assert "Prague" in asks[1]
