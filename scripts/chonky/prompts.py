@@ -441,6 +441,8 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                         f"you can point to on a map",
                         drafted["prompt"])
                 drafted["place_note"] = finding.get("note", "")
+                drafted["photo_url"] = finding.get("photo_url", "")
+                drafted["photo_note"] = finding.get("photo_note", "")
                 # The looked-up facts are appended to the prompt the writer
                 # produced. It was guessing at the signage and the plates —
                 # that is where a European plate turned up in Peru — and these

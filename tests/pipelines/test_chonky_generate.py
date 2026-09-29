@@ -435,3 +435,57 @@ def test_the_render_survives_an_inspection_failure(monkeypatch):
         assert "the CLI fell over" in side["clue_source_error"]
     finally:
         _cleanup(ids)
+
+
+def test_the_render_is_anchored_to_a_photograph_of_the_place(monkeypatch):
+    """The whole point: the picture should match reality, not resemble it."""
+    from scripts.chonky import reference_photo as rp
+
+    seen = {}
+    monkeypatch.setattr(
+        server, "render_once",
+        lambda p, o, log=None, **kw: (seen.update(kw), _fake_render(p, o))[1])
+    monkeypatch.setattr(prompts, "draft",
+                        lambda **kw: dict(DRAFT, photo_url="https://x/street.jpg"))
+    monkeypatch.setattr(
+        rp, "fetch_reference",
+        lambda url, dest, **kw: {"path": dest, "source_url": url, "size": [900, 700]})
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert seen["reference_image_path"] is not None
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        # Provenance: which photograph this render was built against.
+        assert side["photo_url"] == "https://x/street.jpg"
+    finally:
+        _cleanup(ids)
+
+
+def test_a_photograph_that_cannot_be_fetched_does_not_lose_the_render(monkeypatch):
+    """Unanchored is worse than anchored. It is not worse than nothing."""
+    from scripts.chonky import reference_photo as rp
+
+    seen = {}
+    monkeypatch.setattr(
+        server, "render_once",
+        lambda p, o, log=None, **kw: (seen.update(kw), _fake_render(p, o))[1])
+    monkeypatch.setattr(prompts, "draft",
+                        lambda **kw: dict(DRAFT, photo_url="https://x/gone.jpg"))
+
+    def boom(url, dest, **kw):
+        raise rp.ReferenceError("404 not found")
+
+    monkeypatch.setattr(rp, "fetch_reference", boom)
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        states = _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert states == ["done"], states
+        assert seen.get("reference_image_path") is None
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert "404" in side["photo_error"]
+    finally:
+        _cleanup(ids)
