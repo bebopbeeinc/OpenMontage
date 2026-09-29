@@ -7,6 +7,8 @@ button and a reviewable card has to happen without them.
 import json
 import time
 
+import pytest
+
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -22,6 +24,20 @@ DRAFT = {
     "clues": ["the bridge tower", "the castle", "baroque statues"],
     "clue_words": ["tower", "castle", "statues"],
 }
+
+
+@pytest.fixture(autouse=True)
+def _no_network_picker(monkeypatch):
+    """Every test here gets a deterministic picker.
+
+    Generate now settles the locations before writing anything, so a test that
+    stubs only `draft` would reach out to Claude for the places. A test that
+    cares about the picker overrides this one.
+    """
+    monkeypatch.setattr(
+        prompts, "pick_locations",
+        lambda **kw: [{"city": f"City{i}", "country": "Country"}
+                      for i in range(len(kw["slots"]))])
 
 
 def _fake_render(prompt, out, log=None, **kw):
@@ -144,31 +160,63 @@ def test_a_rejected_draft_fails_that_job_without_rendering(monkeypatch):
         _cleanup(ids)
 
 
-def test_each_image_in_a_batch_knows_what_the_earlier_ones_took(monkeypatch):
-    """Two drafts in one batch picked Sydney.
+def test_the_whole_batch_is_placed_in_one_decision(monkeypatch):
+    """Two drafts in one batch once both chose Sydney.
 
-    The used list was computed once and handed to every draft, so nothing told
-    the second image what the first had chosen — and not reusing a location is
-    what the manual's whole first section is about.
+    They were each handed the same "already used" list, computed before any of
+    them ran, so nothing told the second what the first had taken. It was
+    fixed by writing the prompts one after another; that made a batch of
+    fifteen take twenty minutes before the last render even started.
+
+    The guarantee now comes from deciding every location up front, in one
+    request that can see all of them at once — which is also what frees the
+    writing to happen in parallel. This asserts the decision is made once, for
+    the whole batch; the picker's own tests cover it refusing a repeat.
     """
     monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft",
+                        lambda **kw: dict(DRAFT, city=kw["city"], country=kw["country"]))
 
-    seen_used = []
-    cities = iter(["Prague", "Vienna", "Porto"])
-
-    def spy(**kw):
-        seen_used.append(list(kw["used"]))
-        return dict(DRAFT, city=next(cities), country="X")
-
-    monkeypatch.setattr(prompts, "draft", spy)
+    calls = []
+    monkeypatch.setattr(
+        prompts, "pick_locations",
+        lambda **kw: (calls.append(kw["slots"]),
+                      [{"city": f"City{i}", "country": "X"}
+                       for i in range(len(kw["slots"]))])[1])
 
     body = client.post("/api/generate", json={"count": 3}).json()
     ids = [j["image_id"] for j in body["jobs"]]
     try:
-        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
-        assert len(seen_used) == 3
-        assert "Prague, X" in seen_used[1], seen_used
-        assert "Prague, X" in seen_used[2] and "Vienna, X" in seen_used[2], seen_used
+        _drain([j["job_id"] for j in body["jobs"]], timeout=25)
+        assert len(calls) == 1, f"the batch was placed in {len(calls)} decisions"
+        assert len(calls[0]) == 3, "the decision must see every image at once"
+    finally:
+        _cleanup(ids)
+
+
+def test_a_rejected_draft_fails_that_job_without_rendering(monkeypatch):
+    """A bad prompt must not become a paid render."""
+    rendered = []
+
+    def counting_render(prompt, out, log=None):
+        rendered.append(prompt)
+        return _fake_render(prompt, out, log)
+
+    monkeypatch.setattr(server, "render_once", counting_render)
+
+    def boom(**kw):
+        raise prompts.DraftError("says 'no illustration style'")
+
+    monkeypatch.setattr(prompts, "draft", boom)
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        states = _drain([j["job_id"] for j in body["jobs"]])
+        assert states == ["failed"]
+        assert rendered == [], "a rejected draft was rendered anyway"
+        detail = client.get(f"/api/jobs/{body['jobs'][0]['job_id']}").json()
+        assert "no illustration style" in detail["error"]
     finally:
         _cleanup(ids)
 
@@ -250,3 +298,76 @@ def test_a_single_level_still_makes_exactly_that_many(monkeypatch):
         _drain([j["job_id"] for j in body["jobs"]], timeout=20)
     finally:
         _cleanup(ids)
+
+
+def test_the_prompts_are_written_at_the_same_time(monkeypatch):
+    """The slow part of a batch must overlap, not queue.
+
+    Each stub draft waits until all three have started. Serialized, the first
+    never returns and the barrier times out — which is precisely the wall
+    clock this change exists to remove.
+    """
+    import threading
+
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "pick_locations",
+                        lambda **kw: [{"city": f"City{i}", "country": "X"}
+                                      for i in range(len(kw["slots"]))])
+
+    started = threading.Barrier(3, timeout=8)
+
+    def overlapping(**kw):
+        started.wait()
+        return dict(DRAFT, city=kw["city"], country=kw["country"])
+
+    monkeypatch.setattr(prompts, "draft", overlapping)
+
+    body = client.post("/api/generate", json={"count": 3}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        states = _drain([j["job_id"] for j in body["jobs"]], timeout=25)
+        assert states == ["done", "done", "done"], states
+    finally:
+        _cleanup(ids)
+
+
+def test_each_prompt_is_written_for_the_location_that_was_chosen(monkeypatch):
+    """Parallel writing must not cost the no-repeat guarantee."""
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "pick_locations",
+                        lambda **kw: [{"city": "Prague", "country": "CZ"},
+                                      {"city": "Porto", "country": "PT"}])
+    asked = []
+    monkeypatch.setattr(prompts, "draft",
+                        lambda **kw: (asked.append(kw["city"]),
+                                      dict(DRAFT, city=kw["city"],
+                                           country=kw["country"]))[1])
+
+    body = client.post("/api/generate", json={"count": 2}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert sorted(asked) == ["Porto", "Prague"]
+    finally:
+        _cleanup(ids)
+
+
+def test_the_picker_sees_what_is_already_in_the_library(monkeypatch):
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    seen = {}
+    monkeypatch.setattr(prompts, "pick_locations",
+                        lambda **kw: (seen.update(kw),
+                                      [{"city": "Prague", "country": "CZ"}])[1])
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    Image.new("RGB", (64, 80), (1, 2, 3)).save(server.LIBRARY / "picker-probe.png")
+    (server.LIBRARY / "picker-probe.json").write_text(
+        json.dumps({"image_id": "picker-probe", "location": "Lisbon, Portugal"}))
+    try:
+        body = client.post("/api/generate", json={"count": 1}).json()
+        ids = [j["image_id"] for j in body["jobs"]]
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert "Lisbon, Portugal" in seen["used"]
+        _cleanup(ids)
+    finally:
+        _cleanup(["picker-probe"])

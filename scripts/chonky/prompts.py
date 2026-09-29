@@ -413,3 +413,91 @@ def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
         "clues": [str(c) for c in data["clues"]],
         "clue_words": [str(w) for w in data["clue_words"]],
     }
+
+
+# --------------------------------------------------------------------------
+# Choosing where, before writing anything
+# --------------------------------------------------------------------------
+
+def _pick_message(slots: list[int], used: list[str]) -> str:
+    lines = [
+        f"Choose {len(slots)} locations, one for each of these images, in order:",
+        "",
+    ]
+    lines += [f"  image {i + 1}: difficulty {level}" for i, level in enumerate(slots)]
+    lines += [
+        "",
+        "Pick each one to suit its difficulty, by the definitions in section 3.",
+        "They must all be different places, and none of them may repeat a city "
+        "that appears below.",
+    ]
+    if used:
+        lines += ["", "Already used:"] + [f"  - {u}" for u in used]
+    lines += [
+        "",
+        "Reply with JSON only, no prose around it:",
+        '{"locations": [{"city": "...", "country": "..."}, ...]}',
+        "",
+        "Nothing else — no viewpoint, no prompt, no commentary. Those are "
+        "written separately, one request per image.",
+    ]
+    return "\n".join(lines)
+
+
+def pick_locations(*, slots: list[int], used: list[str],
+                   caller: Optional[Callable] = None,
+                   model: Optional[str] = None) -> list[dict]:
+    """Choose one location per image, all different, none already used.
+
+    This exists to make the prompt-writing parallel. Writing was sequential
+    only so that each prompt could see which places the earlier ones had
+    taken; settling that here, in one short call, lets the slow part — a full
+    prompt per image, unchanged — happen at the same time instead of one after
+    another.
+    """
+    caller = caller or _default_caller
+    system = writer_manual()
+    ask = _pick_message(slots, used)
+    taken = {u.strip().lower() for u in used}
+
+    last: Optional[DraftError] = None
+    for _ in range(MAX_ATTEMPTS):
+        raw = caller(system, ask, model=model)
+        try:
+            chosen = _validate_locations(json.loads(_strip_fence(raw)), slots, taken)
+        except DraftError as exc:
+            last = exc
+            ask = (f"{ask}\n\nYour previous answer was rejected: {exc}\n\n"
+                   "Choose again, fixing exactly that.")
+            continue
+        except (ValueError, TypeError) as exc:
+            last = DraftError(f"reply was not JSON: {exc}; got {raw[:200]!r}")
+            continue
+        return chosen
+    raise last  # type: ignore[misc]
+
+
+def _validate_locations(data, slots: list[int], taken: set[str]) -> list[dict]:
+    if not isinstance(data, dict) or not isinstance(data.get("locations"), list):
+        raise DraftError(f"expected an object with a locations list, got {data!r}")
+
+    chosen = data["locations"]
+    if len(chosen) != len(slots):
+        raise DraftError(
+            f"expected {len(slots)} locations, got {len(chosen)}")
+
+    seen: set[str] = set()
+    out: list[dict] = []
+    for entry in chosen:
+        if not isinstance(entry, dict) or not entry.get("city") or not entry.get("country"):
+            raise DraftError(f"every location needs a city and a country; got {entry!r}")
+        city, country = str(entry["city"]).strip(), str(entry["country"]).strip()
+        key = city.lower()
+        if key in seen:
+            raise DraftError(
+                f"{city} appears twice; every image must be a different place")
+        if key in {t.split(",")[0].strip() for t in taken}:
+            raise DraftError(f"{city} has already been used; choose somewhere else")
+        seen.add(key)
+        out.append({"city": city, "country": country})
+    return out

@@ -470,34 +470,63 @@ def generate(payload: dict) -> dict:
                         "target_zone": decision["target_zone"],
                         "difficulty": level})
 
+    def _draft_one(job_id, image_id, zone, city, country, level) -> None:
+        try:
+            d = prompt_writer.draft(difficulty=level, target_zone=zone,
+                                    used=used, city=city, country=country,
+                                    weights=weights)
+        except Exception as exc:                  # noqa: BLE001 - shown in the UI
+            with _lock:
+                job = jobs[job_id]
+                job.status = "error"
+                job.error = f"{type(exc).__name__}: {exc}"
+            return
+        location = f"{d['city']}, {d['country']}"
+        with _lock:
+            jobs[job_id].status = "running"
+        _run_render_inline(job_id, image_id, d["prompt"], location=location,
+                           difficulty=level, target_zone=zone, clues=d["clues"],
+                           clue_words=d.get("clue_words"),
+                           aspect=aspect, resolution=resolution,
+                           width=width, height=height)
+
     def _draft_all() -> None:
-        for job_id, image_id, zone, city, country, level in plan:
+        """Settle the places first, then write every prompt at once.
+
+        Writing used to be sequential so each prompt could see which places
+        the earlier ones had taken. One short call settles that for the whole
+        batch, which leaves the slow part — a full prompt per image, written
+        exactly as before — free to happen at the same time.
+        """
+        slots = [level for (_, _, _, _, _, level) in plan]
+        chosen = [(city, country) for (_, _, _, city, country, _) in plan]
+
+        # Only for the images whose place the operator did not name.
+        blanks = [i for i, (city, _) in enumerate(chosen) if not city]
+        if blanks:
             try:
-                d = prompt_writer.draft(difficulty=level, target_zone=zone,
-                                        used=used, city=city, country=country,
-                                        weights=weights)
+                picked = prompt_writer.pick_locations(
+                    slots=[slots[i] for i in blanks], used=used)
             except Exception as exc:              # noqa: BLE001 - shown in the UI
                 with _lock:
-                    job = jobs[job_id]
-                    job.status = "error"
-                    job.error = f"{type(exc).__name__}: {exc}"
-                continue
-            location = f"{d['city']}, {d['country']}"
-            # What this image took is what the next one must avoid.
-            if location not in used:
-                used.append(location)
-            with _lock:
-                jobs[job_id].status = "running"
-            threading.Thread(
-                target=_run_render_inline,
-                args=(job_id, image_id, d["prompt"]),
-                kwargs=dict(location=location, difficulty=level,
-                            target_zone=zone, clues=d["clues"],
-                            clue_words=d.get("clue_words"),
-                            aspect=aspect, resolution=resolution,
-                            width=width, height=height),
-                daemon=True,
-            ).start()
+                    for job_id, *_ in plan:
+                        job = jobs[job_id]
+                        job.status = "error"
+                        job.error = f"choosing locations failed: {exc}"
+                return
+            for i, place in zip(blanks, picked):
+                chosen[i] = (place["city"], place["country"])
+
+        threads = []
+        for (job_id, image_id, zone, _, _, level), (city, country) in zip(plan, chosen):
+            t = threading.Thread(
+                target=_draft_one,
+                args=(job_id, image_id, zone, city, country, level),
+                daemon=True)
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join()
 
     threading.Thread(target=_draft_all, daemon=True).start()
     return {"jobs": out}
