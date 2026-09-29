@@ -160,6 +160,7 @@ def test_the_writer_is_asked_for_three_filename_words():
     """The filename needs three single words; parsing them back out of prose guesses."""
     payload = {"city": "Paris", "country": "France",
                "viewpoint": "Trocadero terrace, facing east across the Seine",
+               "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
                "prompt": ("The crowd walks ahead and Chonky sits far beyond "
                           "all of them on the cobblestones."),
                "clues": ["a", "b", "c"], "clue_words": ["tower", "flag", "fountain"]}
