@@ -314,6 +314,12 @@ function tile(r) {
 
   // A render that spells its own answer is not a level: the player reads the
   // place off a sign instead of deducing it.
+  // Lettering that did not render is a broken prop, not a subtle clue.
+  if (r.broken_text) {
+    t.appendChild(el('div', 'state bad-txt',
+      '⚠ lettering did not render — ' + (r.broken_text_detail || 'a sign is blank or garbled')));
+  }
+
   if (r.names_the_place) {
     t.appendChild(el('div', 'state bad-txt',
       '⚠ names the place — ' + (r.names_the_place_detail || 'visible in the image')));

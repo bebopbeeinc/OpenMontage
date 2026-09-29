@@ -105,3 +105,44 @@ def test_it_refuses_to_describe_an_image_that_is_not_there(tmp_path):
     with pytest.raises(FileNotFoundError):
         inspect_render(tmp_path / "missing.png", city="Seoul",
                          country="South Korea", difficulty=2, caller=_reply(GOOD))
+
+
+# --------------------------------------------------------------------------
+# A sign the model declined to letter.
+#
+# The Cusco render produced a proper blue-and-white ceramic street plaque with
+# an empty white centre — the frame without the name. Nothing caught it,
+# because the clue pass only writes clues and a blank sign simply became a
+# clue nobody wrote.
+# --------------------------------------------------------------------------
+
+def test_it_reports_lettering_that_did_not_come_out(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Cusco", country="Peru", difficulty=4,
+                         caller=_reply(dict(GOOD, broken_text=True,
+                                            broken_text_detail="the tiled street plaque is blank")))
+    assert out["broken_text"] is True
+    assert "blank" in out["broken_text_detail"]
+
+
+def test_clean_lettering_is_not_reported(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Cusco", country="Peru", difficulty=4,
+                         caller=_reply(GOOD))
+    assert out["broken_text"] is False
+
+
+def test_the_instruction_asks_about_blank_and_garbled_signs(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    seen = {}
+
+    def caller(system, user, *, model=None, image=None):
+        seen["user"] = user
+        return json.dumps(GOOD)
+
+    inspect_render(img, city="Cusco", country="Peru", difficulty=4, caller=caller)
+    assert "blank" in seen["user"].lower()
+    assert "garbled" in seen["user"].lower()

@@ -441,6 +441,16 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                         f"you can point to on a map",
                         drafted["prompt"])
                 drafted["place_note"] = finding.get("note", "")
+                # The looked-up facts are appended to the prompt the writer
+                # produced. It was guessing at the signage and the plates —
+                # that is where a European plate turned up in Peru — and these
+                # were checked.
+                from scripts.chonky.verify_place import detail_block
+
+                block = detail_block(finding.get("details") or {})
+                if block:
+                    drafted["prompt"] = drafted["prompt"] + block
+                    drafted["place_details"] = finding.get("details")
             return drafted
         except DraftError as exc:
             last = exc

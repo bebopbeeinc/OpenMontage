@@ -112,14 +112,26 @@ Viewpoint: {viewpoint}
 Does this place exist, and could a person stand there and photograph roughly
 what is described?
 
+If it does exist, also report what is ACTUALLY there, because an image model
+left to guess will invent it: a Peruvian street came back with a European
+licence plate and a street plaque with no lettering on it.
+
 Reply with JSON only, no prose around it:
 
 {{"real": true or false,
  "confidence": "high" or "medium" or "low",
- "note": "one sentence saying what you found, naming your evidence"}}
+ "note": "one sentence saying what you found, naming your evidence",
+ "details": {{
+   "street_name": "the street's real name, as written on a sign there",
+   "plate_format": "what a vehicle plate in this country looks like: colour, "
+                   "character pattern, any band or symbol, and what it does NOT have",
+   "script": "the alphabet and language on signage here",
+   "signage": "what street signs physically look like here"
+ }}}}
 
 Use "high" only when you found the place itself, not merely a city that
-plausibly contains such a place.
+plausibly contains such a place. Leave any detail out rather than guess it —
+a wrong detail stated as fact is worse than a missing one.
 """
 
 
@@ -153,13 +165,51 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
             # not a place anybody found, and the prose is the most useful
             # thing in the reply — it says what is actually there.
             return {"real": False, "confidence": "low",
-                    "note": raw.strip()[:400], "verified": False}
+                    "note": raw.strip()[:400], "details": {}, "verified": False}
 
     real = bool(data["real"])
     confidence = str(data.get("confidence", "low")).strip().lower()
+    details = data.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    details = {k: str(v).strip() for k, v in details.items() if str(v or "").strip()}
+
     return {
         "real": real,
         "confidence": confidence,
         "note": str(data.get("note") or ""),
+        "details": details,
         "verified": real and confidence in _ACCEPTED_CONFIDENCE,
     }
+
+
+_DETAIL_LABELS = (
+    ("street_name", "The street sign reads"),
+    ("signage", "Street signs here look like"),
+    ("script", "Signage script and language"),
+    ("plate_format", "Vehicle plates in this country"),
+)
+
+
+def detail_block(details: dict) -> str:
+    """The verified facts, as a block to append to a prompt.
+
+    Appended rather than woven in, and labelled, so a reviewer reading the
+    prompt can see exactly which parts were looked up and which the writer
+    chose. These override the writer: it was guessing, this was checked.
+    """
+    if not details:
+        return ""
+    lines = ["", "",
+             "VERIFIED LOCAL DETAIL — these were looked up for this exact "
+             "place and are not to be reinterpreted. Where they contradict "
+             "anything above, they win:"]
+    for key, label in _DETAIL_LABELS:
+        value = details.get(key)
+        if value:
+            lines.append(f"  - {label}: {value}")
+    lines.append(
+        "  - Any lettering that appears must be real, correctly spelled and "
+        "legible. A blank or garbled sign is worse than no sign: leave it out "
+        "of frame rather than render it empty.")
+    return "\n".join(lines)
