@@ -53,6 +53,7 @@ from scripts.chonky.render import (  # noqa: E402
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
 from scripts.chonky import inspect as render_inspector  # noqa: E402
+from scripts.chonky import verify_place  # noqa: E402
 from scripts.chonky import prompts as prompt_writer  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
@@ -383,6 +384,24 @@ def _used_locations() -> list[str]:
     return seen
 
 
+@app.post("/api/verify-place")
+def verify_place_probe(payload: dict) -> dict:
+    """Look up one viewpoint and report what was found.
+
+    Exists so the verifier can be tested against a place that exists and one
+    that does not, without spending a render on either. A checker that says
+    yes to everything is worse than no checker, because it looks like
+    diligence.
+    """
+    try:
+        return verify_place.verify_viewpoint(
+            city=payload.get("city", ""), country=payload.get("country", ""),
+            viewpoint=payload.get("viewpoint", ""))
+    except Exception as exc:                          # noqa: BLE001 - shown to the caller
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"},
+                            status_code=400)
+
+
 @app.post("/api/draft")
 def draft_only(payload: dict) -> dict:
     """Write a prompt and stop, without rendering it.
@@ -400,7 +419,8 @@ def draft_only(payload: dict) -> dict:
         d = prompt_writer.draft(difficulty=payload.get("difficulty", 1),
                                 target_zone=zone, used=used,
                                 city=city, country=country,
-                                weights=payload.get("weights") or {})
+                                weights=payload.get("weights") or {},
+                                verifier=verify_place.verify_viewpoint)
     except Exception as exc:                          # noqa: BLE001 - shown in the UI
         return JSONResponse({"error": f"{exc}"}, status_code=400)
     return {**d, "target_zone": zone}
@@ -475,7 +495,8 @@ def generate(payload: dict) -> dict:
         try:
             d = prompt_writer.draft(difficulty=level, target_zone=zone,
                                     used=used, city=city, country=country,
-                                    weights=weights)
+                                    weights=weights,
+                                    verifier=verify_place.verify_viewpoint)
         except Exception as exc:                  # noqa: BLE001 - shown in the UI
             with _lock:
                 job = jobs[job_id]
@@ -536,8 +557,9 @@ def generate(payload: dict) -> dict:
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
-                       clue_words=None, viewpoint=None, aspect=None,
-                       resolution=None, width=None, height=None) -> None:
+                       clue_words=None, viewpoint=None, place_note=None,
+                       aspect=None, resolution=None, width=None,
+                       height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
@@ -577,7 +599,7 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                        names_the_place_detail=(seen or {}).get(
                            "names_the_place_detail", ""),
                        measurement=result,
-                       viewpoint=viewpoint,
+                       viewpoint=viewpoint, place_note=place_note,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is
@@ -733,6 +755,7 @@ def renders():
             "clues": side.get("clues"),
             "clue_words": side.get("clue_words"),
             "viewpoint": side.get("viewpoint"),
+            "place_note": side.get("place_note"),
             "clue_source": side.get("clue_source"),
             "clue_source_error": side.get("clue_source_error"),
             "names_the_place": side.get("names_the_place", False),
