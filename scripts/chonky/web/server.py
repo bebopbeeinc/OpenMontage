@@ -598,6 +598,8 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                        names_the_place=(seen or {}).get("names_the_place", False),
                        names_the_place_detail=(seen or {}).get(
                            "names_the_place_detail", ""),
+                       broken_text=(seen or {}).get("broken_text", False),
+                       broken_text_detail=(seen or {}).get("broken_text_detail", ""),
                        measurement=result,
                        viewpoint=viewpoint, place_note=place_note,
                        aspect=aspect, resolution=resolution,
@@ -760,6 +762,8 @@ def renders():
             "clue_source_error": side.get("clue_source_error"),
             "names_the_place": side.get("names_the_place", False),
             "names_the_place_detail": side.get("names_the_place_detail"),
+            "broken_text": side.get("broken_text", False),
+            "broken_text_detail": side.get("broken_text_detail"),
             "aspect": side.get("aspect"),
             "width": side.get("width"),
             "height": side.get("height"),

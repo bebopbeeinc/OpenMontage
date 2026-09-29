@@ -108,6 +108,12 @@ Rules, and they are the whole point of this step:
     plate confirms Estonia" is a conclusion, and if the strip is not there
     the clue is simply false.
 
+Also report whether any lettering in the picture failed to come out: a sign,
+plaque, banner or plate that is BLANK where text belongs, or GARBLED into
+shapes that are not real writing. A render came back with a proper ceramic
+street plaque containing no name at all — the frame without the word. That is
+a broken prop, not a subtle clue, and the reviewer has to know.
+
 Also report whether anything in the picture spells the answer: a sign,
 banner, plate, storefront or inscription containing the name of the city, the
 region or the country. That makes the level a reading test rather than a
@@ -118,7 +124,9 @@ Reply with JSON only, no prose around it:
 {{"clues": ["...", "...", "..."],
  "clue_words": ["...", "...", "..."],
  "names_the_place": true or false,
- "names_the_place_detail": "what it says, or empty"}}
+ "names_the_place_detail": "what it says, or empty",
+ "broken_text": true or false,
+ "broken_text_detail": "which sign is blank or garbled, or empty"}}
 
 `clue_words` are those same three clues as ONE lowercase word each; they
 become the filename, so no spaces and no punctuation.
@@ -158,4 +166,6 @@ def inspect_render(image_path, *, city: str, country: str, difficulty: int,
         "clue_words": [str(w) for w in data["clue_words"]],
         "names_the_place": bool(data.get("names_the_place")),
         "names_the_place_detail": str(data.get("names_the_place_detail") or ""),
+        "broken_text": bool(data.get("broken_text")),
+        "broken_text_detail": str(data.get("broken_text_detail") or ""),
     }
