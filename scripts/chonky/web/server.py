@@ -487,6 +487,7 @@ def generate(payload: dict) -> dict:
         _run_render_inline(job_id, image_id, d["prompt"], location=location,
                            difficulty=level, target_zone=zone, clues=d["clues"],
                            clue_words=d.get("clue_words"),
+                           viewpoint=d.get("viewpoint"),
                            aspect=aspect, resolution=resolution,
                            width=width, height=height)
 
@@ -534,8 +535,8 @@ def generate(payload: dict) -> dict:
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
-                       clue_words=None, aspect=None, resolution=None,
-                       width=None, height=None) -> None:
+                       clue_words=None, viewpoint=None, aspect=None,
+                       resolution=None, width=None, height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
@@ -554,6 +555,7 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
                        clues=clues, clue_words=clue_words, measurement=result,
+                       viewpoint=viewpoint,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is
@@ -708,6 +710,7 @@ def renders():
             "target_zone": side.get("target_zone"),
             "clues": side.get("clues"),
             "clue_words": side.get("clue_words"),
+            "viewpoint": side.get("viewpoint"),
             "aspect": side.get("aspect"),
             "width": side.get("width"),
             "height": side.get("height"),
@@ -814,7 +817,7 @@ def approve(payload: dict) -> dict:
             measurement=measurement,
             clues=payload.get("clues") or side.get("clues"),
             prompt=payload.get("prompt") or side.get("prompt", ""),
-            viewpoint=payload.get("viewpoint", ""),
+            viewpoint=payload.get("viewpoint") or side.get("viewpoint", ""),
             scene_type=payload.get("scene_type", ""),
             gag=payload.get("gag", ""),
             batch_no=int(payload.get("batch_no", 1)),
@@ -919,6 +922,7 @@ def regenerate(payload: dict) -> dict:
         kwargs=dict(location=side.get("location"), difficulty=side.get("difficulty"),
                     target_zone=side.get("target_zone"), clues=side.get("clues"),
                     clue_words=side.get("clue_words"),
+                    viewpoint=side.get("viewpoint"),
                     aspect=side.get("aspect"), resolution=side.get("resolution"),
                     width=side.get("width"), height=side.get("height")),
         daemon=True,

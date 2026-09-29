@@ -29,6 +29,7 @@ def _client(payload):
 VALID = {
     "city": "Prague",
     "country": "Czech Republic",
+    "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
     # A compliant prompt: depth stated as an ordering, and he is on the ground.
     "prompt": ("A photograph of Charles Bridge. Tourists walk ahead of the "
                "camera and Chonky sits far beyond all of them, on the "
@@ -206,8 +207,18 @@ def test_the_craft_rules_survive_the_trim():
 
 
 def test_the_trim_actually_removes_a_large_share_of_the_manual():
+    """Measured on what is removed, not on the total.
+
+    The brief on top grows whenever a rule turns out to need repeating there,
+    so a net-size assertion fails for the wrong reason — it would call a
+    better brief a regression.
+    """
     full = prompts._manual_text()
-    assert len(prompts.writer_manual()) < len(full) * 0.8
+    kept = prompts.writer_manual()
+    brief_size = kept.index("=" * 20, kept.index("YOUR JOB")) if "YOUR JOB" in kept else 0
+    manual_part = len(kept) - len(prompts._WRITERS_BRIEF)
+    assert manual_part < len(full) * 0.75, (
+        f"only {len(full) - manual_part} characters of the other agent's job removed")
 
 
 def test_the_writer_is_told_the_two_checks_its_answer_must_pass():
