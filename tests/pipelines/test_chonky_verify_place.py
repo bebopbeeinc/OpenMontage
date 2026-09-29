@@ -71,10 +71,30 @@ def test_high_confidence_and_real_is_verified():
     assert out["verified"] is True
 
 
-def test_an_unreadable_reply_is_refused():
+def test_an_unreadable_reply_counts_as_not_verified():
+    """It used to raise. Raising was wrong.
+
+    A correct rejection often arrives as prose, and raising turned the right
+    answer into a crashed job instead of a retry somewhere findable. An
+    unreadable reply now fails closed: nothing was verified, so nothing is
+    claimed.
+    """
+    out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
+                           caller=lambda s, u, model=None: "I had a look and yes")
+    assert out["verified"] is False
+
+
+def test_a_transport_failure_still_raises():
+    """Fail-closed is for an answer that cannot be read, not for no answer.
+
+    A CLI that fell over is a broken pipeline, and swallowing that as "the
+    place is not real" would blame the writer for an outage.
+    """
+    def boom(system, user, *, model=None):
+        raise V.PlaceError("`claude` CLI failed (exit 1)")
+
     with pytest.raises(V.PlaceError):
-        verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
-                         caller=lambda s, u, model=None: "I had a look and yes")
+        verify_viewpoint(city="Cusco", country="Peru", viewpoint="x", caller=boom)
 
 
 # --------------------------------------------------------------------------
@@ -126,3 +146,56 @@ def test_without_a_verifier_nothing_is_claimed_about_the_place():
     out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                         caller=lambda s, u, model=None: json.dumps(DRAFTED))
     assert out.get("place_note") is None
+
+
+# --------------------------------------------------------------------------
+# A nuanced rejection arrives as prose, not JSON.
+#
+# Asked about an invented Cusco street, the verifier answered correctly — the
+# real Mirador de los Cóndores is a condor-viewing trail 92 km away, not a
+# street — but it explained rather than emitting JSON, and the parser threw.
+# A correct rejection surfaced as a parse error, so the job died instead of
+# retrying somewhere findable.
+# --------------------------------------------------------------------------
+
+PROSE = ('The real "Mirador de los Cóndores" is a remote condor-viewing trail '
+         'in the Apurímac canyon near Chonta, about 92 km from Cusco — a '
+         'hiking viewpoint, not a street.')
+
+
+def test_a_prose_reply_is_retried_asking_for_json():
+    replies = [PROSE, json.dumps({"real": False, "confidence": "high",
+                                  "note": "not a street"})]
+    asks = []
+
+    def caller(system, user, *, model=None):
+        asks.append(user)
+        return replies.pop(0)
+
+    out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x", caller=caller)
+    assert out["verified"] is False
+    assert len(asks) == 2, "a prose reply must be asked again"
+
+
+def test_prose_that_stays_prose_counts_as_not_verified():
+    """Fail closed. An answer nobody could read is not a place anybody found."""
+    out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
+                           caller=lambda s, u, model=None: PROSE)
+    assert out["verified"] is False
+    assert out["real"] is False
+
+
+def test_the_prose_is_kept_as_the_reason():
+    """It is the most useful thing in the reply: it says what is actually there."""
+    out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
+                           caller=lambda s, u, model=None: PROSE)
+    assert "condor" in out["note"].lower()
+
+
+def test_json_buried_in_prose_is_still_read():
+    """Models preface JSON with a sentence; that is not a failure to answer."""
+    mixed = ('Here is what I found:\n\n'
+             '{"real": true, "confidence": "high", "note": "documented street"}')
+    out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
+                           caller=lambda s, u, model=None: mixed)
+    assert out["verified"] is True

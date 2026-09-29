@@ -63,6 +63,27 @@ def _call_via_cli(system: str, user: str, *, model: Optional[str] = None) -> str
     return text
 
 
+def _parse(raw: str) -> Optional[dict]:
+    """The verification object, from a reply that may be wrapped in prose."""
+    for candidate in (_strip_fence(raw), _embedded_object(raw)):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and "real" in data:
+            return data
+    return None
+
+
+def _embedded_object(text: str) -> Optional[str]:
+    """The first {...} in a reply that prefaced its JSON with a sentence."""
+    start = text.find("{")
+    end = text.rfind("}")
+    return text[start:end + 1] if 0 <= start < end else None
+
+
 def _strip_fence(text: str) -> str:
     stripped = text.strip()
     if not stripped.startswith("```"):
@@ -112,14 +133,27 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
     exists to stop while appearing to have checked.
     """
     caller = caller or _call_via_cli
-    raw = caller(_SYSTEM, _user_message(city, country, viewpoint), model=model)
+    ask = _user_message(city, country, viewpoint)
+    raw = caller(_SYSTEM, ask, model=model)
 
-    try:
-        data = json.loads(_strip_fence(raw))
-    except (ValueError, TypeError) as exc:
-        raise PlaceError(f"reply was not JSON: {exc}; got {raw[:200]!r}") from exc
-    if not isinstance(data, dict) or "real" not in data:
-        raise PlaceError(f"reply is not a verification: {raw[:200]!r}")
+    data = _parse(raw)
+    if data is None:
+        # A nuanced rejection tends to arrive as prose: asked about an invented
+        # Cusco street it explained, correctly, that the real Mirador de los
+        # Cóndores is a trail 92 km away. The judgement was right and only the
+        # format was wrong, so ask once more for it in JSON.
+        raw_retry = caller(
+            _SYSTEM,
+            f"{ask}\n\nYour previous answer was prose. Reply with the JSON "
+            f"object and nothing else.",
+            model=model)
+        data = _parse(raw_retry)
+        if data is None:
+            # Fail closed, keeping the prose: an answer nobody could read is
+            # not a place anybody found, and the prose is the most useful
+            # thing in the reply — it says what is actually there.
+            return {"real": False, "confidence": "low",
+                    "note": raw.strip()[:400], "verified": False}
 
     real = bool(data["real"])
     confidence = str(data.get("confidence", "low")).strip().lower()
