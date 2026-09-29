@@ -47,9 +47,8 @@ from scripts.chonky.deliver import remove as remove_delivery  # noqa: E402
 from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import (  # noqa: E402
-    ASPECT, ASPECT_RATIOS, CHARACTER, MODEL, MODELS, RESOLUTION,
-    RESOLUTION_TIERS,
-    normalise_aspect, normalise_model, normalise_tier, render_once, sizes_for,
+    ASPECT, ASPECT_RATIOS, CHARACTER, MODEL, RESOLUTION, RESOLUTION_TIERS,
+    normalise_aspect, normalise_tier, render_once, sizes_for,
 )
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
@@ -254,8 +253,7 @@ def health() -> dict:
         # about what they will get — 4:5 at "4k" is 2048x2560 — and OpenArt
         # honours exact dimensions, so the sizes are named outright.
         "sizes": {a: [list(s) for s in sizes_for(a)] for a in ASPECT_RATIOS},
-        "models": list(MODELS),
-        "default_model": MODEL,
+        "model": MODEL,
         "default_aspect": ASPECT,
         "default_resolution": RESOLUTION,
         "default_size": [geo.IMG_W, geo.IMG_H],
@@ -469,7 +467,6 @@ def generate(payload: dict) -> dict:
     try:
         aspect = normalise_aspect(payload.get("aspect"))
         resolution = normalise_tier(payload.get("resolution"))
-        model = normalise_model(payload.get("model"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -517,7 +514,6 @@ def generate(payload: dict) -> dict:
                            viewpoint=d.get("viewpoint"),
                            place_note=d.get("place_note"),
                            photo_url=d.get("photo_url"),
-                           model=model,
                            aspect=aspect, resolution=resolution,
                            width=width, height=height)
 
@@ -566,7 +562,7 @@ def generate(payload: dict) -> dict:
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
                        clue_words=None, viewpoint=None, place_note=None,
-                       photo_url=None, model=None, aspect=None, resolution=None,
+                       photo_url=None, aspect=None, resolution=None,
                        width=None, height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
@@ -587,8 +583,7 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
 
         render_once(prompt, out, log=submission, aspect=aspect,
                     resolution=resolution, width=width, height=height,
-                    reference_image_path=reference["path"] if reference else None,
-                    model=model)
+                    reference_image_path=reference["path"] if reference else None)
         with Image.open(out) as im:
             result = verify(im)
 
@@ -627,7 +622,7 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                        measurement=result,
                        viewpoint=viewpoint, place_note=place_note,
                        photo_url=photo_url, photo_error=photo_error,
-                       anchored=bool(reference), model=model,
+                       anchored=bool(reference), model=MODEL,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is

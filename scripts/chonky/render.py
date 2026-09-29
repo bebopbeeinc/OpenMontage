@@ -19,28 +19,22 @@ if str(REPO) not in sys.path:
 
 MODEL = "GPT Image 2.5 Sunburst"
 
-# Models this pipeline may address. Named here rather than taken on trust so
-# an unrecognised one fails before it costs a render, the same way an
-# unrecognised aspect ratio does.
-MODELS = (
-    "GPT Image 2.5 Sunburst",
-    "GPT Image 2.5 Flare",
-    "GPT Image 2",
-    "Nano Banana Pro",
-    "Nano Banana 2",
-    # An editor rather than a renderer: give it a photograph and it changes
-    # part of it, instead of describing a new picture from scratch.
-    "Grok Imagine Image 2.0",
-)
+# The model is a decision from the start of this project, not a setting.
+# gpt-image-2-5-sunburst in image2image is how Chonky's model sheet is
+# attached at all — his identity comes through visualReferences — and the
+# frame geometry was measured against its output. Swapping it changes what
+# Chonky looks like and what the numbers mean, so it is not offered as a
+# choice; changing it is a deliberate edit here, with the geometry re-measured.
 
 
 def normalise_model(model: Optional[str]) -> str:
-    if model is None:
+    """Accept the decided model, or nothing. Refuse anything else."""
+    if model is None or str(model).strip() == MODEL:
         return MODEL
-    cleaned = str(model).strip()
-    if cleaned not in MODELS:
-        raise ValueError(f"model {model!r} is not one of {', '.join(MODELS)}")
-    return cleaned
+    raise ValueError(
+        f"model {model!r} is not {MODEL}. The model is a project decision, not "
+        f"a per-render setting: Chonky's identity and the measured geometry "
+        f"both depend on it")
 
 ASPECT = "4:5"
 RESOLUTION = "4k"

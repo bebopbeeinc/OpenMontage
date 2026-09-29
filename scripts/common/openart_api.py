@@ -83,9 +83,6 @@ MODEL_IDS: dict[str, str] = {
     "Kling 3 Omni":        "kling-3-omni",
     "Veo 3.1":             "veo3-1",
     "Wan 2.7":             "wan2-7",
-    # An editor rather than a renderer: it changes part of a picture it is
-    # given instead of producing a new one from a description.
-    "Grok Imagine Image 2.0": "grok-imagine-image-2",
 }
 
 # Models the Playwright drivers could reach through the web UI that the MCP
