@@ -59,6 +59,7 @@
   .tile .cap{color:var(--muted);font-size:11px;margin-bottom:6px;
              text-transform:uppercase;letter-spacing:.06em}
   .tile img{border:1px solid var(--line);border-radius:8px}
+  .viewpoint{color:var(--muted);font-size:11px;font-style:italic;margin:2px 0 8px}
   .clues{margin:4px 0 10px;padding-left:18px;color:var(--ink);font-size:12px}
   .clues li{margin:4px 0}
   .state{font-size:12px;margin:2px 0 8px}
@@ -304,10 +305,31 @@ function tile(r) {
 
   // The clues are the level. Judging a render without them means judging half
   // of what was made.
+  // The viewpoint, said out loud. A vague one is the failure that produces a
+  // scene assembled from local motifs, and it is invisible inside the prompt.
+  if (r.viewpoint) {
+    const vp = el('div', 'viewpoint', r.viewpoint);
+    t.appendChild(vp);
+  }
+
+  // A render that spells its own answer is not a level: the player reads the
+  // place off a sign instead of deducing it.
+  if (r.names_the_place) {
+    t.appendChild(el('div', 'state bad-txt',
+      '⚠ names the place — ' + (r.names_the_place_detail || 'visible in the image')));
+  }
+
   if (r.clues && r.clues.length) {
     const cl = el('ol', 'clues');
     r.clues.forEach(c => cl.appendChild(el('li', null, c)));
     t.appendChild(cl);
+    // Clues taken from the render describe it; clues left over from the prompt
+    // only predict it, and that is how a plate nobody could read got cited.
+    if (r.clue_source === 'prompt') {
+      t.appendChild(el('div', 'state bad-txt',
+        '⚠ clues are from the prompt, not the image' +
+        (r.clue_source_error ? ` — ${r.clue_source_error}` : '')));
+    }
   }
 
   if (r.approved) t.appendChild(el('div', 'state ok-txt', '✓ approved — on Drive'));

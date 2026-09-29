@@ -20,24 +20,11 @@ client = TestClient(server.app)
 DRAFT = {
     "city": "Prague",
     "country": "Czech Republic",
+    "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
     "prompt": "A photograph of Charles Bridge, with Chonky far beyond the crowd.",
     "clues": ["the bridge tower", "the castle", "baroque statues"],
     "clue_words": ["tower", "castle", "statues"],
 }
-
-
-@pytest.fixture(autouse=True)
-def _no_network_picker(monkeypatch):
-    """Every test here gets a deterministic picker.
-
-    Generate now settles the locations before writing anything, so a test that
-    stubs only `draft` would reach out to Claude for the places. A test that
-    cares about the picker overrides this one.
-    """
-    monkeypatch.setattr(
-        prompts, "pick_locations",
-        lambda **kw: [{"city": f"City{i}", "country": "Country"}
-                      for i in range(len(kw["slots"]))])
 
 
 def _fake_render(prompt, out, log=None, **kw):
@@ -371,3 +358,80 @@ def test_the_picker_sees_what_is_already_in_the_library(monkeypatch):
         _cleanup(ids)
     finally:
         _cleanup(["picker-probe"])
+
+
+def test_the_clues_are_rewritten_from_the_finished_render(monkeypatch):
+    """The clues on the tile must describe the image, not the prompt.
+
+    Tallinn's clue described a plate marking the render never produced. The
+    clues written at draft time are a prediction; these are an observation.
+    """
+    from scripts.chonky import inspect as inspect_mod
+
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+    monkeypatch.setattr(
+        inspect_mod, "inspect_render",
+        lambda path, **kw: {"clues": ["seen one", "seen two", "seen three"],
+                            "clue_words": ["one", "two", "three"],
+                            "names_the_place": False,
+                            "names_the_place_detail": ""})
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert side["clues"] == ["seen one", "seen two", "seen three"]
+        assert side["clue_words"] == ["one", "two", "three"]
+    finally:
+        _cleanup(ids)
+
+
+def test_a_render_that_spells_its_own_answer_is_flagged(monkeypatch):
+    """A sign reading "Seattle" is the answer key, and the reviewer must see it."""
+    from scripts.chonky import inspect as inspect_mod
+
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+    monkeypatch.setattr(
+        inspect_mod, "inspect_render",
+        lambda path, **kw: {"clues": ["a", "b", "c"], "clue_words": ["a", "b", "c"],
+                            "names_the_place": True,
+                            "names_the_place_detail": "a sign reads Seattle"})
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert side["names_the_place"] is True
+        assert "Seattle" in side["names_the_place_detail"]
+    finally:
+        _cleanup(ids)
+
+
+def test_the_render_survives_an_inspection_failure(monkeypatch):
+    """A paid render must not be lost because the clue pass fell over."""
+    from scripts.chonky import inspect as inspect_mod
+
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft", lambda **kw: dict(DRAFT))
+
+    def boom(path, **kw):
+        raise inspect_mod.InspectError("the CLI fell over")
+
+    monkeypatch.setattr(inspect_mod, "inspect_render", boom)
+
+    body = client.post("/api/generate", json={"count": 1}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        states = _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert states == ["done"], states
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert side["measurement"] is not None
+        # Falls back to what the writer predicted, and says that it did.
+        assert side["clues"] == DRAFT["clues"]
+        assert "the CLI fell over" in side["clue_source_error"]
+    finally:
+        _cleanup(ids)

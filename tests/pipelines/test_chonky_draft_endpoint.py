@@ -11,7 +11,9 @@ from scripts.chonky.web import server
 
 client = TestClient(server.app)
 
-DRAFT = {"city": "Prague", "country": "Czech Republic", "prompt": "a prompt",
+DRAFT = {"city": "Prague", "country": "Czech Republic",
+         "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
+         "prompt": "a prompt",
          "clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"]}
 
 

@@ -29,7 +29,7 @@ if str(REPO) not in sys.path:
 MANUAL = Path(__file__).resolve().parent / "docs" / "manual.md"
 MODEL = os.environ.get("CHONKY_PROMPT_MODEL", "claude-sonnet-5")
 
-_REQUIRED = ("city", "country", "prompt", "clues", "clue_words")
+_REQUIRED = ("city", "country", "viewpoint", "prompt", "clues", "clue_words")
 
 # The manual's own ranked list of clue families (section 5.3), in its order.
 # An operator can ask for more of one without it costing the others: these are
@@ -111,6 +111,29 @@ Two things are checked on your answer, and it is rejected without them:
      of furniture. Naming a prop as his surface makes the prop the
      subject and brings both toward the camera. Put the prop in the
      scene and put him on the ground near it.
+
+ONE REAL PLACE, NOT A PLACE LIKE IT. Section 2 below is the highest
+priority in this manual and it keeps being ignored, so it is repeated
+here. Every image is one exact viewpoint a person could stand at and
+photograph: a named street, plaza, bridge or overlook, facing a stated
+direction, with the real arrangement of what is left, centre, right,
+near and far from that spot. Not a scene assembled from things the city
+is known for. A render came back with laurel trees clipped into cubes,
+described as "a formal geometric plaza-landscaping style" — that is a
+motif, not a location, and it is what section 2.6 forbids. If you
+cannot verify a viewpoint, choose a different one.
+
+Build the geography completely first and put Chonky in last. With him
+removed the picture must still be a solvable geography puzzle.
+
+NOTHING IN THE PICTURE SPELLS THE ANSWER. No sign, banner, plate,
+storefront or monument inscription may contain the name of the city,
+the region or the country. A render came back with "Seattle" written on
+a sign and another with "Guatemala" on a licence plate: those are not
+clues, they are the answer key, and they make the level a reading test
+rather than a geography one. The player should deduce the place from
+script, signage conventions, plate design, road markings, architecture,
+climate and terrain — never from the name itself.
 
 NOT A CROWD SCENE. These images keep coming back packed with tourists,
 and a crowd is the worst thing that can happen to this game: it hides
@@ -260,6 +283,30 @@ _ORDERING = re.compile(
     re.I,
 )
 
+# A viewpoint has to name a place. These are what a generic one looks like:
+# the render that prompted this described cube-clipped laurel trees as "a
+# formal geometric plaza-landscaping style", which is a motif rather than a
+# location, and the manual has forbidden exactly that since section 2.6.
+_VAGUE_VIEWPOINT = re.compile(
+    r"^(?:the\s+|a\s+|an\s+)?(?:busy\s+|old\s+|main\s+|central\s+)?"
+    r"(?:plaza|square|street|road|avenue|town|old town|city cent(?:re|er)|"
+    r"downtown|market|park|waterfront|promenade|neighbourhood|neighborhood|"
+    r"district|quarter)"
+    r"(?:\s+(?:in|of|at)\s+[\w\s]+)?$",
+    re.I,
+)
+
+
+def _check_viewpoint(viewpoint: str) -> None:
+    text = viewpoint.strip().rstrip(".")
+    if len(text) < 12 or _VAGUE_VIEWPOINT.match(text):
+        raise DraftError(
+            f"{viewpoint!r} names a kind of place, not a place. Name the "
+            "actual street, plaza, bridge or overlook and the direction the "
+            "camera faces — somewhere a person could stand and be found on a "
+            "map")
+
+
 def _check(prompt: str) -> None:
     # The banned phrasings are judged per sentence too, so that a fact about
     # the scene — "the camera looks down the 200-metre-long bridge" — is not
@@ -342,11 +389,15 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
     lines += [
         "",
         "Reply with JSON only, no prose around it:",
-        '{"city": "...", "country": "...", "prompt": "...", '
-        '"clues": ["...", "...", "..."], '
+        '{"city": "...", "country": "...", "viewpoint": "...", '
+        '"prompt": "...", "clues": ["...", "...", "..."], '
         '"clue_words": ["...", "...", "..."]}',
         "",
-        "`prompt` is the complete self-contained image prompt. `clues` are the "
+        "`viewpoint` names the one real, photographable camera position this "
+        "image is taken from — the actual street, plaza, bridge or overlook, "
+        "and the direction the camera faces. It must be somewhere a person "
+        "could stand, specific enough to find on a map. \"A plaza\" is not a "
+        "viewpoint. `prompt` is the complete self-contained image prompt. `clues` are the "
         "three Level Win clue messages, each naming something a player can "
         "actually see in the scene you described. `clue_words` are those same "
         "three clues as ONE lowercase word each — they become the filename, so "
@@ -401,6 +452,7 @@ def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
         raise DraftError(f"reply is missing {', '.join(missing)}")
     if not isinstance(data["clues"], list) or len(data["clues"]) != 3:
         raise DraftError(f"expected exactly three clues, got {data['clues']!r}")
+    _check_viewpoint(str(data["viewpoint"]))
     if not isinstance(data["clue_words"], list) or len(data["clue_words"]) != 3:
         raise DraftError(
             f"expected exactly three clue_words, got {data['clue_words']!r}")
@@ -412,6 +464,7 @@ def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
         "prompt": data["prompt"],
         "clues": [str(c) for c in data["clues"]],
         "clue_words": [str(w) for w in data["clue_words"]],
+        "viewpoint": str(data["viewpoint"]).strip(),
     }
 
 

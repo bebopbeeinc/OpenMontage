@@ -52,6 +52,7 @@ from scripts.chonky.render import (  # noqa: E402
 )
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
+from scripts.chonky import inspect as render_inspector  # noqa: E402
 from scripts.chonky import prompts as prompt_writer  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
 
@@ -487,6 +488,7 @@ def generate(payload: dict) -> dict:
         _run_render_inline(job_id, image_id, d["prompt"], location=location,
                            difficulty=level, target_zone=zone, clues=d["clues"],
                            clue_words=d.get("clue_words"),
+                           viewpoint=d.get("viewpoint"),
                            aspect=aspect, resolution=resolution,
                            width=width, height=height)
 
@@ -534,8 +536,8 @@ def generate(payload: dict) -> dict:
 
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
-                       clue_words=None, aspect=None, resolution=None,
-                       width=None, height=None) -> None:
+                       clue_words=None, viewpoint=None, aspect=None,
+                       resolution=None, width=None, height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
@@ -543,6 +545,20 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                     resolution=resolution, width=width, height=height)
         with Image.open(out) as im:
             result = verify(im)
+
+        # STEP C. The clues the writer produced are a prediction of the render;
+        # these are taken from the render itself. A failure here must not cost
+        # the image — it has already been paid for — so the prediction stands
+        # in, labelled as what it is.
+        seen = None
+        clue_error = None
+        city, _, country = (location or "").partition(",")
+        try:
+            seen = render_inspector.inspect_render(
+                out, city=city.strip(), country=country.strip(),
+                difficulty=difficulty or 1)
+        except Exception as exc:                      # noqa: BLE001 - reported
+            clue_error = f"{type(exc).__name__}: {exc}"
         with _lock:
             _images[image_id] = out
             job = jobs[job_id]
@@ -553,7 +569,15 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
         # without them Approve refuses the render it just made.
         _write_sidecar(image_id, prompt=prompt, location=location,
                        difficulty=difficulty, target_zone=target_zone,
-                       clues=clues, clue_words=clue_words, measurement=result,
+                       clues=(seen or {}).get("clues") or clues,
+                       clue_words=(seen or {}).get("clue_words") or clue_words,
+                       clue_source="render" if seen else "prompt",
+                       clue_source_error=clue_error,
+                       names_the_place=(seen or {}).get("names_the_place", False),
+                       names_the_place_detail=(seen or {}).get(
+                           "names_the_place_detail", ""),
+                       measurement=result,
+                       viewpoint=viewpoint,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is
@@ -708,6 +732,11 @@ def renders():
             "target_zone": side.get("target_zone"),
             "clues": side.get("clues"),
             "clue_words": side.get("clue_words"),
+            "viewpoint": side.get("viewpoint"),
+            "clue_source": side.get("clue_source"),
+            "clue_source_error": side.get("clue_source_error"),
+            "names_the_place": side.get("names_the_place", False),
+            "names_the_place_detail": side.get("names_the_place_detail"),
             "aspect": side.get("aspect"),
             "width": side.get("width"),
             "height": side.get("height"),
@@ -814,7 +843,7 @@ def approve(payload: dict) -> dict:
             measurement=measurement,
             clues=payload.get("clues") or side.get("clues"),
             prompt=payload.get("prompt") or side.get("prompt", ""),
-            viewpoint=payload.get("viewpoint", ""),
+            viewpoint=payload.get("viewpoint") or side.get("viewpoint", ""),
             scene_type=payload.get("scene_type", ""),
             gag=payload.get("gag", ""),
             batch_no=int(payload.get("batch_no", 1)),
@@ -919,6 +948,7 @@ def regenerate(payload: dict) -> dict:
         kwargs=dict(location=side.get("location"), difficulty=side.get("difficulty"),
                     target_zone=side.get("target_zone"), clues=side.get("clues"),
                     clue_words=side.get("clue_words"),
+                    viewpoint=side.get("viewpoint"),
                     aspect=side.get("aspect"), resolution=side.get("resolution"),
                     width=side.get("width"), height=side.get("height")),
         daemon=True,
