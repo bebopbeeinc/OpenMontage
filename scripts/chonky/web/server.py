@@ -750,6 +750,50 @@ def renders():
     return {"renders": out}
 
 
+@app.get("/api/crop/{image_id}")
+def crop(image_id: str, box: str = "", scale: int = 1):
+    """A region of the render at its own pixels, losslessly.
+
+    Every other view here is downscaled — the gallery and the review pane both
+    come through /api/frame, which caps the long side at 900 px. A clue is a
+    plate or a sign covering a few dozen pixels of a 2048-wide source, so at
+    900 px it is unreadable however good the render is. Judging legibility
+    from that view means judging the thumbnail, not the image.
+
+    PNG rather than JPEG on purpose: the question being asked is often whether
+    compression has eaten a clue, and a JPEG here would add exactly the
+    artefacts under examination.
+    """
+    img = _open(image_id)
+    if img is None:
+        return JSONResponse({"error": "unknown image"}, status_code=404)
+
+    parts = [p for p in box.split(",") if p != ""]
+    if len(parts) != 4:
+        return JSONResponse({"error": "box must be x0,y0,x1,y1"}, status_code=400)
+    try:
+        x0, y0, x1, y1 = (int(v) for v in parts)
+    except ValueError:
+        return JSONResponse({"error": "box must be four integers"}, status_code=400)
+
+    w, h = img.size
+    if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
+        return JSONResponse(
+            {"error": f"box {x0},{y0},{x1},{y1} is outside the {w}x{h} image"},
+            status_code=400)
+
+    region = img.crop((x0, y0, x1, y1))
+    scale = max(1, min(int(scale), 8))
+    if scale > 1:
+        # Nearest neighbour: enlarging must not invent detail that is not
+        # there, which is the whole question being asked.
+        region = region.resize((region.width * scale, region.height * scale),
+                               Image.NEAREST)
+    buf = __import__("io").BytesIO()
+    region.convert("RGB").save(buf, format="PNG")
+    return Response(buf.getvalue(), media_type="image/png")
+
+
 @app.get("/api/frame/{image_id}")
 def frame(image_id: str):
     """The full render, downscaled for the browser."""
