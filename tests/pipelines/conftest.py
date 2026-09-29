@@ -31,3 +31,16 @@ def _offline_picker(monkeypatch):
         prompts_mod, "pick_locations",
         lambda **kw: [{"city": f"City{i}", "country": "Country"}
                       for i in range(len(kw["slots"]))])
+
+
+@pytest.fixture(autouse=True)
+def _offline_place_verifier(monkeypatch):
+    """Verifying a place is a web search; no test may make one by accident."""
+    from scripts.chonky import verify_place
+
+    def refuse(**kw):
+        raise verify_place.PlaceError(
+            "verify_viewpoint was not stubbed in this test; stub it rather "
+            "than searching the web")
+
+    monkeypatch.setattr(verify_place, "verify_viewpoint", refuse)

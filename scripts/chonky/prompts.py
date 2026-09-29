@@ -411,7 +411,7 @@ MAX_ATTEMPTS = 3
 
 def draft(*, difficulty: int, target_zone: str, used: list[str],
           city: Optional[str] = None, country: Optional[str] = None,
-          weights: Optional[dict] = None,
+          weights: Optional[dict] = None, verifier: Optional[Callable] = None,
           caller: Optional[Callable] = None, model: Optional[str] = None) -> dict:
     """Write one prompt, retrying with the reason when one is rejected.
 
@@ -427,7 +427,21 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
     last: Optional[DraftError] = None
     for _ in range(MAX_ATTEMPTS):
         try:
-            return _attempt(caller, system, ask, model)
+            drafted = _attempt(caller, system, ask, model)
+            if verifier is not None:
+                # Checked before the render, because before costs a search and
+                # after costs an image — and nothing downstream can tell a
+                # beautiful render of an invented street from a real one.
+                finding = verifier(city=drafted["city"], country=drafted["country"],
+                                   viewpoint=drafted["viewpoint"])
+                if not finding.get("verified"):
+                    raise DraftError(
+                        f"the viewpoint could not be verified as a real place: "
+                        f"{finding.get('note') or 'not found'}. Choose somewhere "
+                        f"you can point to on a map",
+                        drafted["prompt"])
+                drafted["place_note"] = finding.get("note", "")
+            return drafted
         except DraftError as exc:
             last = exc
             ask = (f"{ask}\n\n"
