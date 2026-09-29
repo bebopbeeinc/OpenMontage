@@ -29,7 +29,8 @@ if str(REPO) not in sys.path:
 MANUAL = Path(__file__).resolve().parent / "docs" / "manual.md"
 MODEL = os.environ.get("CHONKY_PROMPT_MODEL", "claude-sonnet-5")
 
-_REQUIRED = ("city", "country", "viewpoint", "prompt", "clues", "clue_words")
+_REQUIRED = ("city", "country", "viewpoint", "prompt", "chonky_line",
+             "clues", "clue_words")
 
 # The manual's own ranked list of clue families (section 5.3), in its order.
 # An operator can ask for more of one without it costing the others: these are
@@ -390,9 +391,15 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
         "",
         "Reply with JSON only, no prose around it:",
         '{"city": "...", "country": "...", "viewpoint": "...", '
-        '"prompt": "...", "clues": ["...", "...", "..."], '
+        '"prompt": "...", "chonky_line": "...", '
+        '"clues": ["...", "...", "..."], '
         '"clue_words": ["...", "...", "..."]}',
         "",
+        "`chonky_line` is ONE or TWO sentences placing Chonky in the scene "
+        "and nothing else: where he is, what he is doing, and his depth stated "
+        "as an ordering. When a photograph of the viewpoint is found, the "
+        "photograph becomes the scene and this line is the only part of your "
+        "description that survives — so it must stand on its own. "
         "`viewpoint` names the one real, photographable camera position this "
         "image is taken from — the actual street, plaza, bridge or overlook, "
         "and the direction the camera faces. It must be somewhere a person "
@@ -433,7 +440,8 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                 # after costs an image — and nothing downstream can tell a
                 # beautiful render of an invented street from a real one.
                 finding = verifier(city=drafted["city"], country=drafted["country"],
-                                   viewpoint=drafted["viewpoint"])
+                                   viewpoint=drafted["viewpoint"],
+                                   difficulty=difficulty)
                 if not finding.get("verified"):
                     raise DraftError(
                         f"the viewpoint could not be verified as a real place: "
@@ -450,9 +458,18 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                 from scripts.chonky.verify_place import detail_block
 
                 block = detail_block(finding.get("details") or {})
-                if block:
+
+                if drafted["photo_url"]:
+                    # The photograph is the scene now. The written description
+                    # is dropped rather than appended to: a full composition
+                    # beside a picture is what let the model treat the picture
+                    # as mood and invent a different street.
+                    drafted["scene_prompt"] = drafted["prompt"]
+                    drafted["prompt"] = _redraw_prompt(
+                        drafted["viewpoint"], drafted["chonky_line"], block)
+                elif block:
                     drafted["prompt"] = drafted["prompt"] + block
-                    drafted["place_details"] = finding.get("details")
+                drafted["place_details"] = finding.get("details")
             return drafted
         except DraftError as exc:
             last = exc
@@ -461,6 +478,34 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                    f"The prompt that was rejected was:\n{exc.prompt or '(none)'}\n\n"
                    "Write it again, fixing exactly that. Change nothing else.")
     raise last  # type: ignore[misc]
+
+
+def _redraw_prompt(viewpoint: str, chonky_line: str, detail: str) -> str:
+    """Ask for the attached photograph, redrawn — not a scene beside it."""
+    return f"""\
+REDRAW THE ATTACHED PHOTOGRAPH.
+
+The attached photograph is {viewpoint}. It is the scene. Reproduce it: the
+same camera position and angle, the same street geometry, the same buildings
+in the same order, the same doorways, windows, walls, steps, roofs, signs and
+their positions, the same horizon and the same distances. Someone who knows
+this street must recognise it immediately as this exact spot.
+
+Render it as a clean, colourful travel photograph — sharper and brighter than
+the original, with the haze and any camera flaws cleaned up.
+
+You may change ONLY these things:
+  - the light and the weather, within what is plausible for this place;
+  - the incidental people and vehicles, who may differ or be absent;
+  - small everyday details such as parked bicycles, market goods or laundry.
+
+Do NOT change the street. Do not move, add or remove a building, a doorway, a
+wall, a staircase or a sign. Do not widen or narrow the street, and do not
+alter the camera position. If the photograph does not contain something, it is
+not in this picture.
+
+{chonky_line}
+{detail}"""
 
 
 def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
@@ -491,6 +536,7 @@ def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
         "clues": [str(c) for c in data["clues"]],
         "clue_words": [str(w) for w in data["clue_words"]],
         "viewpoint": str(data["viewpoint"]).strip(),
+        "chonky_line": str(data["chonky_line"]).strip(),
     }
 
 
