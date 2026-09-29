@@ -324,3 +324,38 @@ def test_a_distance_in_metres_that_is_not_his_is_allowed():
             "He is on the cobblestones.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                          caller=_reply(good))["prompt"] == good
+
+
+# --------------------------------------------------------------------------
+# JSON broken by the quotes inside it.
+#
+# A real draft failed after three attempts and eight minutes with "Expecting
+# ',' delimiter at column 1194". The writer had put quoted sign text inside a
+# JSON string value — which is exactly what asking it to name the lettering on
+# a sign encourages it to do.
+# --------------------------------------------------------------------------
+
+def test_quoted_sign_text_does_not_break_the_reply():
+    """The whole point of the verified-detail work is naming what signs say."""
+    body = ('{"city": "Cusco", "country": "Peru", '
+            '"viewpoint": "Cuesta de San Blas, facing downhill", '
+            '"prompt": "A sign reads "TALLER DE ARTESANIA" above the door. '
+            'Chonky sits far beyond all of them on the cobblestones.", '
+            '"chonky_line": "Chonky sits on the cobbles.", '
+            '"clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"]}')
+    draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=lambda s, u, model=None: body)
+    assert "TALLER DE ARTESANIA" in draft["prompt"]
+
+
+def test_the_writer_is_told_which_quotes_to_use():
+    """Cheaper to prevent than to repair: say it in the request."""
+    caller = _caller() if "_caller" in dir() else None
+    seen = {}
+
+    def spy(system, user, *, model=None):
+        seen["user"] = user
+        return json.dumps(VALID)
+
+    prompts.draft(difficulty=1, target_zone="viewframe", used=[], caller=spy)
+    assert "single quotes" in seen["user"].lower()

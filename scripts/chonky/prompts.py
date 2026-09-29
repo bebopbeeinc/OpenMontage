@@ -211,6 +211,40 @@ def _default_caller(system: str, user: str, *, model: Optional[str] = None) -> s
     return _call_via_cli(system, user, model=model)
 
 
+def _repair_inner_quotes(text: str) -> str:
+    """Escape double quotes that appear inside a JSON string value.
+
+    A draft failed three times over eight minutes because the writer quoted
+    the lettering on a sign — which is precisely what this pipeline asks it to
+    do. Walking the text and escaping a quote that is not a structural one
+    recovers the reply instead of throwing the draft away.
+
+    A quote is structural when the next non-space character is one of :,}] or
+    it opens a value after :[ or a comma. Anything else is inside the prose.
+    """
+    out = []
+    in_string = False
+    for i, ch in enumerate(text):
+        if ch == "\\":
+            out.append(ch)
+            continue
+        if ch != '"':
+            out.append(ch)
+            continue
+        if not in_string:
+            in_string = True
+            out.append(ch)
+            continue
+        # In a string: is this quote closing it, or part of the prose?
+        rest = text[i + 1:].lstrip()
+        if rest[:1] in (":", ",", "}", "]") or rest == "":
+            in_string = False
+            out.append(ch)
+        else:
+            out.append('\\"')
+    return "".join(out)
+
+
 def _strip_fence(text: str) -> str:
     """Models fence JSON out of habit. That is not a malformed reply."""
     stripped = text.strip()
@@ -389,7 +423,10 @@ def _user_message(difficulty: int, target_zone: str, used: list[str],
     lines += _weights_section(weights)
     lines += [
         "",
-        "Reply with JSON only, no prose around it:",
+        "Reply with JSON only, no prose around it. Use SINGLE quotes for any "
+        "quoted text inside a value — a sign that reads 'PANADERIA', not a "
+        "sign that reads \"PANADERIA\" — because a double quote there breaks "
+        "the reply and costs the whole draft:",
         '{"city": "...", "country": "...", "viewpoint": "...", '
         '"prompt": "...", "chonky_line": "...", '
         '"clues": ["...", "...", "..."], '
@@ -511,10 +548,15 @@ not in this picture.
 def _attempt(caller, system: str, ask: str, model: Optional[str]) -> dict:
     raw = caller(system, ask, model=model)
 
+    cleaned = _strip_fence(raw)
     try:
-        data = json.loads(_strip_fence(raw))
-    except (ValueError, TypeError) as exc:
-        raise DraftError(f"reply was not JSON: {exc}; got {raw[:200]!r}") from exc
+        data = json.loads(cleaned)
+    except (ValueError, TypeError):
+        try:
+            data = json.loads(_repair_inner_quotes(cleaned))
+        except (ValueError, TypeError) as exc:
+            raise DraftError(
+                f"reply was not JSON: {exc}; got {raw[:200]!r}") from exc
     if not isinstance(data, dict):
         raise DraftError(f"reply was not a JSON object: {raw[:200]!r}")
 
