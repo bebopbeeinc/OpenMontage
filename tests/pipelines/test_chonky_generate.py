@@ -490,3 +490,20 @@ def test_a_photograph_that_cannot_be_fetched_does_not_lose_the_render(monkeypatc
         assert "404" in side["photo_error"]
     finally:
         _cleanup(ids)
+
+
+def test_the_frame_being_rendered_reaches_the_prompt(monkeypatch):
+    """His size is stated in pixels, so it must be pixels of the real frame."""
+    seen = {}
+    monkeypatch.setattr(server, "render_once", _fake_render)
+    monkeypatch.setattr(prompts, "draft",
+                        lambda **kw: (seen.update(kw), dict(DRAFT))[1])
+
+    body = client.post("/api/generate", json={
+        "count": 1, "aspect": "4:5", "width": 2048, "height": 2560}).json()
+    ids = [j["image_id"] for j in body["jobs"]]
+    try:
+        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
+        assert seen["frame"] == (2048, 2560)
+    finally:
+        _cleanup(ids)

@@ -90,7 +90,20 @@ def _user_message(city: str, country: str, difficulty: int) -> str:
     return f"""\
 This image is meant to be {city}, {country}, at difficulty {difficulty}.
 
-Write three clue messages, each naming one thing you can genuinely see.
+Write the three Level Win messages, each naming one thing you can genuinely
+see. They are shown to a player in a casual mobile game, so the manual's
+section 7 governs how they read:
+
+  * ONE simple factual sentence each, MAXIMUM 12 WORDS. Count them.
+  * Fun-fact tone, internationally readable, understandable by a 10 year old.
+  * Put the important nouns and proper nouns in [square brackets].
+  * Open with the clue's category, then a colon. For example:
+      Road marking: The pavement contains [Hangul], the Korean alphabet.
+      Flag: A blue-white-red [French flag] flies from the pole.
+
+  * clue 1 is the single most definitive visible clue.
+  * clue 2 is the second most definitive, and DISTINCT from clue 1.
+  * clue 3 is one less obvious, semi-hidden clue.
 
 Rules, and they are the whole point of this step:
 
@@ -133,6 +146,24 @@ become the filename, so no spaces and no punctuation.
 """
 
 
+MAX_CLUE_WORDS = 12
+
+
+def check_clues(clues: list[str]) -> None:
+    """Hold the clues to section 7.5, because asking has not been enough.
+
+    A clue is a line in a casual game, read on a phone in a second. The pass
+    was returning eighteen words of scene description, which is a caption.
+    """
+    for clue in clues:
+        body = clue.split(":", 1)[1] if ":" in clue else clue
+        words = [w for w in body.split() if w.strip()]
+        if len(words) > MAX_CLUE_WORDS:
+            raise InspectError(
+                f"clue is {len(words)} words, over the {MAX_CLUE_WORDS}-word "
+                f"limit in section 7.5: {clue!r}")
+
+
 def inspect_render(image_path, *, city: str, country: str, difficulty: int,
                    caller: Optional[Callable] = None,
                    model: Optional[str] = None) -> dict:
@@ -160,6 +191,8 @@ def inspect_render(image_path, *, city: str, country: str, difficulty: int,
         value = data.get(key)
         if not isinstance(value, list) or len(value) != 3:
             raise InspectError(f"expected exactly three {key}, got {value!r}")
+
+    check_clues([str(c) for c in data["clues"]])
 
     return {
         "clues": [str(c) for c in data["clues"]],
