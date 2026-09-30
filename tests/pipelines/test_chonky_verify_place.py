@@ -24,10 +24,7 @@ def _reply(payload):
 
 
 REAL = {"real": True, "confidence": "high",
-        "note": "Cuesta San Blas is a documented cobbled street in Cusco",
-        # Anchoring is mandatory now, so a fixture standing in for a good
-        # verification has to carry a photograph like a real one does.
-        "photo_url": "https://live.staticflickr.com/1/san-blas_b.jpg"}
+        "note": "Cuesta San Blas is a documented cobbled street in Cusco"}
 
 
 def test_a_verified_place_comes_back_real():
@@ -109,7 +106,6 @@ from scripts.chonky import prompts  # noqa: E402
 DRAFTED = {
     "city": "Cusco", "country": "Peru",
     "viewpoint": "Cuesta San Blas, facing downhill toward the old town",
-    "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
     "prompt": ("The crowd walks ahead and Chonky sits far beyond all of them "
                "on the cobblestones."),
     "clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"],
@@ -119,10 +115,8 @@ DRAFTED = {
 def test_a_verified_viewpoint_is_accepted():
     out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                         caller=lambda s, u, model=None: json.dumps(DRAFTED),
-                        verifier=lambda **kw: {
-                            "verified": True, "real": True,
-                            "confidence": "high", "note": "found it",
-                            "photo_url": "https://live.staticflickr.com/1/x_b.jpg"})
+                        verifier=lambda **kw: {"verified": True, "real": True,
+                                               "confidence": "high", "note": "found it"})
     assert out["viewpoint"].startswith("Cuesta San Blas")
     assert out["place_note"] == "found it"
 
@@ -138,8 +132,7 @@ def test_an_unverified_viewpoint_is_rejected_and_retried():
     findings = [{"verified": False, "real": False, "confidence": "high",
                  "note": "no such street is documented"},
                 {"verified": True, "real": True, "confidence": "high",
-                 "note": "found it",
-                 "photo_url": "https://live.staticflickr.com/1/x_b.jpg"}]
+                 "note": "found it"}]
 
     out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                         caller=caller, verifier=lambda **kw: findings.pop(0))

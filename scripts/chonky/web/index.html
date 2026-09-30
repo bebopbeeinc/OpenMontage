@@ -59,8 +59,6 @@
   .tile .cap{color:var(--muted);font-size:11px;margin-bottom:6px;
              text-transform:uppercase;letter-spacing:.06em}
   .tile img{border:1px solid var(--line);border-radius:8px}
-  .anchor{margin:8px 0 4px;padding:6px;border:1px dashed var(--line);
-          border-radius:8px}
   .viewpoint{color:var(--muted);font-size:11px;font-style:italic;margin:2px 0 8px}
   .clues{margin:4px 0 10px;padding-left:18px;color:var(--ink);font-size:12px}
   .clues li{margin:4px 0}
@@ -307,29 +305,6 @@ function tile(r) {
 
   // The clues are the level. Judging a render without them means judging half
   // of what was made.
-  // The photograph the render was built against, beside the render. Whether
-  // the picture matches the place is a question only someone looking at both
-  // can settle.
-  if (r.anchored) {
-    const cmp = el('div', 'anchor');
-    cmp.appendChild(el('div', 'cap', 'anchored to this photograph'));
-    const ref = new Image();
-    ref.src = `api/reference-photo/${r.image_id}`;
-    ref.style.cssText = 'width:100%;display:block;border-radius:6px';
-    cmp.appendChild(ref);
-    if (r.photo_url) {
-      const a = document.createElement('a');
-      a.href = r.photo_url; a.target = '_blank';
-      a.textContent = 'source';
-      a.style.cssText = 'font-size:11px;color:var(--muted)';
-      cmp.appendChild(a);
-    }
-    t.appendChild(cmp);
-  } else if (r.photo_error) {
-    t.appendChild(el('div', 'state bad-txt',
-      '⚠ not anchored to a photograph — ' + r.photo_error));
-  }
-
   // The viewpoint, said out loud. A vague one is the failure that produces a
   // scene assembled from local motifs, and it is invisible inside the prompt.
   if (r.viewpoint) {

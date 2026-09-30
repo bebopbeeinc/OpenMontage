@@ -30,7 +30,6 @@ VALID = {
     "city": "Prague",
     "country": "Czech Republic",
     "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
-    "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
     # A compliant prompt: depth stated as an ordering, and he is on the ground.
     "prompt": ("A photograph of Charles Bridge. Tourists walk ahead of the "
                "camera and Chonky sits far beyond all of them, on the "

@@ -13,7 +13,6 @@ client = TestClient(server.app)
 
 DRAFT = {"city": "Prague", "country": "Czech Republic",
          "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
-         "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
          "prompt": "a prompt",
          "clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"]}
 

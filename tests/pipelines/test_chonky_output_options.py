@@ -121,26 +121,3 @@ def test_no_exact_size_means_no_custom_fields_are_sent():
 
     assert "customWidth" not in captured
     assert "lockAspectRatio" not in captured
-
-
-def test_a_location_photograph_is_attached_alongside_chonky():
-    """The model takes sixteen references; one was going spare.
-
-    Chonky's model sheet says what the cat looks like. The location photograph
-    says what the street looks like, which nothing in the prompt could.
-    """
-    sent = {}
-    R.render_once("p", "/tmp/chonky-ref.png",
-                  driver=lambda **kw: sent.update(kw) or [kw["output_paths"][0]],
-                  reference_image_path="/tmp/some-street.png")
-    assert str(sent["reference_image_path"]) == "/tmp/some-street.png"
-    # Chonky is still attached: the location must not displace the character.
-    assert sent["character"] == R.CHARACTER
-
-
-def test_no_photograph_leaves_the_render_unanchored():
-    sent = {}
-    R.render_once("p", "/tmp/chonky-ref2.png",
-                  driver=lambda **kw: sent.update(kw) or [kw["output_paths"][0]])
-    assert sent.get("reference_image_path") is None
-    assert sent["character"] == R.CHARACTER

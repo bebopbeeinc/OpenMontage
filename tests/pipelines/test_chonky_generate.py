@@ -21,7 +21,6 @@ DRAFT = {
     "city": "Prague",
     "country": "Czech Republic",
     "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
-    "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
     "prompt": "A photograph of Charles Bridge, with Chonky far beyond the crowd.",
     "clues": ["the bridge tower", "the castle", "baroque statues"],
     "clue_words": ["tower", "castle", "statues"],
@@ -434,84 +433,5 @@ def test_the_render_survives_an_inspection_failure(monkeypatch):
         # Falls back to what the writer predicted, and says that it did.
         assert side["clues"] == DRAFT["clues"]
         assert "the CLI fell over" in side["clue_source_error"]
-    finally:
-        _cleanup(ids)
-
-
-def test_the_render_is_anchored_to_a_photograph_of_the_place(monkeypatch):
-    """The whole point: the picture should match reality, not resemble it."""
-    from scripts.chonky import reference_photo as rp
-
-    seen = {}
-    monkeypatch.setattr(
-        server, "render_once",
-        lambda p, o, log=None, **kw: (seen.update(kw), _fake_render(p, o))[1])
-    monkeypatch.setattr(prompts, "draft",
-                        lambda **kw: dict(DRAFT, photo_url="https://x/street.jpg"))
-    monkeypatch.setattr(
-        rp, "fetch_reference",
-        lambda url, dest, **kw: {"path": dest, "source_url": url, "size": [900, 700]})
-
-    body = client.post("/api/generate", json={"count": 1}).json()
-    ids = [j["image_id"] for j in body["jobs"]]
-    try:
-        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
-        assert seen["reference_image_path"] is not None
-        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
-        # Provenance: which photograph this render was built against.
-        assert side["photo_url"] == "https://x/street.jpg"
-    finally:
-        _cleanup(ids)
-
-
-def test_a_photograph_that_cannot_be_fetched_fails_the_render(monkeypatch):
-    """This used to assert the render survived. It should not have.
-
-    The prompt reads REDRAW THE ATTACHED PHOTOGRAPH. With the fetch failed
-    there is nothing attached, so "surviving" meant asking the model to
-    reproduce a picture it could not see — and it answers by inventing a
-    street, which is the failure anchoring exists to stop. Better to fail
-    before the render than to pay for one that is wrong in the one way this
-    whole mechanism was built to prevent.
-    """
-    from scripts.chonky import reference_photo as rp
-
-    seen = {}
-    monkeypatch.setattr(
-        server, "render_once",
-        lambda p, o, log=None, **kw: (seen.update(kw), _fake_render(p, o))[1])
-    monkeypatch.setattr(prompts, "draft",
-                        lambda **kw: dict(DRAFT, photo_url="https://x/gone.jpg"))
-
-    def boom(url, dest, **kw):
-        raise rp.ReferenceError("404 not found")
-
-    monkeypatch.setattr(rp, "fetch_reference", boom)
-
-    body = client.post("/api/generate", json={"count": 1}).json()
-    ids = [j["image_id"] for j in body["jobs"]]
-    try:
-        states = _drain([j["job_id"] for j in body["jobs"]], timeout=20)
-        assert states == ["failed"], states
-        assert seen == {}, "a render was paid for with nothing to redraw"
-        detail = client.get(f"/api/jobs/{body['jobs'][0]['job_id']}").json()
-        assert "404" in detail["error"]
-    finally:
-        _cleanup(ids)
-
-
-def test_the_frame_being_rendered_reaches_the_prompt(monkeypatch):
-    """His size is stated in pixels, so it must be pixels of the real frame."""
-    seen = {}
-    monkeypatch.setattr(server, "render_once", _fake_render)
-    monkeypatch.setattr(prompts, "draft",
-                        lambda **kw: (seen.update(kw), dict(DRAFT))[1])
-
-    body = client.post("/api/generate", json={
-        "count": 1, "aspect": "4:5", "width": 2048, "height": 2560}).json()
-    ids = [j["image_id"] for j in body["jobs"]]
-    try:
-        _drain([j["job_id"] for j in body["jobs"]], timeout=20)
-        assert seen["frame"] == (2048, 2560)
     finally:
         _cleanup(ids)
