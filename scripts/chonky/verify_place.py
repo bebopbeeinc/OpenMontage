@@ -115,10 +115,30 @@ _DIFFICULTY = {
        "expertise. NO landmark at all — infrastructure and architecture carry it.",
 }
 
+# How good-looking a photograph has to be, per level. The bar itself is the
+# manual's (section 3.3, "colourful, cinematic, realistic vacation
+# photography"); what changes with difficulty is what it can be a photograph
+# OF, since an unmistakable landmark is banned from level 4 up.
+_LOOK = {
+    1: "Go for the POSTCARD SHOT — the photograph a travel magazine would run. "
+       "Famous, striking, beautiful light, the view people travel to see.",
+    2: "Go for the POSTCARD SHOT where you can: striking, beautiful light, a "
+       "view worth travelling for.",
+    3: "Pick an attractive, characterful photograph — good light and real "
+       "atmosphere, even though the place itself is less famous.",
+    4: "A BEAUTIFUL ORDINARY PLACE: an anonymous street, market or waterfront "
+       "that is genuinely lovely to look at. Striking light and strong colour, "
+       "but no monument anyone would recognise.",
+    5: "A BEAUTIFUL ORDINARY PLACE: somewhere anonymous that is still worth "
+       "looking at — good light, strong colour, a composition with depth. No "
+       "landmark at all.",
+}
+
 
 def _user_message(city: str, country: str, viewpoint: str,
                   difficulty: int = 1) -> str:
     level = _DIFFICULTY.get(int(difficulty), _DIFFICULTY[5])
+    look = _LOOK.get(int(difficulty), _LOOK[5])
     return f"""\
 Location: {city}, {country}
 Viewpoint: {viewpoint}
@@ -140,9 +160,20 @@ Judge candidates against all of this and pick the best one:
     the city, the region or the country is legible on a sign, a banner, a
     shopfront or a monument. That turns the level into a reading test.
 
-  * It must carry readable evidence — signage, script, road markings, plates,
-    architecture, terrain, vegetation. A pretty view with nothing to read is
-    not a geography puzzle. At least one country-level clue should be there.
+  * It must be WORTH LOOKING AT. This picture is the level — it is redrawn
+    as the image a player opens on — so it has to look like travel
+    photography, not documentation. Colourful, cinematic, real atmosphere,
+    layered depth, light that does something. {look}
+
+  * It must ALSO carry readable evidence — signage, script, road markings,
+    plates, architecture, terrain, vegetation. Beauty and evidence are both
+    required, not traded against each other: a gorgeous view with nothing to
+    read is not a puzzle, and a readable view nobody wants to look at is not
+    a game. At least one country-level clue should be there.
+
+  * Reject anything with a WATERMARK, a caption bar, a border, a frame, a
+    collage, a logo or visible interface. Stock and agency photographs are
+    routinely watermarked, and none of that can survive into the render.
 
   * Prefer a quiet moment. A photograph full of tourists hides the clues and
     hides the cat; a handful of people is fine, a crowd is not.
@@ -151,9 +182,25 @@ Judge candidates against all of this and pick the best one:
     frame is 4:5 with a tall 9:16 window inside it, and the sides are the pan
     reward, so a letterbox photograph loses most of what makes the level.
 
-Give a direct link to an image file, not to a page containing one, and leave
-it empty rather than linking something you are not confident shows this exact
-spot or that fails the conditions above.
+  * DO NOT USE WIKIPEDIA, WIKIMEDIA OR WIKIMEDIA COMMONS. Nothing from
+    wikipedia.org, wikimedia.org or upload.wikimedia.org is acceptable,
+    whatever the picture looks like. Those photographs are documentation —
+    accurate, flat, and often poorly lit — and every anchored render so far
+    came from there. Look instead at tourism board and city media libraries,
+    photo-sharing and stock photography sites, travel publications, hotel and
+    airline editorial, and news picture CDNs. Any of those that gives you a
+    direct image URL is fine.
+
+The URL must return the picture itself rather than a page containing it:
+opening it shows the photograph alone, with nothing around it. It does NOT
+need to end in .jpg or .png — an images.unsplash.com link with no file
+extension at all is exactly right, and demanding an extension is part of what
+pushed every previous search onto Wikimedia. A photo page, a search result, a
+social post or a gallery is not usable.
+
+Leave it empty rather than linking something you are not confident shows this
+exact spot, something on a banned domain, or something that fails the
+conditions above.
 
 Also report what is ACTUALLY there, because an image model left to guess will
 invent it: a Peruvian street came back with a European
@@ -164,10 +211,10 @@ Reply with JSON only, no prose around it:
 {{"real": true or false,
  "confidence": "high" or "medium" or "low",
  "note": "one sentence saying what you found, naming your evidence",
- "photo_url": "a direct link to ONE photograph taken from roughly this "
-               "viewpoint — a real image file (.jpg/.png), not a page — or "
-               "empty if you cannot find one you are confident shows this "
-               "exact spot",
+ "photo_url": "a link that returns ONE photograph of roughly this viewpoint "
+               "— the image itself, not a page, from an allowed source and "
+               "never Wikipedia or Wikimedia — or empty if you cannot find "
+               "one you are confident shows this exact spot",
  "photo_note": "one phrase on what the photograph shows, or empty",
  "details": {{
    "street_name": "the street's real name, as written on a sign there",
@@ -224,12 +271,26 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
         details = {}
     details = {k: str(v).strip() for k, v in details.items() if str(v or "").strip()}
 
+    photo_url = str(data.get("photo_url") or "").strip()
+    photo_note = str(data.get("photo_note") or "").strip()
+
+    # Discarded rather than trusted. The prompt forbids these, and this
+    # pipeline has learned repeatedly that a rule stated is not a rule kept.
+    # Dropping only the photograph leaves the verified place intact — the
+    # search found somewhere real, it just reached for the wrong picture.
+    from scripts.chonky.reference_photo import host_is_banned
+
+    if photo_url and host_is_banned(photo_url):
+        photo_note = (f"discarded {photo_url} — Wikipedia and Wikimedia are "
+                      f"not an allowed photograph source")
+        photo_url = ""
+
     return {
         "real": real,
         "confidence": confidence,
         "note": str(data.get("note") or ""),
-        "photo_url": str(data.get("photo_url") or "").strip(),
-        "photo_note": str(data.get("photo_note") or "").strip(),
+        "photo_url": photo_url,
+        "photo_note": photo_note,
         "details": details,
         "verified": real and confidence in _ACCEPTED_CONFIDENCE,
     }

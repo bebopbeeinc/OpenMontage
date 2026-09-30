@@ -497,6 +497,18 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
 
                 block = detail_block(finding.get("details") or {})
 
+                if not drafted["photo_url"]:
+                    # Every delivered image stays anchored to a real
+                    # photograph. Falling through to the writer's invented
+                    # scene is the thing anchoring exists to replace, so a
+                    # viewpoint nobody has photographed sends the writer
+                    # somewhere else instead.
+                    raise DraftError(
+                        f"no usable photograph was found for this viewpoint"
+                        f"{': ' + finding['photo_note'] if finding.get('photo_note') else ''}"
+                        f". Choose somewhere that is well photographed",
+                        drafted["prompt"])
+
                 if drafted["photo_url"]:
                     # The photograph is the scene now. The written description
                     # is dropped rather than appended to: a full composition
