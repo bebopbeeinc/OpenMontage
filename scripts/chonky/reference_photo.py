@@ -28,6 +28,34 @@ MIN_EDGE = 320
 
 _ACCEPTED_TYPES = ("image/jpeg", "image/jpg", "image/png", "image/webp")
 
+# Every anchored render so far pulled its photograph from upload.wikimedia.org,
+# and they all look it: flat light, grey sky, taken to document a place rather
+# than to be looked at. The prompt now says not to, and in this project asking
+# has never been enough on its own — so the host is checked here too, where the
+# bytes would actually be fetched, which catches a URL that never went through
+# the search at all (a reroll, an edited sidecar, a future caller).
+BANNED_HOSTS = (
+    "wikipedia.org", "wikimedia.org", "wikisource.org", "wikidata.org",
+    "wikivoyage.org", "wikiquote.org", "wikibooks.org",
+)
+
+
+def host_is_banned(url: str) -> bool:
+    """True for a Wikipedia-family URL, subdomains included.
+
+    Parses the hostname rather than searching the string: a perfectly good
+    photograph can carry "wikimedia.org" inside its path or filename, and a
+    substring test would throw it away.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return True          # unparseable is not a source we can trust
+    return any(host == banned or host.endswith("." + banned)
+               for banned in BANNED_HOSTS)
+
 
 class ReferenceError(RuntimeError):
     """The reference photograph could not be used."""
@@ -55,6 +83,12 @@ def fetch_reference(url: str, destination, *,
     """
     if not url:
         return None
+
+    # Before the network call, so a banned URL costs nothing.
+    if host_is_banned(url):
+        raise ReferenceError(
+            f"{url} is on a Wikipedia/Wikimedia domain, which is not an "
+            f"allowed photograph source")
 
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)

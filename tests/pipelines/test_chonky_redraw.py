@@ -65,13 +65,18 @@ def test_the_allowed_differences_are_named_and_small():
     assert "do not" in prompt.lower()
 
 
-def test_without_a_photograph_the_written_scene_is_used():
-    """Unanchored still has to render something, so the description stands."""
+def test_without_a_photograph_the_draft_is_rejected():
+    """This used to fall back to the written scene. It no longer does.
+
+    An unanchored render is a generated street, which is what anchoring
+    exists to replace — so a viewpoint nobody has photographed sends the
+    writer somewhere else instead of quietly reverting.
+    """
     plain = dict(FOUND, photo_url="")
-    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                        caller=_reply(DRAFTED), verifier=lambda **kw: plain)
-    assert "market stalls" in out["prompt"]
-    assert "REDRAW" not in out["prompt"]
+    with pytest.raises(prompts.DraftError) as exc:
+        prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                      caller=_reply(DRAFTED), verifier=lambda **kw: plain)
+    assert "photograph" in str(exc.value).lower()
 
 
 def test_a_draft_with_no_chonky_line_is_rejected():
