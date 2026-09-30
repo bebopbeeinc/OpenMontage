@@ -106,7 +106,6 @@ from scripts.chonky import prompts  # noqa: E402
 DRAFTED = {
     "city": "Cusco", "country": "Peru",
     "viewpoint": "Cuesta San Blas, facing downhill toward the old town",
-    "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
     "prompt": ("The crowd walks ahead and Chonky sits far beyond all of them "
                "on the cobblestones."),
     "clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"],

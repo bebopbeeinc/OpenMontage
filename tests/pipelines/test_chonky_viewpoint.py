@@ -22,7 +22,6 @@ VALID = {
     "country": "Czech Republic",
     "viewpoint": ("Charles Bridge, a third of the way across from the Old Town "
                   "end, camera facing west toward the Mala Strana towers"),
-    "chonky_line": "Chonky sits on the cobblestones far beyond all of them.",
     "prompt": ("Tourists walk ahead of the camera and Chonky sits far beyond "
                "all of them, on the cobblestones."),
     "clues": ["a", "b", "c"],

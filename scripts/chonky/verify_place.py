@@ -104,56 +104,19 @@ game whose entire premise is that the places are real.
 """
 
 
-_DIFFICULTY = {
-    1: "2 to 5 clear clues; the destination is effectively revealed. Famous "
-       "landmarks are welcome.",
-    2: "country obvious, city reasonably inferable. Landmarks are welcome.",
-    3: "the city should require combining several clues.",
-    4: "country or region identifiable, exact city difficult. NO unmistakable "
-       "landmark.",
-    5: "one or two subtle independent clues; close localisation needs real "
-       "expertise. NO landmark at all — infrastructure and architecture carry it.",
-}
-
-
-def _user_message(city: str, country: str, viewpoint: str,
-                  difficulty: int = 1) -> str:
-    level = _DIFFICULTY.get(int(difficulty), _DIFFICULTY[5])
+def _user_message(city: str, country: str, viewpoint: str) -> str:
     return f"""\
 Location: {city}, {country}
 Viewpoint: {viewpoint}
-This image is for difficulty {difficulty}: {level}
 
 Does this place exist, and could a person stand there and photograph roughly
 what is described?
 
 If it does exist, find a PHOTOGRAPH taken from roughly this viewpoint. The
-photograph becomes the scene — it is redrawn, and the player solves the level
-from what is in it — so it has to work as a puzzle, not merely show the place.
-Judge candidates against all of this and pick the best one:
-
-  * It must suit difficulty {difficulty}. At 4 and above, reject any
-    photograph containing an unmistakable landmark: that is an instant answer
-    and the level is meant to be hard.
-
-  * NOTHING IN IT MAY SPELL THE ANSWER. Reject a photograph where the name of
-    the city, the region or the country is legible on a sign, a banner, a
-    shopfront or a monument. That turns the level into a reading test.
-
-  * It must carry readable evidence — signage, script, road markings, plates,
-    architecture, terrain, vegetation. A pretty view with nothing to read is
-    not a geography puzzle. At least one country-level clue should be there.
-
-  * Prefer a quiet moment. A photograph full of tourists hides the clues and
-    hides the cat; a handful of people is fine, a crowd is not.
-
-  * Prefer PORTRAIT or a squarish frame over a wide landscape one. The game
-    frame is 4:5 with a tall 9:16 window inside it, and the sides are the pan
-    reward, so a letterbox photograph loses most of what makes the level.
-
-Give a direct link to an image file, not to a page containing one, and leave
-it empty rather than linking something you are not confident shows this exact
-spot or that fails the conditions above.
+render is anchored to it, which is the difference between a picture that is
+plausibly this city and one that is actually this street. Give a direct link
+to an image file, not to a page containing one, and leave it empty rather than
+linking something you are not confident shows this exact spot.
 
 Also report what is ACTUALLY there, because an image model left to guess will
 invent it: a Peruvian street came back with a European
@@ -184,7 +147,6 @@ a wrong detail stated as fact is worse than a missing one.
 
 
 def verify_viewpoint(*, city: str, country: str, viewpoint: str,
-                     difficulty: int = 1,
                      caller: Optional[Callable] = None,
                      model: Optional[str] = None) -> dict:
     """Look the viewpoint up. Returns the finding and whether it counts.
@@ -194,7 +156,7 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
     exists to stop while appearing to have checked.
     """
     caller = caller or _call_via_cli
-    ask = _user_message(city, country, viewpoint, difficulty)
+    ask = _user_message(city, country, viewpoint)
     raw = caller(_SYSTEM, ask, model=model)
 
     data = _parse(raw)
