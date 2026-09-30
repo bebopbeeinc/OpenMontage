@@ -112,14 +112,8 @@ Viewpoint: {viewpoint}
 Does this place exist, and could a person stand there and photograph roughly
 what is described?
 
-If it does exist, find a PHOTOGRAPH taken from roughly this viewpoint. The
-render is anchored to it, which is the difference between a picture that is
-plausibly this city and one that is actually this street. Give a direct link
-to an image file, not to a page containing one, and leave it empty rather than
-linking something you are not confident shows this exact spot.
-
-Also report what is ACTUALLY there, because an image model left to guess will
-invent it: a Peruvian street came back with a European
+If it does exist, also report what is ACTUALLY there, because an image model
+left to guess will invent it: a Peruvian street came back with a European
 licence plate and a street plaque with no lettering on it.
 
 Reply with JSON only, no prose around it:
@@ -127,11 +121,6 @@ Reply with JSON only, no prose around it:
 {{"real": true or false,
  "confidence": "high" or "medium" or "low",
  "note": "one sentence saying what you found, naming your evidence",
- "photo_url": "a direct link to ONE photograph taken from roughly this "
-               "viewpoint — a real image file (.jpg/.png), not a page — or "
-               "empty if you cannot find one you are confident shows this "
-               "exact spot",
- "photo_note": "one phrase on what the photograph shows, or empty",
  "details": {{
    "street_name": "the street's real name, as written on a sign there",
    "plate_format": "what a vehicle plate in this country looks like: colour, "
@@ -176,8 +165,7 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
             # not a place anybody found, and the prose is the most useful
             # thing in the reply — it says what is actually there.
             return {"real": False, "confidence": "low",
-                    "note": raw.strip()[:400], "photo_url": "", "photo_note": "",
-                    "details": {}, "verified": False}
+                    "note": raw.strip()[:400], "details": {}, "verified": False}
 
     real = bool(data["real"])
     confidence = str(data.get("confidence", "low")).strip().lower()
@@ -190,8 +178,6 @@ def verify_viewpoint(*, city: str, country: str, viewpoint: str,
         "real": real,
         "confidence": confidence,
         "note": str(data.get("note") or ""),
-        "photo_url": str(data.get("photo_url") or "").strip(),
-        "photo_note": str(data.get("photo_note") or "").strip(),
         "details": details,
         "verified": real and confidence in _ACCEPTED_CONFIDENCE,
     }

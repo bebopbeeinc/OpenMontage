@@ -133,7 +133,7 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
                 log: Optional[list] = None, aspect: Optional[str] = None,
                 resolution: Optional[str] = None,
                 width: Optional[int] = None, height: Optional[int] = None,
-                reference_image_path=None, model: Optional[str] = None) -> Path:
+                model: Optional[str] = None) -> Path:
     """Render `prompt` to `out_path`. One submission, no retries.
 
     `driver` is injectable so tests never reach OpenArt. `log`, when given,
@@ -160,14 +160,12 @@ def render_once(prompt: str, out_path: Path, *, driver: Optional[Callable] = Non
                         aspect=normalise_aspect(aspect),
                         resolution=normalise_tier(resolution),
                         width=width, height=height,
-                        reference_image_path=reference_image_path,
                         model=normalise_model(model))[0])
 
 
 def _submit(driver, prompt: str, out_path: Path, *, log=None,
             aspect: str = ASPECT, resolution: str = RESOLUTION,
-            width=None, height=None, reference_image_path=None,
-            model: str = MODEL):
+            width=None, height=None, model: str = MODEL):
     return driver(
         prompt=prompt,
         model=model,
@@ -180,7 +178,4 @@ def _submit(driver, prompt: str, out_path: Path, *, log=None,
         log=log,
         width=width,
         height=height,
-        # Alongside Chonky, never instead of him: the character sheet says what
-        # the cat looks like, this says what the street looks like.
-        reference_image_path=reference_image_path,
     )

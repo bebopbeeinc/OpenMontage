@@ -53,7 +53,6 @@ from scripts.chonky.render import (  # noqa: E402
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
 from scripts.chonky import inspect as render_inspector  # noqa: E402
-from scripts.chonky import reference_photo  # noqa: E402
 from scripts.chonky import verify_place  # noqa: E402
 from scripts.chonky import prompts as prompt_writer  # noqa: E402
 from scripts.chonky.targeting import next_zone  # noqa: E402
@@ -514,8 +513,6 @@ def generate(payload: dict) -> dict:
                            difficulty=level, target_zone=zone, clues=d["clues"],
                            clue_words=d.get("clue_words"),
                            viewpoint=d.get("viewpoint"),
-                           place_note=d.get("place_note"),
-                           photo_url=d.get("photo_url"),
                            aspect=aspect, resolution=resolution,
                            width=width, height=height)
 
@@ -564,28 +561,13 @@ def generate(payload: dict) -> dict:
 def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None,
                        difficulty=None, target_zone=None, clues=None,
                        clue_words=None, viewpoint=None, place_note=None,
-                       photo_url=None, aspect=None, resolution=None,
-                       width=None, height=None) -> None:
+                       aspect=None, resolution=None, width=None,
+                       height=None) -> None:
     try:
         out = LIBRARY / f"{image_id}.png"
         submission: list[str] = []
-
-        # A photograph of the actual viewpoint, attached alongside Chonky. It
-        # is what makes the render match the place rather than resemble the
-        # city. Losing it must not lose the render: unanchored is worse than
-        # anchored, it is not worse than nothing.
-        reference = None
-        photo_error = None
-        if photo_url:
-            try:
-                reference = reference_photo.fetch_reference(
-                    photo_url, LIBRARY / f"{image_id}-reference.png")
-            except Exception as exc:                  # noqa: BLE001 - reported
-                photo_error = f"{type(exc).__name__}: {exc}"
-
         render_once(prompt, out, log=submission, aspect=aspect,
-                    resolution=resolution, width=width, height=height,
-                    reference_image_path=reference["path"] if reference else None)
+                    resolution=resolution, width=width, height=height)
         with Image.open(out) as im:
             result = verify(im)
 
@@ -623,8 +605,7 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                        broken_text_detail=(seen or {}).get("broken_text_detail", ""),
                        measurement=result,
                        viewpoint=viewpoint, place_note=place_note,
-                       photo_url=photo_url, photo_error=photo_error,
-                       anchored=bool(reference), model=MODEL,
+                       model=MODEL,
                        aspect=aspect, resolution=resolution,
                        width=width, height=height)
     except Exception as exc:                          # surfaced to the UI as-is
@@ -789,9 +770,6 @@ def renders():
             "clue_words": side.get("clue_words"),
             "viewpoint": side.get("viewpoint"),
             "place_note": side.get("place_note"),
-            "photo_url": side.get("photo_url"),
-            "photo_error": side.get("photo_error"),
-            "anchored": side.get("anchored", False),
             "clue_source": side.get("clue_source"),
             "clue_source_error": side.get("clue_source_error"),
             "names_the_place": side.get("names_the_place", False),
@@ -809,25 +787,6 @@ def renders():
         })
     out.sort(key=lambda r: r["created_at"], reverse=True)
     return {"renders": out}
-
-
-@app.get("/api/reference-photo/{image_id}")
-def reference_photo_for(image_id: str):
-    """The photograph this render was anchored to.
-
-    Shown beside the render, because "does the picture match reality" is a
-    question only a person looking at both can answer.
-    """
-    path = LIBRARY / f"{image_id}-reference.png"
-    if not path.exists():
-        return JSONResponse({"error": "this render was not anchored"},
-                            status_code=404)
-    with Image.open(path) as img:
-        small = img.copy()
-    small.thumbnail((900, 900))
-    buf = __import__("io").BytesIO()
-    small.convert("RGB").save(buf, format="JPEG", quality=85)
-    return Response(buf.getvalue(), media_type="image/jpeg")
 
 
 @app.get("/api/crop/{image_id}")
