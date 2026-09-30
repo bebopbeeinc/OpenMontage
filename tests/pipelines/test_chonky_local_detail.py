@@ -22,7 +22,6 @@ FOUND = {
     "real": True,
     "confidence": "high",
     "note": "documented street in the San Blas quarter",
-    "photo_url": "https://live.staticflickr.com/1/san-blas_b.jpg",
     "details": {
         "street_name": "CUESTA DE SAN BLAS",
         "plate_format": ("white rectangular plate, black characters, three "
@@ -106,26 +105,17 @@ def test_the_verified_detail_is_appended_to_the_prompt():
                         verifier=lambda **kw: FOUND | {"verified": True})
     assert "CUESTA DE SAN BLAS" in out["prompt"]
     assert "no EU band" in out["prompt"]
-    # The written scene is dropped now that a photograph is attached — it is
-    # what competed with the picture. Chonky's own line is what survives.
-    assert "Chonky sits" in out["prompt"]
+    # And the writer's own prompt survives underneath it.
+    assert "Chonky sits far beyond all of them" in out["prompt"]
 
 
-def test_no_details_means_no_detail_block():
-    """An empty lookup must add nothing rather than an empty heading.
-
-    This used to assert the written scene came back untouched. A photograph is
-    mandatory now, so the prompt is always the redraw — what is being checked
-    is that a lookup which found no details leaves it clean.
-    """
-    plain = {"real": True, "confidence": "high", "note": "found",
-             "verified": True, "details": {},
-             "photo_url": "https://live.staticflickr.com/1/x_b.jpg"}
+def test_no_details_leaves_the_prompt_alone():
+    plain = {"real": True, "confidence": "high", "note": "found", "verified": True,
+             "details": {}}
     out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                         caller=lambda s, u, model=None: json.dumps(DRAFTED),
                         verifier=lambda **kw: plain)
-    assert "VERIFIED LOCAL DETAIL" not in out["prompt"]
-    assert "REDRAW THE ATTACHED PHOTOGRAPH" in out["prompt"]
+    assert out["prompt"] == DRAFTED["prompt"]
 
 
 def test_the_appended_block_does_not_break_the_prompt_checks():
@@ -163,17 +153,10 @@ def test_a_photograph_is_asked_for():
     assert "photograph" in seen["user"].lower()
 
 
-def test_a_missing_photograph_does_not_unverify_the_place():
-    """The place and the picture are separate findings.
-
-    A viewpoint with no photograph still exists; what it cannot do is be
-    rendered, and that is decided in the draft loop rather than here. This
-    used to assert an unanchored render was acceptable — it is not any more,
-    but losing the photograph must still not lose the verification.
-    """
+def test_no_photograph_is_not_a_failure():
+    """An unanchored render is worse than an anchored one, not a broken one."""
     out = verify_viewpoint(city="Cusco", country="Peru", viewpoint="x",
-                           caller=_reply({k: v for k, v in FOUND.items()
-                                          if k != "photo_url"}))
+                           caller=_reply(FOUND))
     assert out["verified"] is True
     assert out["photo_url"] == ""
 

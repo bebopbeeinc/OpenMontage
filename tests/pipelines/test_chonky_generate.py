@@ -464,16 +464,8 @@ def test_the_render_is_anchored_to_a_photograph_of_the_place(monkeypatch):
         _cleanup(ids)
 
 
-def test_a_photograph_that_cannot_be_fetched_fails_the_render(monkeypatch):
-    """This used to assert the render survived. It should not have.
-
-    The prompt reads REDRAW THE ATTACHED PHOTOGRAPH. With the fetch failed
-    there is nothing attached, so "surviving" meant asking the model to
-    reproduce a picture it could not see — and it answers by inventing a
-    street, which is the failure anchoring exists to stop. Better to fail
-    before the render than to pay for one that is wrong in the one way this
-    whole mechanism was built to prevent.
-    """
+def test_a_photograph_that_cannot_be_fetched_does_not_lose_the_render(monkeypatch):
+    """Unanchored is worse than anchored. It is not worse than nothing."""
     from scripts.chonky import reference_photo as rp
 
     seen = {}
@@ -492,10 +484,10 @@ def test_a_photograph_that_cannot_be_fetched_fails_the_render(monkeypatch):
     ids = [j["image_id"] for j in body["jobs"]]
     try:
         states = _drain([j["job_id"] for j in body["jobs"]], timeout=20)
-        assert states == ["failed"], states
-        assert seen == {}, "a render was paid for with nothing to redraw"
-        detail = client.get(f"/api/jobs/{body['jobs'][0]['job_id']}").json()
-        assert "404" in detail["error"]
+        assert states == ["done"], states
+        assert seen.get("reference_image_path") is None
+        side = json.loads((server.LIBRARY / f"{ids[0]}.json").read_text())
+        assert "404" in side["photo_error"]
     finally:
         _cleanup(ids)
 

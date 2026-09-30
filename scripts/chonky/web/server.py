@@ -583,16 +583,6 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
             except Exception as exc:                  # noqa: BLE001 - reported
                 photo_error = f"{type(exc).__name__}: {exc}"
 
-        if photo_url and reference is None:
-            # The prompt reads REDRAW THE ATTACHED PHOTOGRAPH. Sending it with
-            # nothing attached asks the model to reproduce something it cannot
-            # see, and it answers by inventing a street — the exact failure
-            # anchoring exists to stop, wearing the words of the fix. Fail
-            # before the render rather than after.
-            raise RuntimeError(
-                f"the photograph this render was to be drawn from could not "
-                f"be fetched, so there is nothing to redraw: {photo_error}")
-
         render_once(prompt, out, log=submission, aspect=aspect,
                     resolution=resolution, width=width, height=height,
                     reference_image_path=reference["path"] if reference else None)
