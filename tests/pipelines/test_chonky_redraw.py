@@ -170,3 +170,50 @@ def test_the_difficulty_reaches_the_photograph_search():
     prompts.draft(difficulty=5, target_zone="viewframe", used=[],
                   caller=_reply(DRAFTED), verifier=verifier)
     assert seen["difficulty"] == 5
+
+
+# --------------------------------------------------------------------------
+# The redraw prompt lost Chonky.
+#
+# It drops the written scene, which is right — that composition is what
+# competed with the photograph and won. But the scene also carried every
+# sentence holding his size down, and with only a placement line left he came
+# back 18 px against a 65-105 px band: 0.8% of the phone screen, invisible.
+# --------------------------------------------------------------------------
+
+def test_the_redraw_prompt_states_his_size_in_pixels():
+    """A share of the frame is abstract; a pixel height is checkable."""
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_reply(DRAFTED), verifier=lambda **kw: FOUND,
+                        frame=(2048, 2560))
+    assert "65" in out["prompt"] and "105" in out["prompt"]
+    assert "2048" in out["prompt"] and "2560" in out["prompt"]
+
+
+def test_the_redraw_prompt_states_his_share_of_the_frame():
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_reply(DRAFTED), verifier=lambda **kw: FOUND,
+                        frame=(2048, 2560))
+    assert "%" in out["prompt"]
+
+
+def test_the_size_scales_with_the_frame_that_was_asked_for():
+    """The band is a share, so a different frame means different pixels."""
+    small = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                          caller=_reply(DRAFTED), verifier=lambda **kw: FOUND,
+                          frame=(1344, 1680))
+    assert "43" in small["prompt"] and "69" in small["prompt"]
+
+
+def test_without_a_frame_the_reference_band_is_stated():
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_reply(DRAFTED), verifier=lambda **kw: FOUND)
+    assert "65" in out["prompt"] and "105" in out["prompt"]
+
+
+def test_he_is_named_as_small_not_as_the_subject():
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_reply(DRAFTED), verifier=lambda **kw: FOUND,
+                        frame=(2048, 2560))
+    prompt = out["prompt"].lower()
+    assert "not the subject" in prompt or "not a foreground" in prompt

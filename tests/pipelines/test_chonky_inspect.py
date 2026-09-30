@@ -146,3 +146,66 @@ def test_the_instruction_asks_about_blank_and_garbled_signs(tmp_path):
     inspect_render(img, city="Cusco", country="Peru", difficulty=4, caller=caller)
     assert "blank" in seen["user"].lower()
     assert "garbled" in seen["user"].lower()
+
+
+# --------------------------------------------------------------------------
+# The manual already specifies the clue wording, and the clue pass ignored it.
+#
+# Section 7.5: "Each message is ONE simple factual sentence, MAXIMUM 12 WORDS
+# ... Simple wording, fun-fact tone, internationally readable, understandable
+# by a 10 year old." Section 7.6 brackets the important nouns. What came back
+# was eighteen words of description with neither.
+#
+# I wrote fresh instructions for this pass instead of carrying 7.4-7.7 across.
+# --------------------------------------------------------------------------
+
+def _asked(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    seen = {}
+
+    def caller(system, user, *, model=None, image=None):
+        seen["user"] = user
+        return json.dumps(GOOD)
+
+    inspect_render(img, city="Cusco", country="Peru", difficulty=4, caller=caller)
+    return seen["user"]
+
+
+def test_the_twelve_word_limit_is_stated(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "12 words" in asked or "twelve words" in asked
+
+
+def test_the_bracket_convention_is_stated(tmp_path):
+    asked = _asked(tmp_path)
+    assert "[" in asked and "square bracket" in asked.lower()
+
+
+def test_the_tone_is_stated(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "10 year old" in asked or "ten year old" in asked
+    assert "fun-fact" in asked or "fun fact" in asked
+
+
+def test_the_three_clues_have_their_assigned_jobs(tmp_path):
+    """7.4: most definitive, second and distinct, then one semi-hidden."""
+    asked = _asked(tmp_path).lower()
+    assert "most definitive" in asked
+    assert "semi-hidden" in asked or "less obvious" in asked
+
+
+def test_an_overlong_clue_is_rejected():
+    """Asking is not getting — this pipeline has learned that twice."""
+    long_clue = ("A narrow street paved with rounded cobblestones and a smooth "
+                 "flagstone walkway running straight down the middle")
+    with pytest.raises(I.InspectError):
+        I.check_clues([long_clue, "Flag: A [Peruvian flag] flies.", "c"])
+
+
+def test_clues_within_the_limit_pass():
+    I.check_clues([
+        "Landmark: The [Eiffel Tower] rises behind the fountains.",
+        "Flag: A blue-white-red [French flag] flies from the pole.",
+        "Street furniture: Green cast-iron [Wallace fountains] mark [Paris].",
+    ])

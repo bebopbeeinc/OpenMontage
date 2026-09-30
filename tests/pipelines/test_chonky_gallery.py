@@ -119,3 +119,36 @@ def test_a_tile_gets_everything_it_has_to_show():
         assert row["reject_reason"] == "he is too big"
     finally:
         _cleanup("gal-full")
+
+
+def test_a_reference_photograph_is_not_listed_as_a_render():
+    """The photo a render was anchored to lives beside it in the library.
+
+    /api/renders globs *.png, so the reference turned up in the gallery as
+    though it were an image somebody made — with no measurement, no clues,
+    and an Approve button.
+    """
+    Image.new("RGB", (900, 700), (10, 20, 30)).save(
+        server.LIBRARY / "anchored-probe-reference.png")
+    Image.new("RGB", (1344, 1680), (40, 40, 40)).save(
+        server.LIBRARY / "anchored-probe.png")
+    try:
+        ids = [r["image_id"] for r in client.get("/api/renders").json()["renders"]]
+        assert "anchored-probe" in ids
+        assert "anchored-probe-reference" not in ids
+    finally:
+        (server.LIBRARY / "anchored-probe.png").unlink(missing_ok=True)
+        (server.LIBRARY / "anchored-probe-reference.png").unlink(missing_ok=True)
+        server._images.pop("anchored-probe", None)
+
+
+def test_a_render_whose_name_merely_ends_in_reference_still_lists():
+    """The rule is the suffix this pipeline writes, not the word anywhere."""
+    Image.new("RGB", (1344, 1680), (40, 40, 40)).save(
+        server.LIBRARY / "my-reference.png")
+    try:
+        ids = [r["image_id"] for r in client.get("/api/renders").json()["renders"]]
+        assert "my-reference" in ids
+    finally:
+        (server.LIBRARY / "my-reference.png").unlink(missing_ok=True)
+        server._images.pop("my-reference", None)

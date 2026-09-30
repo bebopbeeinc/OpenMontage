@@ -456,6 +456,7 @@ MAX_ATTEMPTS = 3
 def draft(*, difficulty: int, target_zone: str, used: list[str],
           city: Optional[str] = None, country: Optional[str] = None,
           weights: Optional[dict] = None, verifier: Optional[Callable] = None,
+          frame=None,
           caller: Optional[Callable] = None, model: Optional[str] = None) -> dict:
     """Write one prompt, retrying with the reason when one is rejected.
 
@@ -503,7 +504,8 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                     # as mood and invent a different street.
                     drafted["scene_prompt"] = drafted["prompt"]
                     drafted["prompt"] = _redraw_prompt(
-                        drafted["viewpoint"], drafted["chonky_line"], block)
+                        drafted["viewpoint"], drafted["chonky_line"], block,
+                        frame)
                 elif block:
                     drafted["prompt"] = drafted["prompt"] + block
                 drafted["place_details"] = finding.get("details")
@@ -517,7 +519,36 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
     raise last  # type: ignore[misc]
 
 
-def _redraw_prompt(viewpoint: str, chonky_line: str, detail: str) -> str:
+def _size_line(frame) -> str:
+    """State his size in pixels of the frame actually being rendered.
+
+    The redraw prompt drops the written scene, which is right — that
+    composition is what competed with the photograph. But the scene also
+    carried every sentence holding his size down, and with only a placement
+    line left he came back at 18 px against a 65-105 band: 0.8% of the phone
+    screen, invisible. A pixel height in a stated frame is the most concrete
+    form this instruction can take.
+    """
+    from scripts.chonky.geometry import IMG_H, IMG_W, size_band, viewframe_box
+
+    frame = tuple(frame) if frame else (IMG_W, IMG_H)
+    lo, hi = size_band(frame)
+    _, vy0, _, vy1 = viewframe_box(frame)
+    share = (lo + hi) / 2 / (vy1 - vy0) * 100
+    return (
+        f"HIS SIZE IS A HARD CONSTRAINT. In the finished {frame[0]}x{frame[1]} "
+        f"image Chonky must stand between {lo} and {hi} pixels tall, including "
+        f"his ears and tail — about {share:.0f}% of the height of the phone "
+        f"screen the player sees. He is a small shape to be found, not the "
+        f"subject of the photograph: someone looking at this picture sees the "
+        f"street first and him second. Put him at the distance where a real "
+        f"cat would measure that, with correct perspective and a correct "
+        f"contact shadow. Do not enlarge him to make him visible."
+    )
+
+
+def _redraw_prompt(viewpoint: str, chonky_line: str, detail: str,
+                   frame=None) -> str:
     """Ask for the attached photograph, redrawn — not a scene beside it."""
     return f"""\
 REDRAW THE ATTACHED PHOTOGRAPH.
@@ -542,6 +573,8 @@ alter the camera position. If the photograph does not contain something, it is
 not in this picture.
 
 {chonky_line}
+
+{_size_line(frame)}
 {detail}"""
 
 

@@ -498,6 +498,8 @@ def generate(payload: dict) -> dict:
             d = prompt_writer.draft(difficulty=level, target_zone=zone,
                                     used=used, city=city, country=country,
                                     weights=weights,
+                                    frame=(width, height) if width and height
+                                          else None,
                                     verifier=verify_place.verify_viewpoint)
         except Exception as exc:                  # noqa: BLE001 - shown in the UI
             with _lock:
@@ -767,6 +769,14 @@ def renders():
     """
     out = []
     for png in LIBRARY.glob("*.png"):
+        # The photograph a render was anchored to lives beside it as
+        # "<image id>-reference.png". It is an input, not something anybody
+        # made, and it was turning up in the gallery with an Approve button.
+        # Keyed on the render actually existing rather than on the suffix, so
+        # a render legitimately named "...-reference" still lists.
+        if png.stem.endswith("-reference") and \
+                (LIBRARY / f"{png.stem[:-len('-reference')]}.png").exists():
+            continue
         side = _read_sidecar(png.stem)
         out.append({
             "image_id": png.stem,
