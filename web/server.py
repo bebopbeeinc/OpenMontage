@@ -460,9 +460,30 @@ async def deploy(
     head_after = _git_head()
     changed = head_before != head_after
 
+    # Restart when the RUNNING code is behind the tree, not when the pull
+    # happened to move HEAD. On the machine where development happens the
+    # local repo is the source — commits are made here and pushed out — so the
+    # pull always reports "Already up to date" and `changed` is always False.
+    # Keying the restart off it meant Deploy could never restart this machine:
+    # it was found serving ten-day-old code, with endpoints that 404ed because
+    # they did not exist yet in the process, while every Deploy press returned
+    # ok:true and did nothing.
+    #
+    # This strictly generalises the old rule. A pull that moves HEAD past the
+    # boot commit is still stale, so the ordinary deploy still restarts; and a
+    # freshly respawned process matches HEAD, so there is no restart loop.
+    if _BOOT_HEAD:
+        stale = bool(head_after) and head_after != _BOOT_HEAD
+    else:
+        # git could not name the boot commit. Fall back to the old signal
+        # rather than restart on every deploy forever.
+        stale = changed
+
     result = {
         "ok": pull.returncode == 0,
         "changed": changed,
+        "stale": stale,
+        "running_head": _BOOT_HEAD,
         "head_before": head_before,
         "head_after": head_after,
         "stdout": pull.stdout,
@@ -471,7 +492,7 @@ async def deploy(
         "restart_method": "none",
     }
 
-    if pull.returncode != 0 or not changed:
+    if pull.returncode != 0 or not stale:
         return result
 
     if SUPERVISED:
@@ -521,6 +542,13 @@ def _git_head() -> str:
 # Touch-mtime detection of reload mode: record server start time so the client
 # can tell if /api/health came back from a fresh process.
 _BOOT_TIME = time.time()
+
+# The commit this process is actually running. Deploy compares HEAD against it
+# to decide whether the live code is stale, which is the real question — "did
+# the pull move HEAD" is only a proxy for it, and a proxy that is always False
+# on the machine where the commits are made. Empty when git cannot answer; the
+# deploy path treats that as "unknown", never as "infinitely stale".
+_BOOT_HEAD = _git_head()
 
 
 @app.get("/api/boot")

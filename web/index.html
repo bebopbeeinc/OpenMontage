@@ -267,7 +267,11 @@ async function runDeploy({ force }) {
     return;
   }
 
-  if (!result.changed) {
+  // `stale` — not `changed` — is what the server restarts on. On the machine
+  // where the commits are made, the pull always brings nothing and `changed`
+  // is always false, so keying this off it reported "Already up to date" over
+  // a server that was in fact ten days behind and restarting.
+  if (!result.stale) {
     setStatus("Already up to date.", "ok");
     deployBtn.disabled = false;
     return;
@@ -275,10 +279,16 @@ async function runDeploy({ force }) {
 
   const shortBefore = (result.head_before || "").slice(0, 7);
   const shortAfter = (result.head_after || "").slice(0, 7);
+  const shortRunning = (result.running_head || "").slice(0, 7);
+  // Say what actually happened: a pull that moved HEAD is a different event
+  // from a server running behind a tree the pull never had to touch.
+  const moved = result.changed
+    ? `Pulled ${shortBefore} → ${shortAfter}`
+    : `Server was running ${shortRunning}, tree is at ${shortAfter}`;
 
   if (result.restart_method === "none") {
     setStatus(
-      `Pulled ${shortBefore} → ${shortAfter}, but no restart mechanism is available.\n` +
+      `${moved}, but no restart mechanism is available.\n` +
       `Run scripts/run_launcher.sh or uvicorn --reload to enable auto-restart, ` +
       `then restart the server manually for now.`,
       "warn",
@@ -288,7 +298,7 @@ async function runDeploy({ force }) {
   }
 
   const verb = result.restart_method === "supervisor" ? "Respawning" : "Reloading";
-  setStatus(`Pulled ${shortBefore} → ${shortAfter}. ${verb}…`, "");
+  setStatus(`${moved}. ${verb}…`, "");
 
   const newBoot = await waitForRestart(boot0, 30000);
   if (newBoot) {
@@ -299,7 +309,7 @@ async function runDeploy({ force }) {
     const hint = result.restart_method === "supervisor"
       ? "The supervisor should have respawned by now — check the supervisor logs."
       : "If you're not running uvicorn with --reload, restart manually or use scripts/run_launcher.sh.";
-    setStatus(`Pulled ${shortAfter}, but the server didn't come back in 30s.\n${hint}`, "warn");
+    setStatus(`${moved}, but the server didn't come back in 30s.\n${hint}`, "warn");
   }
   deployBtn.disabled = false;
 }
