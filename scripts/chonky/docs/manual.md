@@ -552,22 +552,36 @@ has not COMPLETED.
      pose, or in the wrong zone, set the row status to REROLL and render
      again. Do not write clue messages
      describing something that is not in the picture.
-7.4  Then write THREE Level Win messages per image:
-       - clue 1: the single most definitive visible clue
-       - clue 2: the second most definitive, and DISTINCT from clue 1
-       - clue 3: one less obvious, semi-hidden clue
-7.5  Each message is ONE simple factual sentence, MAXIMUM 12 WORDS,
-     about a clue unique to that location. Simple wording, fun-fact tone,
-     internationally readable, understandable by a 10 year old.
-7.6  Bold the important nouns and proper nouns using [square brackets].
-7.7  Format examples to match:
-       Warning sign: [South Korea] commonly uses the yellow-filled,
-       red-bordered triangle sign.
-       Road marking: The pavement contains [Hangul], the Korean alphabet.
-       Driving side: Traffic travels on the right. [South Korea] drives
-       on the right.
-       Street furniture: Orange flexible [bollards] with reflective bands
-       are common on South Korean streets.
+7.4  Then write THREE Level Win hints per image. A hint's job is to HELP
+     THE PLAYER GUESS WHERE THIS IS. This is the shape:
+
+       Those teal rental bikes on the sidewalk belong to the "MiBici"
+       network, which is only found in Mexico's second-largest city.
+
+7.5  What makes that one work, and what every hint must do:
+       - POINT AT SOMETHING SPECIFIC AND VISIBLE, the way a person would
+         say it: "those teal rental bikes on the sidewalk". Not "a curved
+         bay is lined with high-rises", which describes the view the
+         player is already looking at and narrows nothing down.
+       - NAME IT. A hint is only useful if it names the identifiable
+         thing: the MiBici network, the Hangul alphabet, a plate format,
+         a bollard style, a tree species, a bus livery. "A sign" helps
+         nobody; "a blue sign lettered in Hangul" is a hint.
+       - SAY WHAT IT NARROWS DOWN, WITHOUT HANDING OVER THE ANSWER.
+         "only found in Mexico's second-largest city" leaves the player
+         the last step. Never write "which means this is Guadalajara".
+       - TEACH SOMETHING. A good hint is worth knowing after the level
+         is over.
+7.6  Tone: conversational, like a person telling you a fun fact — not a
+     label on a diagram. One or two sentences, up to about thirty words.
+     Internationally readable. No category prefixes, no square brackets,
+     no formatting of any kind.
+7.7  The three, in order:
+       - hint 1: the strongest — what most narrows down where this is
+       - hint 2: the second strongest, about something DIFFERENT
+       - hint 3: a smaller, less obvious detail a sharp player would spot
+     Chonky is never a hint. He is what the player hunts, not evidence
+     of where they are.
 
 ---------------------------------------------------------------------
 8. FILENAMES AND DELIVERY (STEP D)
