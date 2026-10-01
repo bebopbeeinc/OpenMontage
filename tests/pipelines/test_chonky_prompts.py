@@ -358,3 +358,35 @@ def test_the_writer_is_told_which_quotes_to_use():
 
     prompts.draft(difficulty=1, target_zone="viewframe", used=[], caller=spy)
     assert "single quotes" in seen["user"].lower()
+
+
+# --------------------------------------------------------------------------
+# An API key in the environment must not select a path that cannot run.
+#
+# The server was restarted under a supervisor that inherited ANTHROPIC_API_KEY
+# from the launching shell. _default_caller saw the key, chose the SDK, and
+# every draft died on "No module named 'anthropic'" — while the `claude` CLI,
+# which this pipeline is designed around and which needs no key at all, sat
+# there working. The key is a preference; the CLI is the floor.
+# --------------------------------------------------------------------------
+
+def test_the_cli_is_used_when_the_sdk_is_not_installed(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-whatever")
+    monkeypatch.setattr(prompts, "_sdk_available", lambda: False)
+    used = {}
+
+    def fake_cli(system, user, *, model=None):
+        used["cli"] = True
+        return "ok"
+
+    monkeypatch.setattr(prompts, "_call_via_cli", fake_cli)
+    assert prompts._default_caller("sys", "usr") == "ok"
+    assert used.get("cli") is True
+
+
+def test_the_sdk_is_still_preferred_when_it_is_installed(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-whatever")
+    monkeypatch.setattr(prompts, "_sdk_available", lambda: True)
+    monkeypatch.setattr(prompts, "_call_via_sdk",
+                        lambda s, u, *, model=None: "sdk")
+    assert prompts._default_caller("sys", "usr") == "sdk"

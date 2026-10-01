@@ -13,6 +13,7 @@ prompt is cheap to rewrite and a render is not.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -204,8 +205,22 @@ def _call_via_sdk(system: str, user: str, *, model: Optional[str] = None) -> str
     return "".join(b.text for b in reply.content if getattr(b, "type", "") == "text")
 
 
+def _sdk_available() -> bool:
+    """Whether the anthropic SDK can actually be imported."""
+    return importlib.util.find_spec("anthropic") is not None
+
+
 def _default_caller(system: str, user: str, *, model: Optional[str] = None) -> str:
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    """Prefer the SDK when a key AND the SDK are both present; else the CLI.
+
+    The key alone used to decide this, which turned an inherited environment
+    variable into a hard failure: the server was restarted under a supervisor
+    that inherited ANTHROPIC_API_KEY from the launching shell, chose the SDK,
+    and died on "No module named 'anthropic'" — with the `claude` CLI, which
+    this pipeline is built around and which needs no key, available the whole
+    time. The key is a preference; the CLI is the floor.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY") and _sdk_available():
         return _call_via_sdk(system, user, model=model)
     return _call_via_cli(system, user, model=model)
 
