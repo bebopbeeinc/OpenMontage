@@ -509,3 +509,48 @@ tests/
 5. **Selector pattern over hard-coded providers** — Capabilities degrade gracefully. Missing an API key? The selector falls through to the next provider or a local alternative.
 
 6. **Skills over code for intelligence** — Creative decisions, quality checklists, review criteria, and prompt templates live in Markdown skills, not Python. This means the agent's behavior can be tuned by editing text files, not code.
+
+---
+
+## The Launcher and Deploy
+
+`web/server.py` is a FastAPI app that mounts each pipeline's web UI as a
+sub-app (`/chonky/`, `/trivia/`, …). `scripts/run_launcher.sh` supervises it:
+it runs uvicorn in a loop and respawns whenever the process exits with code
+**75**, the sentinel `POST /api/deploy` uses to request a full restart. A full
+respawn — rather than `--reload` — is what picks up new code safely, because a
+pipeline run may have spawned child processes attached to the server.
+
+**Always start the server through `scripts/run_launcher.sh`.** Started any
+other way, `OPENMONTAGE_LAUNCHER_SUPERVISED` is unset, nothing is watching for
+exit 75, and the Deploy button can pull but never restart. A server left that
+way was once found serving ten-day-old code while every Deploy press returned
+`ok: true`.
+
+**Deploy restarts on stale running code, not on what the pull brought.** The
+server records the commit it booted at (`_BOOT_HEAD`) and compares it to HEAD
+after pulling. "Did the pull move HEAD" is only a proxy, and it is a proxy that
+is always false on the machine where the commits are made — there the local
+repo is the source, so `git pull` always reports "Already up to date". Keying
+the restart off it meant the development machine could never deploy itself.
+
+| situation | `changed` | `stale` | restarts |
+|---|---|---|---|
+| pull brings new commits | yes | yes | yes |
+| local commit, pull is a no-op | no | **yes** | **yes** |
+| freshly respawned process | no | no | no — no restart loop |
+| tree reset back to the running commit | yes | no | no — already correct |
+| git cannot name the boot commit | — | falls back to `changed` | as before |
+
+**Active-job guard.** Deploy returns 409 while any pipeline job is `queued`,
+`running`, or `drafting`. `drafting` matters because prompt writing is
+serialized and can hold that state for minutes; a guard blind to it lets a
+restart kill a batch mid-flight. `?force=true` deploys anyway and kills those
+children — the operator has to opt in.
+
+**No API key at runtime, in practice.** Per principle 2 above, generation runs
+through the `claude` CLI's OAuth session rather than an LLM API key. Code that
+offers an SDK path must treat the key as a *preference* and the CLI as the
+*floor*: an inherited `ANTHROPIC_API_KEY` once selected an SDK that was not
+installed on any interpreter on the machine, failing every draft while the CLI
+sat there working.
