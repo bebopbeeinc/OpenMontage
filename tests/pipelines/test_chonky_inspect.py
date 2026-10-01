@@ -27,9 +27,14 @@ def _reply(payload):
 
 
 GOOD = {
-    "clues": ["The blue road sign carries Hangul lettering",
-              "A Taegukgi flies beside the gate",
-              "The kerb is painted in yellow and white stripes"],
+    "clues": ["The blue road sign carries Hangul lettering, the alphabet "
+              "invented in the 1440s and used nowhere outside the Korean "
+              "peninsula.",
+              "A Taegukgi flies beside the gate — that red-and-blue circle "
+              "with its four black trigrams belongs to one country's flag "
+              "and no other.",
+              "Those yellow-and-white striped kerbs are a Korean road "
+              "marking, and they mean no stopping here at any hour."],
     "clue_words": ["sign", "flag", "kerb"],
     "names_the_place": False,
 }
@@ -172,26 +177,17 @@ def _asked(tmp_path):
     return seen["user"]
 
 
-def test_the_twelve_word_limit_is_stated(tmp_path):
-    asked = _asked(tmp_path).lower()
-    assert "12 words" in asked or "twelve words" in asked
-
 
 def test_the_bracket_convention_is_stated(tmp_path):
     asked = _asked(tmp_path)
     assert "[" in asked and "square bracket" in asked.lower()
 
 
-def test_the_tone_is_stated(tmp_path):
-    asked = _asked(tmp_path).lower()
-    assert "10 year old" in asked or "ten year old" in asked
-    assert "fun-fact" in asked or "fun fact" in asked
-
 
 def test_the_three_clues_have_their_assigned_jobs(tmp_path):
-    """7.4: most definitive, second and distinct, then one semi-hidden."""
+    """Strongest first, something different second, a subtle one third."""
     asked = _asked(tmp_path).lower()
-    assert "most definitive" in asked
+    assert "strongest" in asked
     assert "semi-hidden" in asked or "less obvious" in asked
 
 
@@ -209,3 +205,77 @@ def test_clues_within_the_limit_pass():
         "Flag: A blue-white-red [French flag] flies from the pole.",
         "Street furniture: Green cast-iron [Wallace fountains] mark [Paris].",
     ])
+
+
+# --------------------------------------------------------------------------
+# Hints that help the player guess.
+#
+# The 12-word bracketed format produced captions: "Bay: A curved [bay] is
+# lined with white high-rises." That describes the picture the player is
+# already looking at and narrows nothing down.
+#
+# Caglar's example of a good one, for a Guadalajara render:
+#
+#   "Those teal rental bikes on the sidewalk belong to the 'MiBici' network,
+#    which is only found in Mexico's second-largest city."
+#
+# Conversational. Points at a specific visible object. Names the thing —
+# MiBici. Gives the inferential step without handing over the answer: "Mexico's
+# second-largest city", not "Guadalajara". Teaches something. Twenty-five
+# words, no brackets, no category label.
+# --------------------------------------------------------------------------
+
+def test_the_hint_must_narrow_the_place_down(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "narrow" in asked or "where" in asked
+
+
+def test_the_hint_must_not_hand_over_the_answer(tmp_path):
+    """"Mexico's second-largest city", never "Guadalajara"."""
+    asked = _asked(tmp_path)
+    assert "second-largest" in asked or "without naming" in asked.lower()
+
+
+def test_the_worked_example_is_shown(tmp_path):
+    """One good example teaches the shape better than any list of rules."""
+    asked = _asked(tmp_path)
+    assert "MiBici" in asked
+
+
+def test_the_tone_is_conversational(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "conversational" in asked or "like a person" in asked
+
+
+def test_brackets_and_category_labels_are_forbidden(tmp_path):
+    """The prompt must ban the old format, not demand it."""
+    asked = _asked(tmp_path).lower()
+    assert "no square brackets" in asked
+    assert "no category prefixes" in asked
+
+
+def test_a_caption_is_rejected():
+    """Describing the picture is not a hint. This is the failure, by name."""
+    with pytest.raises(I.InspectError):
+        I.check_clues([
+            "A curved bay is lined with white high-rises and moored boats.",
+            "Those teal rental bikes belong to the MiBici network, found only "
+            "in Mexico's second-largest city.",
+            "The pavement lettering is Hangul, which means you are in Korea.",
+        ])
+
+
+def test_a_hint_that_names_something_identifiable_passes():
+    I.check_clues([
+        "Those teal rental bikes on the sidewalk belong to the MiBici network, "
+        "which is only found in Mexico's second-largest city.",
+        "The blue road signs use Hangul, the alphabet invented in the 1440s and "
+        "used nowhere but the Korean peninsula.",
+        "Those orange flexible bollards with reflective bands are a fixture of "
+        "South Korean streets.",
+    ])
+
+
+def test_room_to_actually_say_something():
+    """The 12-word cap is what forced the captions. Caglar's own example is 25."""
+    assert I.MAX_CLUE_WORDS >= 25

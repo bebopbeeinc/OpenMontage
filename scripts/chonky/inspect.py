@@ -90,36 +90,51 @@ def _user_message(city: str, country: str, difficulty: int) -> str:
     return f"""\
 This image is meant to be {city}, {country}, at difficulty {difficulty}.
 
-Write the three Level Win messages, each naming one thing you can genuinely
-see. They are shown to a player in a casual mobile game, so the manual's
-section 7 governs how they read:
+Write the three Level Win hints. A hint is shown to the player in a casual
+mobile game, and its job is to HELP THEM GUESS WHERE THIS IS.
 
-  * ONE simple factual sentence each, MAXIMUM 12 WORDS. Count them.
-  * Fun-fact tone, internationally readable, understandable by a 10 year old.
-  * Put the important nouns and proper nouns in [square brackets].
-  * Open with the clue's category, then a colon. For example:
-      Road marking: The pavement contains [Hangul], the Korean alphabet.
-      Flag: A blue-white-red [French flag] flies from the pole.
+This is the shape to copy:
 
-  * clue 1 is the single most definitive visible clue.
-  * clue 2 is the second most definitive, and DISTINCT from clue 1.
-  * clue 3 is one less obvious, semi-hidden clue.
+    Those teal rental bikes on the sidewalk belong to the "MiBici" network,
+    which is only found in Mexico's second-largest city.
 
-Rules, and they are the whole point of this step:
+Why that one works, and what to do:
 
-  * ONLY what is in the picture. If the scene was supposed to contain a
-    licence plate, a road sign or a flag and it did not come out, do not
-    mention it. A clue describing something absent makes the level unfair.
+  * POINT AT SOMETHING SPECIFIC YOU CAN SEE. "Those teal rental bikes on the
+    sidewalk" — a thing in the picture, said the way a person would say it.
+    Not "a curved bay is lined with high-rises", which describes the view the
+    player is already looking at and narrows nothing down.
 
-  * ONLY what is LEGIBLE. If text or a detail is too small, blurred or
-    low-contrast to read at the size it appears, it is not a clue. Do not
-    write "the plate reads Jalisco" unless you can actually read Jalisco on
-    it. Say what a player could genuinely make out instead.
+  * NAME IT. The hint is only useful if it names the identifiable thing: the
+    MiBici network, the Hangul alphabet, a plate format, a bollard style, a
+    tree species, a brand of bus. "A sign" helps nobody; "a blue sign in
+    Hangul" is a hint.
 
-  * Describe what the thing looks like, not what you infer it means. "The
-    plate has a blue strip on the left with yellow stars" is a clue. "The
-    plate confirms Estonia" is a conclusion, and if the strip is not there
-    the clue is simply false.
+  * SAY WHAT IT NARROWS DOWN, WITHOUT HANDING OVER THE ANSWER. "only found in
+    Mexico's second-largest city" — the player still gets to make the last
+    step themselves. Do NOT write "which means this is Guadalajara". Name the
+    country, the region, the kind of place, or a fact that points at one city
+    without naming it.
+
+  * BE CONVERSATIONAL AND TEACH SOMETHING. Write like a person telling you a
+    fun fact, not like a label on a diagram. A good hint is worth knowing even
+    after the level is over. One or two sentences, up to about thirty words.
+
+  * NO category prefixes, no square brackets, no formatting of any kind. Plain
+    friendly sentences.
+
+Only what is ACTUALLY in the picture, and only what is LEGIBLE at the size it
+appears. If the scene was supposed to contain a plate or a sign and it did not
+come out, do not mention it. Do not write "the plate reads Jalisco" unless you
+can genuinely read Jalisco on it — a hint describing something absent makes
+the level unfair, and one describing something unreadable makes it impossible.
+
+  * hint 1 is the strongest: the thing that most narrows down where this is.
+  * hint 2 is the second strongest, and about something DIFFERENT.
+  * hint 3 is a smaller, less obvious detail a sharp player would spot.
+
+Chonky — the orange cat — is never a hint. He is what the player hunts, not
+evidence of where they are.
 
 Also report whether any lettering in the picture failed to come out: a sign,
 plaque, banner or plate that is BLANK where text belongs, or GARBLED into
@@ -146,22 +161,36 @@ become the filename, so no spaces and no punctuation.
 """
 
 
-MAX_CLUE_WORDS = 12
+# Caglar's own example runs to 25 words. The old 12-word cap is what forced
+# the clue pass into captions: there is no room in twelve words to name a
+# thing AND say what it tells you, so it dropped the half that helps.
+MAX_CLUE_WORDS = 32
 
 
 def check_clues(clues: list[str]) -> None:
-    """Hold the clues to section 7.5, because asking has not been enough.
+    """Refuse a caption. Asking has not been enough anywhere else here.
 
-    A clue is a line in a casual game, read on a phone in a second. The pass
-    was returning eighteen words of scene description, which is a caption.
+    The test is whether the sentence could only have been written about this
+    place. "A curved bay is lined with white high-rises" could be fifty
+    cities; "the MiBici network" could only be one.
     """
     for clue in clues:
-        body = clue.split(":", 1)[1] if ":" in clue else clue
-        words = [w for w in body.split() if w.strip()]
+        words = [w for w in clue.split() if w.strip()]
         if len(words) > MAX_CLUE_WORDS:
             raise InspectError(
-                f"clue is {len(words)} words, over the {MAX_CLUE_WORDS}-word "
-                f"limit in section 7.5: {clue!r}")
+                f"hint is {len(words)} words, over the {MAX_CLUE_WORDS}-word "
+                f"limit — keep it to a sentence or two: {clue!r}")
+
+        # A proper noun, a quoted name or a capitalised term is what makes a
+        # hint actionable: MiBici, Hangul, Jalisco. Without one it is a
+        # description of the picture.
+        named = [w for w in clue.replace('"', " ").split()[1:]
+                 if w[:1].isupper() or w[:1].isdigit()]
+        if not named:
+            raise InspectError(
+                f"hint names nothing a player could look up or recognise, so "
+                f"it narrows nothing down — name the network, the alphabet, "
+                f"the plate format, the species: {clue!r}")
 
 
 def inspect_render(image_path, *, city: str, country: str, difficulty: int,
