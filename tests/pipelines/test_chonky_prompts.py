@@ -66,11 +66,16 @@ def test_already_used_locations_are_named_in_the_request():
     assert "Sydney, Australia" in caller.calls["user"]
 
 
-def test_the_assigned_zone_is_named_in_the_request():
-    """Zone is assigned per image by the ledger, never chosen by the writer."""
+def test_the_assigned_zone_is_not_passed_on_as_an_instruction():
+    """Lateral targeting dropped 2026-10-01. The zone records, it does not ask.
+
+    This test previously asserted the opposite — that "margin" reached the
+    writer. It did, and the writer could only act on it by saying where he
+    stood across the frame, which is measurably what broke his size.
+    """
     caller = _client(VALID)
     prompts.draft(difficulty=2, target_zone="margin", used=[], caller=caller)
-    assert "margin" in caller.calls["user"]
+    assert "margin" not in caller.calls["user"]
     assert "2" in caller.calls["user"]
 
 
@@ -463,3 +468,63 @@ def test_the_anchor_is_read_only_in_sentences_about_him():
             _SCENE +
             "The bollards are no taller than the kerb stones beside them. "
             "Chonky stands on the grass further back than the bicycle.")
+
+
+# --------------------------------------------------------------------------
+# Lateral targeting is dropped (Caglar's decision, 2026-10-01).
+#
+# The pipeline used to hand the writer an assigned zone — "Chonky's assigned
+# zone for this image is: margin" — which can only be satisfied by telling the
+# model where he stands across the frame. Manual 4.3c has the measurement for
+# what that does, over five renders of one Prague scene:
+#
+#   "far beyond all of them"   (no lateral)   72 px   <- the only one in band
+#   "off to the LEFT parapet"                164 px
+#   "to the RIGHT, a third in from the..."   236 px
+#
+# and Kyoto 2026-10-01 ("off to the right, well clear of its centre") came
+# back at 214 px, straddling. Asking for him over there reads as asking to SEE
+# him over there, and the model obliges by bringing him closer.
+#
+# So the system no longer asks. Depth puts him where it puts him; the zone
+# becomes a record of where he landed rather than an instruction. 4.3c already
+# prescribed this — it was documented and enforced nowhere, which is how it
+# kept happening.
+# --------------------------------------------------------------------------
+
+def _ask():
+    """The system prompt and the per-image request, as the writer sees them."""
+    return (prompts.writer_manual(),
+            prompts._user_message(2, "viewframe", [], None, None, None))
+
+
+def test_the_writer_is_not_handed_a_zone_to_place_him_in():
+    system, user = _ask()
+    assert "assigned zone" not in user.lower()
+    assert "not yours to choose" not in user.lower()
+
+
+def test_the_writer_is_told_not_to_place_him_across_the_frame():
+    system, user = _ask()
+    blob = (system + user).lower()
+    assert "lateral" in blob or "across the frame" in blob
+
+
+def test_a_lateral_placement_is_refused():
+    for phrasing in [
+        "Chonky stands on the paving off to the right of the frame.",
+        "He sits near the left edge of the photograph.",
+        "Chonky is well clear of its centre, over on the right.",
+        "He is a third in from the right-hand parapet.",
+    ]:
+        with pytest.raises(prompts.DraftError):
+            prompts._check(ORDERING + phrasing +
+                           " He is no taller than the kerb beside him.")
+
+
+def test_a_lateral_fact_about_the_scene_is_allowed():
+    """The ban is on placing HIM, not on describing the street."""
+    prompts._check(
+        "The pagoda rises on the left side of the street and the shops run "
+        "down the right. " + ORDERING +
+        "Chonky is on the paving, no taller than the kerb beside him.")

@@ -335,6 +335,22 @@ _ON_FURNITURE = re.compile(
 # written — three draft cycles spent on a misdiagnosis.
 _ABOUT_HIM = re.compile(r"\b(?:chonky|he|him|his)\b", re.I)
 
+# Lateral placement, judged only in sentences about him. Documented as fatal
+# to the size band in 4.3c since the Prague five, and enforced nowhere until
+# Kyoto repeated it: the writer was being handed a zone it could only satisfy
+# this way, so the rule and the request contradicted each other.
+_LATERAL = re.compile(
+    r"\boff to the (?:left|right)\b|"
+    r"\b(?:left|right)[- ](?:hand )?(?:side|edge|third|margin|parapet)\b|"
+    r"\b(?:to|on|at|near|along) the (?:far )?(?:left|right)\b|"
+    r"\b(?:left|right) of (?:the |its )?(?:cent(?:re|er))\b|"
+    r"\bclear of (?:the|its) cent(?:re|er)\b|"
+    r"\bcent(?:re|er) (?:third|of the (?:frame|picture|image|photograph))\b|"
+    r"\b(?:upper|lower|top|bottom)[- ](?:left|right)\b|"
+    r"\ba (?:third|quarter|half) in from\b",
+    re.I,
+)
+
 # A comparative against something standing near him. Depth became reliable
 # once _ORDERING made the phrasing compulsory rather than merely requested;
 # size is the same problem and gets the same mechanism. Same-order comparisons
@@ -412,6 +428,18 @@ def _check(prompt: str) -> None:
                 "the model brings both forward — put him on the ground near it "
                 "instead", prompt)
 
+    for sentence in his:
+        lateral = _LATERAL.search(sentence)
+        if lateral:
+            raise DraftError(
+                f"the prompt places him across the frame ({lateral.group(0)!r}); "
+                "asking for him over there is read as asking to SEE him over "
+                "there and the model brings him toward the camera, which is "
+                "what breaks his size — of five renders of one scene, the only "
+                "one inside the band was the one given no lateral instruction. "
+                "State his depth only, and move the CAMERA or the SCENE if you "
+                "want him out of the middle", prompt)
+
     if not _ORDERING.search(prompt):
         raise DraftError(
             "the prompt never states his depth as an ordering against something "
@@ -466,11 +494,31 @@ def _weights_section(weights: Optional[dict]) -> list[str]:
 def _user_message(difficulty: int, target_zone: str, used: list[str],
                   city: Optional[str], country: Optional[str],
                   weights: Optional[dict] = None) -> str:
+    """The per-image request.
+
+    `target_zone` is accepted and deliberately not used. It used to be handed
+    over as an order — "Chonky's assigned zone for this image is: margin" —
+    which the writer could only satisfy by saying where he stands across the
+    frame, and manual 4.3c has the measurement for what that costs: of five
+    renders of one Prague scene, the only one inside the size band was the one
+    given no lateral instruction at all (72 px, against 164 and 236 for left
+    and right). Kyoto on 2026-10-01 repeated it at 214 px.
+
+    Lateral targeting is dropped. The zone the ledger assigns is now a record
+    of where he landed, not a request for where to put him, and the parameter
+    stays so the ledger and the sidecar keep reading the same shape.
+    """
     lines = [
         f"Write ONE image prompt for difficulty {difficulty}.",
         "",
-        f"Chonky's assigned zone for this image is: {target_zone}. "
-        "The zone is assigned by the ledger and is not yours to choose.",
+        "DO NOT SAY WHERE HE STANDS ACROSS THE FRAME. No left, no right, no "
+        "edge, no distance in from a side, no 'clear of the centre'. Asking "
+        "for him over there is read as asking to SEE him over there, and the "
+        "model answers by bringing him closer to the camera — which is what "
+        "breaks his size. State his DEPTH and nothing about his lateral "
+        "position, and let him fall where the depth puts him. To get him out "
+        "of the middle of the picture, move the CAMERA or the SCENE: compose "
+        "so the landmark, the arch or the crowd sits off-centre.",
     ]
     if city:
         where = f"{city}, {country}" if country else city

@@ -380,6 +380,23 @@ Do not invent or approximate a location.
      so the arch, the crowd or the landmark sits off-centre — and let him
      fall where the depth puts him.
 
+     LATERAL TARGETING IS DROPPED (2026-10-01) AND THE CHECKER NOW
+     REFUSES IT. This rule was written here after the Prague five and
+     enforced nowhere, while the drafting request handed the writer an
+     assigned zone — "Chonky's assigned zone for this image is: margin" —
+     that could only be satisfied by breaking it. The rule and the
+     request contradicted each other, and the request won every time:
+     Kyoto, 2026-10-01, "off to the right, well clear of its centre",
+     214 px against a 65-105 band.
+
+     So the writer is no longer given a zone and may no longer state one.
+     No left, no right, no edge, no "a third in from", no "clear of the
+     centre". The ledger's zone is now a RECORD of where he landed, not a
+     request for where to put him — which means the ViewFrame/margin
+     split is observed rather than steered. That is the deliberate
+     trade: his size is the hard constraint, and his lateral position was
+     the thing buying variety at its expense.
+
 4.3d STATE HIS HEIGHT AGAINST SOMETHING HIS OWN SIZE, STANDING NEAR HIM.
      Depth puts him at the right distance; this is what stops him being
      drawn oversized once he is there. Write it as a plain comparison
