@@ -172,7 +172,7 @@ def test_a_compliant_prompt_passes():
                        "open violin case, at true cat scale.")
     draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                           caller=_reply(good))
-    assert draft["prompt"] == good
+    assert draft["prompt"].startswith(good)
 
 
 def test_standing_on_the_ground_is_not_furniture():
@@ -180,7 +180,7 @@ def test_standing_on_the_ground_is_not_furniture():
     for surface in ["cobblestones", "ground", "pavement", "sand", "grass", "path"]:
         good = ORDERING + f"He sits on the {surface} at true cat scale."
         assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                             caller=_reply(good))["prompt"] == good
+                             caller=_reply(good))["prompt"].startswith(good)
 
 
 # --------------------------------------------------------------------------
@@ -256,7 +256,7 @@ def test_a_rejected_draft_is_retried_with_the_reason():
 
     draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                           caller=caller)
-    assert draft["prompt"] == GOOD
+    assert draft["prompt"].startswith(GOOD)
     assert len(asks) == 2, "a rejected draft must be asked again"
     assert "parapet" in asks[1], "the retry must say what was wrong"
     assert BAD in asks[1], "the retry must show the prompt that was rejected"
@@ -297,7 +297,7 @@ def test_other_people_may_sit_on_things():
             "beyond all of them, standing on the cobblestones. He is no taller "
             "than the kerb stone beside him.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                         caller=_reply(good))["prompt"] == good
+                         caller=_reply(good))["prompt"].startswith(good)
 
 
 def test_traffic_may_stand_at_the_kerb():
@@ -305,7 +305,7 @@ def test_traffic_may_stand_at_the_kerb():
             "people is between the camera and him; Chonky is on the gravel, no "
             "taller than the bollard base beside him.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                         caller=_reply(good))["prompt"] == good
+                         caller=_reply(good))["prompt"].startswith(good)
 
 
 def test_upon_and_atop_are_the_same_rule():
@@ -324,7 +324,7 @@ def test_a_comparative_counts_as_an_ordering():
                      "Chonky is farther back than the furthest walking tourist."]:
         good = phrasing + " He is on the cobblestones, no taller than the kerb."
         assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                             caller=_reply(good))["prompt"] == good
+                             caller=_reply(good))["prompt"].startswith(good)
 
 
 def test_a_distance_in_metres_that_is_not_his_is_allowed():
@@ -332,7 +332,7 @@ def test_a_distance_in_metres_that_is_not_his_is_allowed():
     good = ("The camera looks down the 200-metre-long bridge. " + ORDERING +
             "He is on the cobblestones.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
-                         caller=_reply(good))["prompt"] == good
+                         caller=_reply(good))["prompt"].startswith(good)
 
 
 # --------------------------------------------------------------------------
@@ -528,3 +528,60 @@ def test_a_lateral_fact_about_the_scene_is_allowed():
         "The pagoda rises on the left side of the street and the shops run "
         "down the right. " + ORDERING +
         "Chonky is on the paving, no taller than the kerb beside him.")
+
+
+# --------------------------------------------------------------------------
+# The character reference block: appended, not asked for.
+#
+# Manual S6: "Every prompt must itself contain the sentence: use the attached
+# character reference only for the cat's appearance, never as a layout,
+# composition, or background reference." Section 6 is stripped from the
+# writer's manual by _NOT_THE_WRITERS_JOB, so that sentence was in 0 of 29
+# rendered prompts — the one rule stopping the model reading the model sheet
+# as a layout reference was in the manual and in nothing the model ever saw.
+#
+# It is appended rather than required of the writer. This project has learned
+# the same lesson three times over ("asking is not the same as getting" —
+# depth, size, lateral position all needed compulsory phrasing): a fixed
+# sentence that never varies should not be left to an LLM to retype. Appending
+# it, the way the VERIFIED LOCAL DETAIL block is appended, makes it 100% and
+# costs no draft rejections.
+#
+# The silhouette rides along for the same reason. The writer does currently
+# describe it in every library prompt, so this is a floor under a thing that
+# already works, not a replacement for it.
+# --------------------------------------------------------------------------
+
+def _flat(text):
+    """One line, single spaces — the block is wrapped, the sentence is not."""
+    return " ".join(text.split())
+
+
+def test_the_reference_is_marked_appearance_only_in_every_prompt():
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_client(VALID))
+    flat = _flat(out["prompt"])
+    assert "use the attached character reference only for the cat's appearance, " \
+           "never as a layout, composition, or background reference" in flat.lower()
+
+
+def test_the_silhouette_reaches_every_prompt():
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_client(VALID))
+    body = out["prompt"].lower()
+    for marker in ("near-spherical", "belly bib", "white paws", "darker bands",
+                   "short legs", "small head"):
+        assert marker in body, marker
+
+
+def test_the_block_comes_after_the_writers_own_words():
+    """Appended like the verified detail, so a reviewer can see what was added."""
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_client(VALID))
+    assert out["prompt"].startswith(VALID["prompt"])
+
+
+def test_the_writer_is_told_the_reference_is_not_a_layout():
+    """A rule the writer is never shown is a trap, per the brief's own reason."""
+    system = prompts.writer_manual()
+    assert "never as a layout" in system

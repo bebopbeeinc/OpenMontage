@@ -108,13 +108,20 @@ def test_the_verified_detail_is_appended_to_the_prompt():
     assert "Chonky sits far beyond all of them" in out["prompt"]
 
 
-def test_no_details_leaves_the_prompt_alone():
+def test_no_details_adds_no_verified_detail_block():
+    """Nothing looked up means nothing claimed as looked up.
+
+    The character block is appended to every prompt regardless — it carries no
+    local facts, only what the cat looks like — so this is about the VERIFIED
+    LOCAL DETAIL block alone.
+    """
     plain = {"real": True, "confidence": "high", "note": "found", "verified": True,
              "details": {}}
     out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                         caller=lambda s, u, model=None: json.dumps(DRAFTED),
                         verifier=lambda **kw: plain)
-    assert out["prompt"] == DRAFTED["prompt"]
+    assert out["prompt"].startswith(DRAFTED["prompt"])
+    assert "VERIFIED LOCAL DETAIL" not in out["prompt"]
 
 
 def test_the_appended_block_does_not_break_the_prompt_checks():

@@ -151,6 +151,20 @@ the far lamppost", "further down the quay than the moored boats",
 "deeper in than the second archway". Use those first, and people only
 when the place genuinely has a few.
 
+THE CHARACTER REFERENCE IS NOT A LAYOUT. A model sheet of Chonky is
+attached to every render. It says what the cat looks like and nothing
+else — never as a layout, composition, or background reference. Do not
+describe the scene to match it, do not borrow its plain studio
+background, and do not copy its posture: the sheet shows him upright on
+his hind legs because that is how model sheets are drawn, and he must be
+on four paws in ordinary cat posture in the picture.
+
+You do not need to write that rule into your prompt. It is appended to
+every prompt automatically, along with his silhouette. Describe him
+anyway in your own words — a prompt that leans on the reference to make
+him Chonky gets an ordinary ginger cat, because the reference does not
+win that argument.
+
 =====================================================================
 """
 
@@ -459,6 +473,37 @@ def _check(prompt: str) -> None:
             "back at nearly twice the size asked for", prompt)
 
 
+# Manual S6 requires every prompt to carry the appearance-only sentence, and
+# S4.2 requires every prompt to describe the silhouette. Section 6 is stripped
+# from the writer's manual by _NOT_THE_WRITERS_JOB, so the first of those was
+# in none of the twenty-nine prompts rendered before 2026-10-01.
+#
+# Both are appended rather than demanded of the writer. Three rules in this
+# file already exist because asking did not work (depth, size, lateral
+# position), and unlike those, these two never vary from render to render — a
+# fixed sentence an LLM has to retype is a rejection waiting to happen, where
+# an appended one is simply always there. Appended and labelled, like the
+# VERIFIED LOCAL DETAIL block, so a reviewer can see what the writer chose and
+# what the pipeline added.
+_CHARACTER_BLOCK = """
+
+CHARACTER REFERENCE — this is appended to every prompt and is not the
+writer's text:
+  - Use the attached character reference only for the cat's appearance, never
+    as a layout, composition, or background reference. The scene is described
+    above; the reference says only what the cat looks like.
+  - Chonky is a SPECIFIC CHARACTER, not "a cat". His silhouette: a
+    near-spherical body far rounder than any ordinary cat; very short legs
+    almost lost under that body; a large white belly bib running from chin
+    down the underside; four white paws like socks; a thick fluffy tail with
+    darker bands; round, full cheeks and a small head against a huge body;
+    ginger tabby striping over the orange.
+  - A normal-bodied ginger cat is a FAILED image, exactly as a wrongly-sized
+    one is. Take his BODY from the reference and his POSE from the scene
+    above: he is on four paws in ordinary cat posture, never upright on his
+    hind legs, however the reference sheet presents him."""
+
+
 def _weights_section(weights: Optional[dict]) -> list[str]:
     """Render the operator's emphases, or say nothing at all.
 
@@ -599,6 +644,7 @@ def draft(*, difficulty: int, target_zone: str, used: list[str],
                 if block:
                     drafted["prompt"] = drafted["prompt"] + block
                     drafted["place_details"] = finding.get("details")
+            drafted["prompt"] = drafted["prompt"] + _CHARACTER_BLOCK
             return drafted
         except DraftError as exc:
             last = exc

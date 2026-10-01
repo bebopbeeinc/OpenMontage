@@ -436,16 +436,32 @@ Do not invent or approximate a location.
 4.6  No eye contact with the camera unless the gag requires it.
 4.7  Personality: enthusiastic, curious, overconfident, mischievous,
      distractible, occasionally overwhelmed by his own choices.
-4.8  State his SILHOUETTE (section 4.2), his exact placement in the
-     frame, his exact scale, his behaviour, and the gag's setup or
-     consequence, explicitly. Say in
-     the prompt that he sits in the central portion of the frame, on a
-     named surface close to the camera, and describe his size relative
-     to something real beside him (for example: as tall as the kerbstone
-     he sits on, or roughly the height of the bollard's reflective
-     band) — relative anchors control scale far better than a percentage
-     the model cannot measure. Name the surface he sits on in every
-     prompt; that surface is what puts him at the right distance.
+4.8  State his SILHOUETTE (section 4.2), his DEPTH, his SCALE, his
+     behaviour, and the gag's setup or consequence, explicitly.
+
+     Describe his size against something real beside him — "no taller
+     than the kerb stone beside him", "shorter than the bicycle's front
+     wheel". Relative anchors control scale far better than a percentage
+     the model cannot measure, and far better than a fraction of a
+     person (4.3d).
+
+     THREE THINGS THIS SECTION USED TO SAY, AND NO LONGER DOES. Until
+     2026-10-01 it told you to put him "in the central portion of the
+     frame, on a named surface close to the camera", and to "name the
+     surface he sits on in every prompt". All three are now refused by
+     the draft checker, each for a measured reason:
+
+       - LATERAL POSITION. Any instruction about where he stands across
+         the frame pulls him toward the camera and breaks his size
+         (4.3c, and the Kyoto render of 2026-10-01 at 214 px). State
+         depth only.
+       - A NAMED SURFACE UNDER HIM. A prop named as his surface is read
+         as the thing being photographed, and the model brings both
+         forward. Put him on the open ground near it instead.
+       - CLOSE TO THE CAMERA. The foreground is where he comes back two
+         to three times oversized. Depth, stated as an ordering against
+         things already in the scene, is what puts him at the right
+         distance — not a surface.
 
 ---------------------------------------------------------------------
 5. CLUES AND THEIR PLACEMENT
