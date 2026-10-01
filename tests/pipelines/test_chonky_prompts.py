@@ -30,10 +30,11 @@ VALID = {
     "city": "Prague",
     "country": "Czech Republic",
     "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
-    # A compliant prompt: depth stated as an ordering, and he is on the ground.
+    # A compliant prompt: depth stated as an ordering, height stated against
+    # something his own size, and he is on the ground.
     "prompt": ("A photograph of Charles Bridge. Tourists walk ahead of the "
                "camera and Chonky sits far beyond all of them, on the "
-               "cobblestones."),
+               "cobblestones, no taller than the kerb stone beside him."),
     "clues": ["the bridge tower", "the castle on the hill", "baroque statues"],
     "clue_words": ["tower", "castle", "statues"],
 }
@@ -132,7 +133,8 @@ def _reply(prompt):
 
 ORDERING = ("A dozen tourists walk ahead of the camera. Chonky sits far beyond "
             "all of them, behind the furthest walking tourist, so every one of "
-            "those people is between the camera and him. ")
+            "those people is between the camera and him. He is no taller than "
+            "the kerb stone beside him. ")
 
 
 def test_a_prompt_that_seats_him_on_furniture_is_rejected():
@@ -233,7 +235,8 @@ def test_the_writer_is_told_the_two_checks_its_answer_must_pass():
 # --------------------------------------------------------------------------
 
 GOOD = ("Tourists walk ahead of the camera and Chonky sits far beyond all of "
-        "them, on the cobblestones beside an open violin case.")
+        "them, on the cobblestones beside an open violin case, no taller than "
+        "the kerb stone next to him.")
 BAD = "Chonky sits on the stone parapet, looking out over the river."
 
 
@@ -286,14 +289,16 @@ def test_a_first_draft_that_passes_is_not_retried():
 def test_other_people_may_sit_on_things():
     """The rule is about Chonky's surface, not about the furniture in the scene."""
     good = ("A dozen tourists sit on the steps of the cathedral. Chonky is far "
-            "beyond all of them, standing on the cobblestones.")
+            "beyond all of them, standing on the cobblestones. He is no taller "
+            "than the kerb stone beside him.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                          caller=_reply(good))["prompt"] == good
 
 
 def test_traffic_may_stand_at_the_kerb():
     good = ("Taxis stand on the kerb in the foreground. Every one of those "
-            "people is between the camera and him; Chonky is on the gravel.")
+            "people is between the camera and him; Chonky is on the gravel, no "
+            "taller than the bollard base beside him.")
     assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                          caller=_reply(good))["prompt"] == good
 
@@ -312,7 +317,7 @@ def test_a_comparative_counts_as_an_ordering():
     for phrasing in ["Chonky is much further from the camera than the tourists.",
                      "He sits deeper in the scene than the market stalls.",
                      "Chonky is farther back than the furthest walking tourist."]:
-        good = phrasing + " He is on the cobblestones."
+        good = phrasing + " He is on the cobblestones, no taller than the kerb."
         assert prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                              caller=_reply(good))["prompt"] == good
 
@@ -339,7 +344,8 @@ def test_quoted_sign_text_does_not_break_the_reply():
     body = ('{"city": "Cusco", "country": "Peru", '
             '"viewpoint": "Cuesta de San Blas, facing downhill", '
             '"prompt": "A sign reads "TALLER DE ARTESANIA" above the door. '
-            'Chonky sits far beyond all of them on the cobblestones.", '
+            'Chonky sits far beyond all of them on the cobblestones, no taller '
+            'than the kerb beside him.", '
             '"chonky_line": "Chonky sits on the cobbles.", '
             '"clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"]}')
     draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
@@ -390,3 +396,70 @@ def test_the_sdk_is_still_preferred_when_it_is_installed(monkeypatch):
     monkeypatch.setattr(prompts, "_call_via_sdk",
                         lambda s, u, *, model=None: "sdk")
     assert prompts._default_caller("sys", "usr") == "sdk"
+
+
+# --------------------------------------------------------------------------
+# Size must be anchored to something cat-sized and nearby, not to a fraction
+# of a person.
+#
+# Measured on one render (Reykjavik, 2026-10-01, image c5bf014d) — n=1, so
+# this is a hypothesis with a mechanism, not a law:
+#
+#   prompt: jogger is "roughly one fifth of the ViewFrame's height"
+#           Chonky is "roughly one sixth the height of the jogger"  -> 3.3%
+#   render: jogger measured ~21% of the ViewFrame  -- obeyed
+#           Chonky measured 6.4% of the ViewFrame  -- ~1.8x over
+#
+# The reference figure came out right and the ratio against it did not, with
+# both at the same ground depth so perspective does not explain it. A 6:1
+# ratio against a human is the kind of instruction these models execute badly;
+# they bias a small subject upward until it reads clearly.
+#
+# This is the same shape as the metres-from-camera ban above ("fifteen metres
+# returned three times the size band") and gets the same treatment: ban the
+# phrasing that measurably fails, and require the one that states his height
+# against something of roughly his own size standing near him.
+# --------------------------------------------------------------------------
+
+_SCENE = ("A quiet waterfront promenade in low sun, a sculpture on the left and "
+          "a concert hall behind. People on the path are between the camera and "
+          "him. ")
+
+
+def test_sizing_him_as_a_fraction_of_a_person_is_refused():
+    with pytest.raises(prompts.DraftError) as exc:
+        prompts._check(
+            _SCENE +
+            "Chonky stands on the grass, his full visible height roughly one "
+            "sixth the height of the jogger on the path.")
+    assert "fraction" in str(exc.value).lower() or "person" in str(exc.value).lower()
+
+
+def test_a_fraction_of_a_person_is_refused_in_figures_too():
+    with pytest.raises(prompts.DraftError):
+        prompts._check(
+            _SCENE +
+            "Chonky stands on the grass, about 1/6 of the height of the woman "
+            "walking ahead of him.")
+
+
+def test_a_cat_scale_anchor_beside_him_is_accepted():
+    prompts._check(
+        _SCENE +
+        "Chonky stands on the grass, no taller than the kerb stone beside him.")
+
+
+def test_a_prompt_that_never_states_his_height_is_refused():
+    with pytest.raises(prompts.DraftError) as exc:
+        prompts._check(
+            _SCENE + "Chonky stands on the grass further back than the bicycle.")
+    assert "height" in str(exc.value).lower() or "size" in str(exc.value).lower()
+
+
+def test_the_anchor_is_read_only_in_sentences_about_him():
+    """A size fact about the scene must not satisfy his own requirement."""
+    with pytest.raises(prompts.DraftError):
+        prompts._check(
+            _SCENE +
+            "The bollards are no taller than the kerb stones beside them. "
+            "Chonky stands on the grass further back than the bicycle.")

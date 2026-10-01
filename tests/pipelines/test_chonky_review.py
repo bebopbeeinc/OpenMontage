@@ -20,7 +20,8 @@ MEASUREMENT = {"box": [500, 900, 560, 960], "height_px": 60, "size": "ok",
                "zone": "viewframe", "ok": True, "frame_size": [1344, 1680]}
 
 COMPLIANT = ("A quiet square. Chonky sits far beyond all of them, on the "
-             "cobblestones beside a market stall.")
+             "cobblestones beside a market stall, no taller than the kerb "
+             "stone beside him.")
 
 
 def _render(image_id, **side):
@@ -121,7 +122,8 @@ def test_regenerate_renders_the_edited_prompt_as_a_new_image(monkeypatch):
         body = client.post("/api/regenerate", json={
             "image_id": "regen-a",
             "prompt": ("An edited prompt. The crowd walks ahead and Chonky "
-                       "sits far beyond all of them on the cobblestones.")}).json()
+                       "sits far beyond all of them on the cobblestones, no taller "
+                       "than the kerb beside him.")}).json()
         made.append(body["image_id"])
         assert body["image_id"] != "regen-a"
         end = time.time() + 10
@@ -161,7 +163,7 @@ def test_the_writer_is_asked_for_three_filename_words():
     payload = {"city": "Paris", "country": "France",
                "viewpoint": "Trocadero terrace, facing east across the Seine",
                "prompt": ("The crowd walks ahead and Chonky sits far beyond "
-                          "all of them on the cobblestones."),
+                          "all of them on the cobblestones, no taller than the kerb."),
                "clues": ["a", "b", "c"], "clue_words": ["tower", "flag", "fountain"]}
     draft = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
                           caller=lambda s, u, model=None: json.dumps(payload))

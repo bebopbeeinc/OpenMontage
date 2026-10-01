@@ -16,7 +16,7 @@ VALID = {
     "country": "Czech Republic",
     "viewpoint": "Charles Bridge, a third of the way across from the Old Town end, facing west",
     "prompt": ("Tourists walk ahead of the camera and Chonky sits far beyond "
-               "all of them, on the cobblestones."),
+               "all of them, on the cobblestones, no taller than the kerb beside him."),
     "clues": ["a", "b", "c"],
     "clue_words": ["x", "y", "z"],
 }

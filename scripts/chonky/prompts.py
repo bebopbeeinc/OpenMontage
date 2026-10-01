@@ -287,6 +287,26 @@ _BANNED = (
      "not control distance (fifteen metres returned three times the size "
      "band) — state depth as an ordering against things already in the scene",
      True),
+    # Sizing him as a fraction of a person. Measured once (Reykjavik,
+    # 2026-10-01, image c5bf014d): the prompt put the jogger at a fifth of the
+    # ViewFrame and Chonky at a sixth of the jogger; the jogger came back at
+    # the stated size and Chonky at 1.8x his, both at the same ground depth,
+    # so perspective does not explain it. A 6:1 ratio against a human asks the
+    # model to draw something small, and it biases a small subject upward
+    # until it reads clearly. Same shape as the metres rule above, and n=1 —
+    # a mechanism with one measurement behind it, not a law.
+    (re.compile(r"(?:one|two|three|a)\s+(?:half|third|quarter|fifth|sixth|"
+                r"seventh|eighth|ninth|tenth)\b[^.]{0,40}?\bof\b"
+                r"[^.]{0,60}?\b(?:person|people|man|woman|figure|jogger|runner|"
+                r"walker|pedestrian|cyclist|tourist|adult|child|passer-?by)\b|"
+                r"\b\d+\s*/\s*\d+\b[^.]{0,60}?\b(?:person|people|man|woman|"
+                r"figure|jogger|runner|walker|pedestrian|cyclist|tourist|adult|"
+                r"child|passer-?by)\b", re.I),
+     "the prompt sets his height as a fraction of a person. Measured, the "
+     "human comes back at the stated size and he comes back far larger — "
+     "state his height against something of roughly his own size standing "
+     "near him instead: the kerb beside him, a bollard base, a bicycle wheel",
+     True),
 )
 
 
@@ -314,6 +334,22 @@ _ON_FURNITURE = re.compile(
 # kerb", and the retry then told the writer to fix a placement it had never
 # written — three draft cycles spent on a misdiagnosis.
 _ABOUT_HIM = re.compile(r"\b(?:chonky|he|him|his)\b", re.I)
+
+# A comparative against something standing near him. Depth became reliable
+# once _ORDERING made the phrasing compulsory rather than merely requested;
+# size is the same problem and gets the same mechanism. Same-order comparisons
+# ("no taller than the kerb") are executed far better than a ratio against a
+# person, which is the failure this replaces.
+_SIZE_ANCHOR = re.compile(
+    r"\bno (?:taller|higher|bigger|larger) than\b|"
+    r"\b(?:shorter|smaller|lower) than\b|"
+    r"\b(?:barely|only just|just)\s+(?:reach\w*|com\w+\s+up)\b|"
+    r"\breach\w*\s+(?:only|barely|just)\b|"
+    r"\bcom\w+\s+up to\b|"
+    r"\b(?:as tall as|about the height of|roughly the height of|"
+    r"the same height as)\b",
+    re.I,
+)
 
 
 def _sentences(text: str) -> list[str]:
@@ -382,6 +418,17 @@ def _check(prompt: str) -> None:
             "already in the scene, which is the only thing that controls it — say "
             "that the people are between the camera and him, or that he is behind "
             "the furthest one, or far beyond all of them", prompt)
+
+    # Judged only in sentences about him: "the bollards are no taller than the
+    # kerb" is a fact about the bollards and settles nothing about his size.
+    if not any(_SIZE_ANCHOR.search(sentence) for sentence in his):
+        raise DraftError(
+            "the prompt never states his height against anything, so nothing "
+            "controls his size — say it against something of roughly his own "
+            "size standing near him: no taller than the kerb beside him, "
+            "shorter than the bicycle's wheel, barely reaching the top of the "
+            "bollard base. Not a fraction of a person: measured, that comes "
+            "back at nearly twice the size asked for", prompt)
 
 
 def _weights_section(weights: Optional[dict]) -> list[str]:

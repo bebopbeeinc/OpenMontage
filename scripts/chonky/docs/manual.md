@@ -380,6 +380,36 @@ Do not invent or approximate a location.
      so the arch, the crowd or the landmark sits off-centre — and let him
      fall where the depth puts him.
 
+4.3d STATE HIS HEIGHT AGAINST SOMETHING HIS OWN SIZE, STANDING NEAR HIM.
+     Depth puts him at the right distance; this is what stops him being
+     drawn oversized once he is there. Write it as a plain comparison
+     against a nearby object of roughly cat height:
+
+       "no taller than the kerb stone beside him"
+       "shorter than the bicycle's front wheel"
+       "barely reaching the top of the bollard base"
+       "about the height of the suitcase standing next to him"
+       "he comes up to the second step and no further"
+
+     NEVER as a fraction of a person. Measured once (Reykjavik,
+     2026-10-01) — one render, so treat this as a mechanism rather than
+     a law, but the mechanism is clear:
+
+       prompt said   jogger = one fifth of the ViewFrame height
+                     Chonky = one sixth of the jogger          -> 3.3%
+       render gave   jogger = 21% of the ViewFrame   (as asked)
+                     Chonky = 6.4% of the ViewFrame  (1.8x over)
+
+     Both stood at the same ground depth, so perspective does not
+     explain it. The reference figure came back right and the ratio
+     against it did not. A 6:1 ratio against a human asks the model to
+     draw something small, and it biases a small subject upward until it
+     reads clearly. A same-order comparison does not give it that room.
+
+     This is the same failure as the metres rule in 4.3c, and it gets
+     the same treatment: the phrasing that measurably fails is refused
+     by the draft checker, and the one that works is required.
+
 4.4  Give him ONE distinct visual gag with a visible setup or a visible
      consequence. Prefer natural cat behaviour that accidentally mirrors
      nearby human activity.

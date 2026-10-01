@@ -93,7 +93,7 @@ DRAFTED = {
     "city": "Cusco", "country": "Peru",
     "viewpoint": "Cuesta de San Blas, facing downhill",
     "prompt": ("The crowd walks ahead and Chonky sits far beyond all of them "
-               "on the cobblestones."),
+               "on the cobblestones, no taller than the kerb beside him."),
     "clues": ["a", "b", "c"], "clue_words": ["x", "y", "z"],
 }
 
