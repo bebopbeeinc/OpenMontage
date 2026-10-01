@@ -36,7 +36,23 @@ VF_Y1 = VF_Y0 + VF_H            # 2346
 # The floor is 110 rather than 130 on the evidence of five level-2 renders
 # measured that day — 83, 117, 125, 189 px, plus one at 15 that YOLO could not
 # find. A 130 floor rejects the 117/125 pair that is the densest part of that
-# distribution. Four renders is a reading, not a law; revisit at twenty.
+# distribution.
+#
+# Measured the same evening, once the pass could finally judge identity, the
+# band turned out to sit exactly on the boundary where he stops being himself:
+#
+#     79 px   not Chonky   "ordinary slim tabby mid-stride near the pigeons"
+#     93 px   not Chonky   "too small to confirm the white bib"
+#    171 px   Chonky       (checked by eye: round body, bib, white socks)
+#    280 px   Chonky
+#    384 px   Chonky
+#
+# Every render at or below 93 px failed identity and every render at or above
+# 171 px passed it, with both ends confirmed against the images rather than
+# taken on the vision pass's word. That is five renders, not fifty, and the
+# boundary is bracketed rather than located — but it is the first evidence this
+# project has had that the size band and the character were in direct conflict,
+# and it is why the floor moved. Revisit at twenty.
 CHONKY_MIN_H, CHONKY_MAX_H = 110, 210
 
 # Chonky must stay out of the ViewFrame's central third: present at a glance,
