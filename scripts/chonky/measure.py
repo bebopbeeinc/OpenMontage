@@ -149,7 +149,7 @@ def _detect_by_colour(img: Image.Image) -> Optional[Box]:
 
     bx0, by0, bx1, by1 = best["box"]
     # Back to full resolution, padded, then refine the edges at 1 px so the
-    # measurement is exact at the boundaries of the 65-105 band.
+    # measurement is exact at the boundaries of the size band.
     pad = 2 * scale
     rx0 = max(0, bx0 * scale - pad)
     ry0 = max(0, by0 * scale - pad)

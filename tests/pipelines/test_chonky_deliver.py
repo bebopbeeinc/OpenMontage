@@ -21,7 +21,7 @@ def _photo_like():
     return img
 
 
-MEASURED = {"height_px": 89, "zone": "viewframe", "box": (1232, 1709, 1318, 1798)}
+MEASURED = {"height_px": 150, "zone": "viewframe", "box": (1232, 1709, 1377, 1859)}
 
 
 def _deliver(img, rows, **kw):
@@ -46,7 +46,7 @@ def test_row_carries_the_measured_values_verbatim():
     rows = []
     _deliver(_photo_like(), rows)
     row = rows[0]
-    assert row["chonky_px_h"] == 89
+    assert row["chonky_px_h"] == 150
     assert row["chonky_zone"] == "viewframe"
     assert row["chonky_x"] == 1232
     assert row["chonky_y"] == 1709

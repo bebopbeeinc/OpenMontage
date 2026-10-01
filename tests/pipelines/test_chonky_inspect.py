@@ -279,3 +279,81 @@ def test_a_hint_that_names_something_identifiable_passes():
 def test_room_to_actually_say_something():
     """The 12-word cap is what forced the captions. Caglar's own example is 25."""
     assert I.MAX_CLUE_WORDS >= 25
+
+
+# --------------------------------------------------------------------------
+# Two things this pass has never reported, and both are the things that decide
+# whether a render is usable at all.
+#
+# IDENTITY. The manual calls an ordinary ginger cat "a FAILED image" and "the
+# single worst outcome", and nothing in the pipeline has ever checked for it.
+# `measurement` records a box, a height and a zone; YOLO says "cat", which
+# cannot tell Chonky from any tabby in the world. Every render on 2026-10-01
+# came back as a normal cat and the pipeline reported them all as fine.
+#
+# CLUES. S3.2b sets a floor of two independent real clues at EVERY difficulty
+# — "a deserted beach ... is NOT an acceptable level 5 image" — and S5.2 wants
+# at least one definitive clue inside the ViewFrame. Neither is enforced
+# anywhere. A beautiful render carrying nothing to reason from is a failed
+# geography puzzle, and until now only a person noticing caught it.
+#
+# Both are reports, not gates. They sit beside the pixel verdict and the
+# operator decides, exactly as the size verdict works today.
+# --------------------------------------------------------------------------
+
+def test_it_asks_whether_the_cat_is_actually_chonky(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "chonky" in asked
+    assert "bib" in asked or "near-spherical" in asked
+
+
+def test_it_asks_how_many_clues_are_really_visible(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "clue" in asked
+    assert "two" in asked or "at least 2" in asked
+
+
+def test_it_asks_whether_a_clue_sits_inside_the_viewframe(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "viewframe" in asked
+
+
+def test_the_identity_verdict_is_returned(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Seoul", country="South Korea", difficulty=2,
+                         caller=_reply(dict(GOOD, is_chonky=False,
+                                            identity_note="ordinary tabby, no bib")))
+    assert out["is_chonky"] is False
+    assert out["identity_note"] == "ordinary tabby, no bib"
+
+
+def test_the_clue_verdict_is_returned(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Seoul", country="South Korea", difficulty=2,
+                         caller=_reply(dict(GOOD, clue_count=3,
+                                            clue_families=["language", "flags"],
+                                            clue_in_viewframe=True)))
+    assert out["clue_count"] == 3
+    assert out["clue_families"] == ["language", "flags"]
+    assert out["clue_in_viewframe"] is True
+
+
+def test_an_unknown_clue_family_is_dropped_rather_than_trusted(tmp_path):
+    """The families are a fixed vocabulary; an invented one means nothing."""
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Seoul", country="South Korea", difficulty=2,
+                         caller=_reply(dict(GOOD, clue_families=["language", "vibes"])))
+    assert out["clue_families"] == ["language"]
+
+
+def test_a_reply_without_the_new_fields_still_works(tmp_path):
+    """An older reply shape must not crash the pass; it reports nothing known."""
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Seoul", country="South Korea", difficulty=2,
+                         caller=_reply(GOOD))
+    assert out["is_chonky"] is None
+    assert out["clue_count"] is None

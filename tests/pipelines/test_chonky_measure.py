@@ -18,12 +18,12 @@ def _with_patch(x0, y0, w, h, colour=(210, 120, 45)):
 
 
 def test_detects_a_ginger_patch():
-    img = _with_patch(1232, 1709, 86, 89)
+    img = _with_patch(1232, 1709, 145, 150)
     box = _detect_by_colour(img)
     assert box is not None
     x0, y0, x1, y1 = box
     assert abs(x0 - 1232) <= 2 and abs(y0 - 1709) <= 2
-    assert abs((y1 - y0) - 89) <= 2
+    assert abs((y1 - y0) - 150) <= 2
 
 
 def test_returns_none_when_there_is_no_cat():
@@ -31,7 +31,7 @@ def test_returns_none_when_there_is_no_cat():
 
 
 def test_verify_passes_a_good_render():
-    result = verify(_with_patch(1232, 1709, 86, 89), detector=_detect_by_colour)
+    result = verify(_with_patch(1232, 1709, 145, 150), detector=_detect_by_colour)
     assert result["size"] == "ok"
     assert result["zone"] == "viewframe"
     assert result["ok"] is True
@@ -44,16 +44,16 @@ def test_verify_fails_an_oversized_cat():
 
 
 def test_verify_fails_centrestage():
-    result = verify(_with_patch(900, 1709, 86, 89), detector=_detect_by_colour)
+    result = verify(_with_patch(900, 1709, 145, 150), detector=_detect_by_colour)
     assert result["zone"] == "centrestage"
     assert result["ok"] is False
 
 
 def test_explicit_box_overrides_detection():
-    img = _with_patch(1232, 1709, 86, 89)
-    result = verify(img, box=(500, 300, 586, 389))
-    assert result["box"] == (500, 300, 586, 389)
-    assert result["height_px"] == 89
+    img = _with_patch(1232, 1709, 145, 150)
+    result = verify(img, box=(500, 300, 645, 450))
+    assert result["box"] == (500, 300, 645, 450)
+    assert result["height_px"] == 150
     assert result["zone"] == "viewframe"
 
 
@@ -82,16 +82,16 @@ def _with_warm_scene_noise(img, seed=3, fraction=0.06):
 def test_finds_the_cat_despite_a_warm_scene():
     # Regression: the real Rua Augusta render measured 2559 px (the whole
     # frame) before detection looked for a compact blob instead of a global bbox.
-    img = _with_warm_scene_noise(_with_patch(1232, 1709, 86, 89))
+    img = _with_warm_scene_noise(_with_patch(1232, 1709, 145, 150))
     box = _detect_by_colour(img)
     assert box is not None
     x0, y0, x1, y1 = box
-    assert abs((y1 - y0) - 89) <= 4, f"got {y1 - y0} px, expected ~89"
+    assert abs((y1 - y0) - 150) <= 4, f"got {y1 - y0} px, expected ~150"
     assert abs(x0 - 1232) <= 8, f"box starts at x={x0}, expected ~1232"
 
 
 def test_warm_scene_still_verifies_as_a_pass():
-    img = _with_warm_scene_noise(_with_patch(1232, 1709, 86, 89))
+    img = _with_warm_scene_noise(_with_patch(1232, 1709, 145, 150))
     result = verify(img, detector=_detect_by_colour)
     assert result["size"] == "ok", result
     assert result["zone"] == "viewframe", result
@@ -106,9 +106,9 @@ def test_an_explicit_box_is_always_authoritative():
     is measured and judged exactly, regardless of what detection thinks.
     """
     img = _with_warm_scene_noise(_with_patch(300, 300, 400, 400))  # detection will pick the big patch
-    result = verify(img, box=(1232, 1709, 1318, 1798))
-    assert result["box"] == (1232, 1709, 1318, 1798)
-    assert result["height_px"] == 89
+    result = verify(img, box=(1232, 1709, 1377, 1859))
+    assert result["box"] == (1232, 1709, 1377, 1859)
+    assert result["height_px"] == 150
     assert result["size"] == "ok"
     assert result["zone"] == "viewframe"
     assert result["ok"] is True
@@ -120,11 +120,11 @@ def test_detector_is_injectable_and_wins():
 
     def fake(img):
         called.append(img)
-        return (1232, 1709, 1318, 1798)
+        return (1232, 1709, 1377, 1859)
 
     result = verify(_blank(), detector=fake)
     assert len(called) == 1
-    assert result["height_px"] == 89
+    assert result["height_px"] == 150
     assert result["zone"] == "viewframe"
     assert result["ok"] is True
 
@@ -133,17 +133,17 @@ def test_a_supplied_box_skips_detection_entirely():
     def exploding(img):
         raise AssertionError("detection must not run when a box is supplied")
 
-    result = verify(_blank(), box=(1232, 1709, 1318, 1798), detector=exploding)
-    assert result["height_px"] == 89
+    result = verify(_blank(), box=(1232, 1709, 1377, 1859), detector=exploding)
+    assert result["height_px"] == 150
 
 
 def test_detection_falls_back_to_colour_when_no_model(monkeypatch):
     import scripts.chonky.measure as m
     monkeypatch.setattr(m, "_detect_by_model", lambda img: None)
-    img = _with_patch(1232, 1709, 86, 89)
+    img = _with_patch(1232, 1709, 145, 150)
     box = m.detect_chonky(img)
     assert box is not None, "must still find him via the colour fallback"
-    assert abs((box[3] - box[1]) - 89) <= 4
+    assert abs((box[3] - box[1]) - 150) <= 4
 
 
 # --------------------------------------------------------------------------

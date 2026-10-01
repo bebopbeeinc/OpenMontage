@@ -16,7 +16,10 @@ from scripts.chonky.web import server
 
 client = TestClient(server.app)
 
-MEASUREMENT = {"box": [500, 900, 560, 960], "height_px": 60, "size": "ok",
+# 1344x1680 is the 2k frame; the band there is 72-138 px, so 100 sits
+# mid-band. x stays left of the ViewFrame's central third (which starts at
+# 541 in this frame) so the zone remains "viewframe".
+MEASUREMENT = {"box": [430, 900, 530, 1000], "height_px": 100, "size": "ok",
                "zone": "viewframe", "ok": True, "frame_size": [1344, 1680]}
 
 COMPLIANT = ("A quiet square. Chonky sits far beyond all of them, on the "
@@ -61,7 +64,7 @@ def test_approve_takes_everything_from_the_record_beside_the_render(monkeypatch)
         assert seen["country"] == "France"
         assert seen["difficulty"] == "1"
         assert seen["clue_words"] == ["tower", "flag", "fountain"]
-        assert seen["measurement"]["height_px"] == 60
+        assert seen["measurement"]["height_px"] == 100
         assert seen["prompt"] == "a prompt"
     finally:
         _cleanup("appr-a")

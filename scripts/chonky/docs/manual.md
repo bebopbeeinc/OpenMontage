@@ -205,9 +205,16 @@ Do not invent or approximate a location.
      altogether and inventing an ordinary cat — that is the single worst
      outcome and it has already happened once.
 4.3  SIZE IS A HARD CONSTRAINT, AND IT IS A BAND, NOT A CEILING.
-     His complete visible height including tail must be BETWEEN 65 AND
-     105 PIXELS in the 2048 x 2560 source. That is 3-5% of the
+     His complete visible height including tail must be BETWEEN 110 AND
+     210 PIXELS in the 2048 x 2560 source. That is 5.2-9.8% of the
      ViewFrame height, which is what the player actually sees.
+
+     WIDENED FROM 65-105 ON 2026-10-01, and the reason is 4.2's rule,
+     not a softening of this one: at 83 px there is no room for a
+     near-spherical body, a white belly bib and a banded tail to read,
+     so the band was quietly costing us the character. An unmistakable
+     Chonky who is easier to spot beats a correctly-sized smudge that
+     could be any ginger cat.
      AIM FOR THE TOP OF THE BAND. Chonky is the main character of the
      game — the player has to find him on a phone. Too small is just as
      much a failure as too large. Under 3% the render is rejected.
@@ -227,7 +234,7 @@ Do not invent or approximate a location.
        - In the immediate foreground (a metre or two from the lens, the
          same distance as a foreground rock, kerb or bench edge) a real
          cat renders at 250-450 px. Far too big.
-       - At middle distance he renders at 65-105 px. That is the target.
+       - At middle distance he renders at 110-210 px. That is the target.
        - In the far background he renders under 25 px and cannot be found.
      A portrait frame makes this worse, not better: there is more
      near-foreground in shot than in a landscape crop, so the pull
@@ -611,7 +618,7 @@ has not COMPLETED.
      Judge against the actual pixels in the review UI. If you cannot
      tell where he falls horizontally, say so rather than guessing.
 7.3  If a required clue did not render, or the cat is not recognisably
-     Chonky, or he is outside the 65-105 px band, anthropomorphic in
+     Chonky, or he is outside the 110-210 px band, anthropomorphic in
      pose, or in the wrong zone, set the row status to REROLL and render
      again. Do not write clue messages
      describing something that is not in the picture.

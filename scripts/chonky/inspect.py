@@ -87,6 +87,9 @@ this image — not something the image was supposed to contain.
 
 
 def _user_message(city: str, country: str, difficulty: int) -> str:
+    from scripts.chonky.prompts import CLUE_FAMILIES
+
+    families = ", ".join(sorted(CLUE_FAMILIES))
     return f"""\
 This image is meant to be {city}, {country}, at difficulty {difficulty}.
 
@@ -136,6 +139,37 @@ the level unfair, and one describing something unreadable makes it impossible.
 Chonky — the orange cat — is never a hint. He is what the player hunts, not
 evidence of where they are.
 
+IS THIS ACTUALLY CHONKY? He is a specific character, not "a cat": a
+near-spherical body far rounder than any ordinary cat, very short legs almost
+lost under it, a large white belly bib from chin down the underside, four
+white paws like socks, a thick fluffy tail with darker bands, round cheeks and
+a small head against a huge body, ginger tabby striping over the orange.
+
+An ordinary ginger tabby in the right place at the right size is a FAILED
+image, exactly as a wrongly-sized one is — so say so plainly when that is what
+you see. Judge only what is legible at the size he appears: if he is too small
+to tell, say so in the note rather than guessing. Report `is_chonky` and, when
+it is false or uncertain, `identity_note` saying what is wrong in a few words
+("ordinary tabby, no bib", "legs too long", "too small to tell").
+
+HOW MANY CLUES ARE REALLY THERE? Count the independent, concrete, human-made
+pieces of evidence a player could actually reason from — signage, script,
+licence plates, road markings, driving side, flags, bollards, utility poles,
+transit livery, building construction, a landmark. Count only what is genuinely
+visible and legible at the size it appears, and count two things of the same
+kind once. The floor for a usable image is TWO, at every difficulty: a
+beautiful picture with nothing to reason from is a failed puzzle, not a hard
+one.
+
+Report `clue_count`, and `clue_families` naming which of these they belong to:
+{families}
+
+Also report `clue_in_viewframe`: whether at least one clue strong enough to
+place the country or region sits inside the VIEWFRAME — the centre of the
+picture, from about 21% to 79% of the width and 8% to 92% of the height. That
+is all the player sees before panning, and a puzzle whose only evidence is out
+in the side margins opens on nothing.
+
 Also report whether any lettering in the picture failed to come out: a sign,
 plaque, banner or plate that is BLANK where text belongs, or GARBLED into
 shapes that are not real writing. A render came back with a proper ceramic
@@ -151,6 +185,11 @@ Reply with JSON only, no prose around it:
 
 {{"clues": ["...", "...", "..."],
  "clue_words": ["...", "...", "..."],
+ "is_chonky": true or false,
+ "identity_note": "what is wrong with the cat, or empty",
+ "clue_count": a whole number,
+ "clue_families": ["...", "..."],
+ "clue_in_viewframe": true or false,
  "names_the_place": true or false,
  "names_the_place_detail": "what it says, or empty",
  "broken_text": true or false,
@@ -223,9 +262,31 @@ def inspect_render(image_path, *, city: str, country: str, difficulty: int,
 
     check_clues([str(c) for c in data["clues"]])
 
+    # Reported, never enforced. These are a vision model's judgement rather
+    # than a measurement like the pixel box, so they can be wrong in both
+    # directions — they belong beside the size verdict for a person to read,
+    # not in front of a gate. A reply that omits them reports None rather than
+    # a confident False, because "not asked" and "no" are different answers.
+    from scripts.chonky.prompts import CLUE_FAMILIES
+
+    families = [str(f) for f in (data.get("clue_families") or [])
+                if str(f) in CLUE_FAMILIES]
+
+    count = data.get("clue_count")
+    try:
+        count = int(count) if count is not None else None
+    except (TypeError, ValueError):
+        count = None
+
     return {
         "clues": [str(c) for c in data["clues"]],
         "clue_words": [str(w) for w in data["clue_words"]],
+        "is_chonky": None if data.get("is_chonky") is None else bool(data["is_chonky"]),
+        "identity_note": str(data.get("identity_note") or ""),
+        "clue_count": count,
+        "clue_families": families,
+        "clue_in_viewframe": (None if data.get("clue_in_viewframe") is None
+                              else bool(data["clue_in_viewframe"])),
         "names_the_place": bool(data.get("names_the_place")),
         "names_the_place_detail": str(data.get("names_the_place_detail") or ""),
         "broken_text": bool(data.get("broken_text")),

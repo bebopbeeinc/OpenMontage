@@ -26,7 +26,18 @@ VF_Y0 = (IMG_H - VF_H) // 2     # 213 — the odd pixel goes to the bottom
 VF_X1 = VF_X0 + VF_W            # 1624
 VF_Y1 = VF_Y0 + VF_H            # 2346
 
-CHONKY_MIN_H, CHONKY_MAX_H = 65, 105
+# Widened from 65-105 on 2026-10-01: the silhouette outranks the band.
+#
+# At 83 px there is no room for a near-spherical body, a white belly bib and a
+# banded tail to read, so every render was either a correctly-sized smudge that
+# could be any ginger cat or an oversized one — and an ordinary cat is a FAILED
+# image in the manual's own words, equal in weight to a wrongly-sized one.
+#
+# The floor is 110 rather than 130 on the evidence of five level-2 renders
+# measured that day — 83, 117, 125, 189 px, plus one at 15 that YOLO could not
+# find. A 130 floor rejects the 117/125 pair that is the densest part of that
+# distribution. Four renders is a reading, not a law; revisit at twenty.
+CHONKY_MIN_H, CHONKY_MAX_H = 110, 210
 
 # Chonky must stay out of the ViewFrame's central third: present at a glance,
 # never the subject of the photograph.
@@ -79,7 +90,7 @@ def viewframe_box(size: tuple[int, int] | None = None) -> tuple[int, int, int, i
 
 
 def size_band(size: tuple[int, int] | None = None) -> tuple[int, int]:
-    """The 65-105 px band expressed in the coordinates of the frame given.
+    """The size band expressed in the coordinates of the frame given.
 
     Keyed to the ViewFrame's height rather than the source's: the rule is a
     share of what the player actually sees, which is the same rule whatever

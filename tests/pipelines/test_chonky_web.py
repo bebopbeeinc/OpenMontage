@@ -15,7 +15,7 @@ def test_health_reports_the_authored_geometry_as_a_reference_not_a_claim():
     assert "2048x2560" in body["image"]
     assert "reference" in body["image"].lower()
     assert body["viewframe"] == "1200x2133 at x 424-1624, y 213-2346"
-    assert "65-105" in body["chonky_height_px"]
+    assert "110-210" in body["chonky_height_px"]
     assert "own" in body["chonky_height_px"], "must say each render is measured in its own frame"
 
 
@@ -42,10 +42,10 @@ def test_prompts_endpoint_tolerates_a_missing_header():
 
 
 def test_measure_endpoint_accepts_a_corrected_box():
-    r = client.post("/api/measure", json={"box": [1232, 1709, 1318, 1798]})
+    r = client.post("/api/measure", json={"box": [1232, 1709, 1377, 1859]})
     assert r.status_code == 200
     body = r.json()
-    assert body["height_px"] == 89
+    assert body["height_px"] == 150
     assert body["zone"] == "viewframe"
     assert body["size"] == "ok"
     assert body["ok"] is True
@@ -176,14 +176,15 @@ def test_measure_judges_a_dragged_box_in_the_render_it_was_dragged_on():
     _Image.new("RGB", (1344, 1680), (150, 150, 150)).save(srv.LIBRARY / "scale-probe.png")
     try:
         srv._images.pop("scale-probe", None)
-        # 60 px tall: in band for a 1344x1680 frame, "too small" against 2048x2560.
+        # 100 px tall: in band for a 1344x1680 frame (72-138), "too small"
+        # against 2048x2560 (110-210). The whole point of the test.
         body = client.post("/api/measure",
-                           json={"box": [500, 1000, 560, 1060],
+                           json={"box": [500, 1000, 600, 1100],
                                  "image_id": "scale-probe"}).json()
         assert body["frame_size"] == [1344, 1680]
         assert body["size"] == "ok", body
 
-        without = client.post("/api/measure", json={"box": [500, 1000, 560, 1060]}).json()
+        without = client.post("/api/measure", json={"box": [500, 1000, 600, 1100]}).json()
         assert without["size"] == "too_small"
     finally:
         (srv.LIBRARY / "scale-probe.png").unlink(missing_ok=True)
@@ -199,7 +200,7 @@ def test_measure_reports_the_viewframe_for_the_render():
     try:
         srv._images.pop("vf-probe", None)
         body = client.post("/api/measure",
-                           json={"box": [500, 1000, 560, 1060],
+                           json={"box": [500, 1000, 600, 1100],
                                  "image_id": "vf-probe"}).json()
         x0, y0, x1, y1 = body["viewframe_box"]
         assert 0 <= x0 < x1 <= 1344

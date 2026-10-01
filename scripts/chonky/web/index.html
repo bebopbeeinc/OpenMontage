@@ -325,6 +325,33 @@ function tile(r) {
       '⚠ names the place — ' + (r.names_the_place_detail || 'visible in the image')));
   }
 
+  // Identity. An ordinary ginger cat in the right place at the right size is a
+  // failed image, and until 2026-10-01 nothing in the pipeline ever said so —
+  // the measurement records a box and a height, and YOLO only knows "cat".
+  // null means the question was never asked, which is not the same as "no".
+  if (r.is_chonky === false) {
+    t.appendChild(el('div', 'state bad-txt',
+      '⚠ not Chonky — ' + (r.identity_note || 'reads as an ordinary cat')));
+  } else if (r.is_chonky === true) {
+    t.appendChild(el('div', 'state ok-txt', '✓ reads as Chonky'));
+  }
+
+  // Clue coverage. Section 3.2b sets a floor of two real clues at EVERY
+  // difficulty; 5.2 wants one of them inside the ViewFrame, which is all the
+  // player sees before panning. A picture with nothing to reason from is a
+  // failed puzzle however good it looks.
+  if (r.clue_count !== null && r.clue_count !== undefined) {
+    const fams = (r.clue_families || []).join(', ');
+    const thin = r.clue_count < 2;
+    const noVf = r.clue_in_viewframe === false;
+    let msg = (thin ? '⚠ ' : '') + r.clue_count +
+      (r.clue_count === 1 ? ' clue visible' : ' clues visible') +
+      (fams ? ` (${fams})` : '');
+    if (thin) msg += ' — the floor is two at every difficulty';
+    if (noVf) msg += (thin ? '; ' : ' — ') + 'none inside the ViewFrame';
+    t.appendChild(el('div', 'state ' + (thin || noVf ? 'bad-txt' : 'ok-txt'), msg));
+  }
+
   if (r.clues && r.clues.length) {
     const cl = el('ol', 'clues');
     r.clues.forEach(c => cl.appendChild(el('li', null, c)));

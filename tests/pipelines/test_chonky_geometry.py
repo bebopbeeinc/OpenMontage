@@ -47,11 +47,11 @@ def test_the_measured_lisbon_render_is_a_viewframe_hit():
 
 
 def test_size_verdict_band_edges():
-    assert size_verdict(64) == "too_small"
-    assert size_verdict(65) == "ok"
-    assert size_verdict(89) == "ok"
-    assert size_verdict(105) == "ok"
-    assert size_verdict(106) == "too_big"
+    assert size_verdict(109) == "too_small"
+    assert size_verdict(110) == "ok"
+    assert size_verdict(150) == "ok"
+    assert size_verdict(210) == "ok"
+    assert size_verdict(211) == "too_big"
 
 
 # --------------------------------------------------------------------------
@@ -146,7 +146,7 @@ def test_there_is_always_room_left_to_pan(size):
 def test_the_four_five_reference_is_unchanged_by_the_generalisation():
     """The authored numbers must survive: they are quoted in the manual."""
     assert geometry.viewframe_box((2048, 2560)) == (424, 213, 1624, 2346)
-    assert geometry.size_band((2048, 2560)) == (65, 105)
+    assert geometry.size_band((2048, 2560)) == (110, 210)
 
 
 def test_the_band_follows_the_viewframe_not_the_source():
@@ -156,3 +156,42 @@ def test_the_band_follows_the_viewframe_not_the_source():
         lo, hi = geometry.size_band(size)
         assert abs(lo / (y1 - y0) - geometry.CHONKY_MIN_H / geometry.VF_H) < 0.01
         assert abs(hi / (y1 - y0) - geometry.CHONKY_MAX_H / geometry.VF_H) < 0.01
+
+
+# --------------------------------------------------------------------------
+# The band widened on 2026-10-01: 65-105 -> 110-210 px at 2048x2560.
+#
+# Caglar's decision: the silhouette outranks the band. At 83 px there is no
+# room for a near-spherical body, a white belly bib and a banded tail to read,
+# so an unmistakable Chonky who is easier to spot beats a correctly-sized
+# smudge that could be any ginger cat. The manual has always said an ordinary
+# cat is a FAILED image, equal in weight to a wrongly-sized one.
+#
+# The floor is 110 rather than the 130 first sketched, on the five renders
+# measured at level 2 that day: 83, 117, 125, 189 px (and one at 15 that YOLO
+# could not find). A 130 floor rejects the 117/125 pair that is the densest
+# part of that distribution and passes 1 of 4 — no better than the band it
+# replaces. 110 passes 3 of 4.
+# --------------------------------------------------------------------------
+
+def test_the_band_is_the_widened_one():
+    assert geometry.size_band() == (110, 210)
+
+
+def test_the_measured_cluster_now_passes():
+    """117 and 125 were the two most common results and both used to fail."""
+    for h in (117, 125, 189):
+        assert geometry.size_verdict(h, (2048, 2560)) == "ok", h
+
+
+def test_what_is_still_too_small_or_too_big():
+    assert geometry.size_verdict(83, (2048, 2560)) == "too_small"
+    assert geometry.size_verdict(15, (2048, 2560)) == "too_small"
+    assert geometry.size_verdict(260, (2048, 2560)) == "too_big"
+
+
+def test_the_band_still_scales_with_the_frame():
+    """A 2k render is a smaller canvas; the rule is a share of the ViewFrame."""
+    lo, hi = geometry.size_band((1344, 1680))
+    assert lo < 110 and hi < 210
+    assert abs(lo / hi - 110 / 210) < 0.02

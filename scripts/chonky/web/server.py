@@ -603,6 +603,15 @@ def _run_render_inline(job_id: str, image_id: str, prompt: str, *, location=None
                            "names_the_place_detail", ""),
                        broken_text=(seen or {}).get("broken_text", False),
                        broken_text_detail=(seen or {}).get("broken_text_detail", ""),
+                       # The first identity and clue-coverage verdicts this
+                       # pipeline has ever recorded. None means "not asked" —
+                       # an older render, or a clue pass that failed — which is
+                       # a different answer from False.
+                       is_chonky=(seen or {}).get("is_chonky"),
+                       identity_note=(seen or {}).get("identity_note", ""),
+                       clue_count=(seen or {}).get("clue_count"),
+                       clue_families=(seen or {}).get("clue_families", []),
+                       clue_in_viewframe=(seen or {}).get("clue_in_viewframe"),
                        measurement=result,
                        viewpoint=viewpoint, place_note=place_note,
                        model=MODEL,
@@ -776,6 +785,11 @@ def renders():
             "names_the_place_detail": side.get("names_the_place_detail"),
             "broken_text": side.get("broken_text", False),
             "broken_text_detail": side.get("broken_text_detail"),
+            "is_chonky": side.get("is_chonky"),
+            "identity_note": side.get("identity_note"),
+            "clue_count": side.get("clue_count"),
+            "clue_families": side.get("clue_families") or [],
+            "clue_in_viewframe": side.get("clue_in_viewframe"),
             "aspect": side.get("aspect"),
             "width": side.get("width"),
             "height": side.get("height"),
