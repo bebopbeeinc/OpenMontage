@@ -192,11 +192,18 @@ def test_the_three_clues_have_their_assigned_jobs(tmp_path):
 
 
 def test_an_overlong_clue_is_rejected():
-    """Asking is not getting — this pipeline has learned that twice."""
+    """The cap guards against a paragraph. It moved from 32 to 48 words when
+    32 threw away a good 33-word hint, so the fixture has to be a real
+    paragraph rather than a long sentence."""
     long_clue = ("A narrow street paved with rounded cobblestones and a smooth "
-                 "flagstone walkway running straight down the middle")
+                 "flagstone walkway running straight down the middle, with "
+                 "shuttered windows above and washing strung between the "
+                 "balconies, while a scooter leans against the wall and a cat "
+                 "watches from a doorway in the warm late afternoon light that "
+                 "falls along one side of the lane and leaves the other in "
+                 "deep shade for most of the day.")
     with pytest.raises(I.InspectError):
-        I.check_clues([long_clue, "Flag: A [Peruvian flag] flies.", "c"])
+        I.check_clues([long_clue, "A Peruvian flag flies.", "c"])
 
 
 def test_clues_within_the_limit_pass():
@@ -254,15 +261,26 @@ def test_brackets_and_category_labels_are_forbidden(tmp_path):
     assert "no category prefixes" in asked
 
 
-def test_a_caption_is_rejected():
-    """Describing the picture is not a hint. This is the failure, by name."""
-    with pytest.raises(I.InspectError):
-        I.check_clues([
-            "A curved bay is lined with white high-rises and moored boats.",
-            "Those teal rental bikes belong to the MiBici network, found only "
-            "in Mexico's second-largest city.",
-            "The pavement lettering is Hangul, which means you are in Korea.",
-        ])
+def test_a_caption_is_no_longer_refused_by_the_checker():
+    """Retired rule, kept as a record of why.
+
+    This used to assert that "A curved bay is lined with white high-rises"
+    was rejected, via a check requiring a proper noun somewhere in the hint.
+    On the Sydney render of 2026-10-01 that same check threw away a hint
+    describing the Harbour Bridge precisely and deliberately without naming
+    it — which is the format working — and cost the render its whole clue
+    pass. Avoiding the answer and naming something identifiable pull in
+    opposite directions, and no regex tells them apart.
+
+    A caption is now prevented by the instructions and the worked example,
+    and caught by the operator reading the clues on the tile.
+    """
+    I.check_clues([
+        "A curved bay is lined with white high-rises and moored boats.",
+        "Those teal rental bikes belong to the MiBici network, found only "
+        "in Mexico's second-largest city.",
+        "The pavement lettering is Hangul, which means you are in Korea.",
+    ])
 
 
 def test_a_hint_that_names_something_identifiable_passes():
@@ -357,3 +375,60 @@ def test_a_reply_without_the_new_fields_still_works(tmp_path):
                          caller=_reply(GOOD))
     assert out["is_chonky"] is None
     assert out["clue_count"] is None
+
+
+# --------------------------------------------------------------------------
+# Three ways the clue pass threw away a good answer, all measured on the
+# verification batch of 2026-10-01. Each one silently dropped the render back
+# to prompt-written clues — the exact failure STEP C exists to prevent — and
+# took the identity and clue verdicts down with it.
+# --------------------------------------------------------------------------
+
+def test_a_hint_one_word_over_is_not_thrown_away():
+    """Cape Town, 33 words, rejected by a 32-word cap. It is a good hint.
+
+    The cap is a guard against a paragraph, not a style rule; Caglar's own
+    exemplar runs to 25 and there is nothing magic about 32.
+    """
+    I.check_clues([
+        "That flat-topped mountain behind the rooftops, its summit trailing a "
+        "cloud like a tablecloth, is Table Mountain — a natural landmark that "
+        "rises directly over the downtown of one specific African coastal city.",
+        "The blue road signs use Hangul, used nowhere but the Korean peninsula.",
+        "Those orange bollards are a South Korean fixture.",
+    ])
+
+
+def test_a_hint_may_be_diagnostic_without_naming_a_proper_noun():
+    """Sydney: "steel arch bridge ... electric train ... granite pylons".
+
+    Requiring a capitalised word contradicted the rule that matters more —
+    a hint must NOT hand over the answer. Describing an unmistakable structure
+    precisely, without naming it, is the format working, not failing.
+    """
+    I.check_clues([
+        "The steel arch bridge overhead carries an electric train on its lower "
+        "deck between two giant granite pylons, a rare road-and-rail design.",
+        "The blue road signs use Hangul, used nowhere but the Korean peninsula.",
+        "Those orange bollards are a South Korean fixture.",
+    ])
+
+
+def test_a_paragraph_is_still_refused():
+    with pytest.raises(I.InspectError):
+        I.check_clues(["word " * 60, "b", "c"])
+
+
+def test_json_after_a_line_of_prose_is_still_read(tmp_path):
+    """Venice: the CLI prefixed "Apologies — that tool call was a mistake".
+
+    verify_place.py already recovers from this; this pass did not, and threw
+    away a complete, correct reply over a sentence in front of it.
+    """
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    noisy = ("Apologies — that tool call was a mistake. Here is the requested "
+             "JSON:\n\n```json\n" + json.dumps(GOOD) + "\n```")
+    out = inspect_render(img, city="Venice", country="Italy", difficulty=2,
+                         caller=lambda s, u, *, model=None, image=None: noisy)
+    assert out["clues"][0].startswith("The blue road sign")

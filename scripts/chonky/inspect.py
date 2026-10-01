@@ -68,6 +68,34 @@ def _call_via_cli(system: str, user: str, *, model: Optional[str] = None,
     return text
 
 
+def _parse(raw: str):
+    """The reply object, from a reply that may be wrapped in prose.
+
+    The CLI prefaced one Venice reply with "Apologies — that tool call was a
+    mistake. Here is the requested JSON:", and the render lost its clues over
+    it. verify_place.py already recovers from exactly this shape; this pass did
+    not, and threw away a complete, correct answer for a sentence standing in
+    front of it.
+    """
+    for candidate in (_strip_fence(raw), _embedded_object(raw)):
+        if not candidate:
+            continue
+        try:
+            data = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and "clues" in data:
+            return data
+    return None
+
+
+def _embedded_object(text: str):
+    """The outermost {...} in a reply that prefaced its JSON with prose."""
+    start = text.find("{")
+    end = text.rfind("}")
+    return text[start:end + 1] if 0 <= start < end else None
+
+
 def _strip_fence(text: str) -> str:
     stripped = text.strip()
     if not stripped.startswith("```"):
@@ -203,15 +231,28 @@ become the filename, so no spaces and no punctuation.
 # Caglar's own example runs to 25 words. The old 12-word cap is what forced
 # the clue pass into captions: there is no room in twelve words to name a
 # thing AND say what it tells you, so it dropped the half that helps.
-MAX_CLUE_WORDS = 32
+# A guard against a paragraph, not a style rule. Caglar's exemplar runs to 25
+# words; 32 threw away a 33-word Cape Town hint that was doing everything asked
+# of it — and a rejected pass costs the whole render's clues, not just the one
+# line that broke the rule. Style is taught by the instructions and the worked
+# example above, which is where it belongs.
+MAX_CLUE_WORDS = 48
 
 
 def check_clues(clues: list[str]) -> None:
-    """Refuse a caption. Asking has not been enough anywhere else here.
+    """Refuse a paragraph. Everything else is taught, not enforced.
 
-    The test is whether the sentence could only have been written about this
-    place. "A curved bay is lined with white high-rises" could be fifty
-    cities; "the MiBici network" could only be one.
+    There used to be a second rule here requiring a capitalised word — a proper
+    noun, on the theory that a hint naming nothing narrows nothing down. On the
+    Sydney render of 2026-10-01 it rejected this:
+
+        "The steel arch bridge overhead carries an electric train on its lower
+         deck between two giant granite pylons, a rare road-and-rail design."
+
+    which is the format working, not failing. Describing an unmistakable
+    structure exactly, without naming it, is precisely what "say what it
+    narrows down, without handing over the answer" asks for. The check was
+    enforcing the opposite of the rule it existed to serve.
     """
     for clue in clues:
         words = [w for w in clue.split() if w.strip()]
@@ -219,17 +260,6 @@ def check_clues(clues: list[str]) -> None:
             raise InspectError(
                 f"hint is {len(words)} words, over the {MAX_CLUE_WORDS}-word "
                 f"limit — keep it to a sentence or two: {clue!r}")
-
-        # A proper noun, a quoted name or a capitalised term is what makes a
-        # hint actionable: MiBici, Hangul, Jalisco. Without one it is a
-        # description of the picture.
-        named = [w for w in clue.replace('"', " ").split()[1:]
-                 if w[:1].isupper() or w[:1].isdigit()]
-        if not named:
-            raise InspectError(
-                f"hint names nothing a player could look up or recognise, so "
-                f"it narrows nothing down — name the network, the alphabet, "
-                f"the plate format, the species: {clue!r}")
 
 
 def inspect_render(image_path, *, city: str, country: str, difficulty: int,
@@ -248,10 +278,9 @@ def inspect_render(image_path, *, city: str, country: str, difficulty: int,
     raw = caller(_SYSTEM, _user_message(city, country, difficulty),
                  model=model, image=image_path)
 
-    try:
-        data = json.loads(_strip_fence(raw))
-    except (ValueError, TypeError) as exc:
-        raise InspectError(f"reply was not JSON: {exc}; got {raw[:200]!r}") from exc
+    data = _parse(raw)
+    if data is None:
+        raise InspectError(f"reply was not JSON; got {raw[:200]!r}")
     if not isinstance(data, dict):
         raise InspectError(f"reply was not a JSON object: {raw[:200]!r}")
 

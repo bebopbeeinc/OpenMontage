@@ -585,3 +585,21 @@ def test_the_writer_is_told_the_reference_is_not_a_layout():
     """A rule the writer is never shown is a trap, per the brief's own reason."""
     system = prompts.writer_manual()
     assert "never as a layout" in system
+
+
+def test_the_character_block_disclaims_any_say_over_his_size():
+    """The block describes him; it must not be read as "make him prominent".
+
+    Measured: four level-2 renders before the block averaged 129 px (83, 117,
+    125, 189); the first four after it came back 195, 345, 384, 607 — against
+    a band whose ceiling is 210. Describing the subject at length is a known
+    way to make an image model enlarge it, and this block is the longest
+    description of Chonky any prompt has ever carried. Two changes landed
+    together (the block and five extra reference stills), so this line is a
+    hypothesis being tested, not a diagnosis.
+    """
+    out = prompts.draft(difficulty=1, target_zone="viewframe", used=[],
+                        caller=_client(VALID))
+    flat = _flat(out["prompt"]).lower()
+    assert "does not change his size" in flat
+    assert "not make him more prominent" in flat

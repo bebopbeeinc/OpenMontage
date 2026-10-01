@@ -501,7 +501,13 @@ writer's text:
   - A normal-bodied ginger cat is a FAILED image, exactly as a wrongly-sized
     one is. Take his BODY from the reference and his POSE from the scene
     above: he is on four paws in ordinary cat posture, never upright on his
-    hind legs, however the reference sheet presents him."""
+    hind legs, however the reference sheet presents him.
+  - THIS BLOCK IS ABOUT WHAT HE LOOKS LIKE AND NOTHING ELSE. It does not
+    change his size, his distance from the camera, or his place in the
+    picture — those are set in the scene above and stand. The length of this
+    description does not make him more prominent: he is still a small, easily
+    missed detail that a careful viewer has to hunt for, and he is still not
+    enlarged for visibility."""
 
 
 def _weights_section(weights: Optional[dict]) -> list[str]:
