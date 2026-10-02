@@ -124,41 +124,30 @@ This image is meant to be {city}, {country}, at difficulty {difficulty}.
 Write the three Level Win hints. A hint is shown to the player in a casual
 mobile game, and its job is to HELP THEM GUESS WHERE THIS IS.
 
-This is the shape to copy:
+MAXIMUM 50 CHARACTERS EACH. Not words — characters, counted including spaces.
+This is the shape and the whole length of it:
 
-    Those teal rental bikes on the sidewalk belong to the "MiBici" network,
-    which is only found in Mexico's second-largest city.
+    that church was baroque architecture
 
-Why that one works, and what to do:
+Say it the way a person would say it to a 10-year-old standing next to them:
+point at the thing, name what it is, stop. No preamble, no second clause, no
+explaining why it matters. Plain words a child would already know, or one
+worth learning — "baroque", "Hangul", "cobblestones" — but never a sentence
+that needs a second sentence.
 
-  * POINT AT SOMETHING SPECIFIC YOU CAN SEE. "Those teal rental bikes on the
-    sidewalk" — a thing in the picture, said the way a person would say it.
-    Not "a curved bay is lined with high-rises", which describes the view the
-    player is already looking at and narrows nothing down.
-
-  * NAME IT. The hint is only useful if it names the identifiable thing: the
-    MiBici network, the Hangul alphabet, a plate format, a bollard style, a
-    tree species, a brand of bus. "A sign" helps nobody; "a blue sign in
-    Hangul" is a hint.
-
-  * SAY WHAT IT NARROWS DOWN, WITHOUT HANDING OVER THE ANSWER. "only found in
-    Mexico's second-largest city" — the player still gets to make the last
-    step themselves. Do NOT write "which means this is Guadalajara". Name the
-    country, the region, the kind of place, or a fact that points at one city
-    without naming it.
-
-  * BE CONVERSATIONAL AND TEACH SOMETHING. Write like a person telling you a
-    fun fact, not like a label on a diagram. A good hint is worth knowing even
-    after the level is over. One or two sentences, up to about thirty words.
-
-  * NO category prefixes, no square brackets, no formatting of any kind. Plain
-    friendly sentences.
+  * POINT AT SOMETHING YOU CAN ACTUALLY SEE and name it: the alphabet on the
+    signs, the shape of the plates, the colour of the kerb, the style of the
+    church, the brand on the bikes, the kind of tree.
+  * DO NOT NAME THE PLACE. Never the city, region or country the player is
+    being asked to find. "Those signs are in Hangul" is a hint; "you are in
+    Korea" is the answer.
+  * NO formatting of any kind — no brackets, no category labels, no quotes
+    unless the sign itself is being quoted.
 
 Only what is ACTUALLY in the picture, and only what is LEGIBLE at the size it
 appears. If the scene was supposed to contain a plate or a sign and it did not
-come out, do not mention it. Do not write "the plate reads Jalisco" unless you
-can genuinely read Jalisco on it — a hint describing something absent makes
-the level unfair, and one describing something unreadable makes it impossible.
+come out, do not mention it. A hint describing something absent makes the
+level unfair, and one describing something unreadable makes it impossible.
 
   * hint 1 is the strongest: the thing that most narrows down where this is.
   * hint 2 is the second strongest, and about something DIFFERENT.
@@ -231,35 +220,38 @@ become the filename, so no spaces and no punctuation.
 # Caglar's own example runs to 25 words. The old 12-word cap is what forced
 # the clue pass into captions: there is no room in twelve words to name a
 # thing AND say what it tells you, so it dropped the half that helps.
-# A guard against a paragraph, not a style rule. Caglar's exemplar runs to 25
-# words; 32 threw away a 33-word Cape Town hint that was doing everything asked
-# of it — and a rejected pass costs the whole render's clues, not just the one
-# line that broke the rule. Style is taught by the instructions and the worked
-# example above, which is where it belongs.
-MAX_CLUE_WORDS = 48
+# Fifty characters, counted with spaces (Caglar, 2026-10-02). The shape is
+# "that church was baroque architecture" — 36 characters, said the way a person
+# says it to a ten-year-old standing next to them.
+#
+# This is the third format. The first was twelve bracketed words and read like
+# a database field; the second ran to about 130 characters and carried both the
+# visible thing and what it narrowed the place down to. Fifty fits only the
+# first half, which is the deliberate trade: the hint points and names, and the
+# player makes the inference.
+MAX_CLUE_CHARS = 50
 
 
 def check_clues(clues: list[str]) -> None:
-    """Refuse a paragraph. Everything else is taught, not enforced.
+    """Hold the hints to fifty characters. Nothing else is enforced here.
 
-    There used to be a second rule here requiring a capitalised word — a proper
-    noun, on the theory that a hint naming nothing narrows nothing down. On the
-    Sydney render of 2026-10-01 it rejected this:
+    Two earlier rules were tried and removed. A word cap produced captions,
+    because twelve words has no room to name a thing and say anything about
+    it. A "must contain a proper noun" rule rejected a Sydney hint that
+    described the Harbour Bridge precisely and deliberately without naming it,
+    which was the format working — avoiding the answer and naming something
+    identifiable pull in opposite directions, and no regex tells them apart.
 
-        "The steel arch bridge overhead carries an electric train on its lower
-         deck between two giant granite pylons, a rare road-and-rail design."
-
-    which is the format working, not failing. Describing an unmistakable
-    structure exactly, without naming it, is precisely what "say what it
-    narrows down, without handing over the answer" asks for. The check was
-    enforcing the opposite of the rule it existed to serve.
+    A length in characters is the one thing about a hint that is not a matter
+    of judgement, so it is the one thing checked.
     """
     for clue in clues:
-        words = [w for w in clue.split() if w.strip()]
-        if len(words) > MAX_CLUE_WORDS:
+        text = clue.strip()
+        if len(text) > MAX_CLUE_CHARS:
             raise InspectError(
-                f"hint is {len(words)} words, over the {MAX_CLUE_WORDS}-word "
-                f"limit — keep it to a sentence or two: {clue!r}")
+                f"hint is {len(text)} characters, over the {MAX_CLUE_CHARS}-"
+                f"character limit — say it the way you would say it to a "
+                f"ten-year-old and then stop: {clue!r}")
 
 
 def inspect_render(image_path, *, city: str, country: str, difficulty: int,

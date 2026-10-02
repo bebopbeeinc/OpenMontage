@@ -622,36 +622,63 @@ has not COMPLETED.
      pose, or in the wrong zone, set the row status to REROLL and render
      again. Do not write clue messages
      describing something that is not in the picture.
-7.4  Then write THREE Level Win hints per image. A hint's job is to HELP
-     THE PLAYER GUESS WHERE THIS IS. This is the shape:
+7.4  Then write THREE Level Win hints per image. MAXIMUM 50 CHARACTERS
+     each, counted including spaces. This is the shape and the whole
+     length of it:
 
-       Those teal rental bikes on the sidewalk belong to the "MiBici"
-       network, which is only found in Mexico's second-largest city.
+       that church was baroque architecture
 
-7.5  What makes that one work, and what every hint must do:
-       - POINT AT SOMETHING SPECIFIC AND VISIBLE, the way a person would
-         say it: "those teal rental bikes on the sidewalk". Not "a curved
-         bay is lined with high-rises", which describes the view the
-         player is already looking at and narrows nothing down.
-       - NAME IT. A hint is only useful if it names the identifiable
-         thing: the MiBici network, the Hangul alphabet, a plate format,
-         a bollard style, a tree species, a bus livery. "A sign" helps
-         nobody; "a blue sign lettered in Hangul" is a hint.
-       - SAY WHAT IT NARROWS DOWN, WITHOUT HANDING OVER THE ANSWER.
-         "only found in Mexico's second-largest city" leaves the player
-         the last step. Never write "which means this is Guadalajara".
-       - TEACH SOMETHING. A good hint is worth knowing after the level
-         is over.
-7.6  Tone: conversational, like a person telling you a fun fact — not a
-     label on a diagram. One or two sentences, up to about thirty words.
-     Internationally readable. No category prefixes, no square brackets,
-     no formatting of any kind.
+7.5  Say it the way a person says it to a 10-year-old standing next to
+     them: point at the thing, name what it is, stop. No preamble, no
+     second clause, no explaining why it matters. Plain words a child
+     already knows, or one worth learning — "baroque", "Hangul",
+     "cobblestones" — but never a sentence that needs a second sentence.
+
+       - POINT AT SOMETHING ACTUALLY VISIBLE and name it: the alphabet
+         on the signs, the shape of the plates, the colour of the kerb,
+         the style of the church, the brand on the bikes, the tree.
+       - DO NOT NAME THE PLACE. Never the city, region or country being
+         asked for. "Those signs are in Hangul" is a hint; "you are in
+         Korea" is the answer.
+       - No formatting of any kind: no brackets, no category labels.
+
+7.6  Only what is ACTUALLY in the picture, and only what is LEGIBLE at
+     the size it appears. A hint describing something absent makes the
+     level unfair; one describing something unreadable makes it
+     impossible. This is why hints are written from the render and never
+     from the prompt.
+
 7.7  The three, in order:
        - hint 1: the strongest — what most narrows down where this is
        - hint 2: the second strongest, about something DIFFERENT
        - hint 3: a smaller, less obvious detail a sharp player would spot
      Chonky is never a hint. He is what the player hunts, not evidence
      of where they are.
+
+7.7a THE FORMAT HISTORY, so none of it is tried again by accident.
+     Three formats have shipped:
+
+       1. Twelve words, key nouns in [brackets], a category prefix.
+          Produced captions — "Bay: A curved [bay] is lined with white
+          high-rises" — because twelve words has no room to name a thing
+          AND say anything about it, so it kept the describing half and
+          dropped the helping half.
+       2. About thirty words, conversational, naming a diagnostic
+          feature and what it narrowed the place down to. Roughly 130
+          characters: "Those teal rental bikes belong to the MiBici
+          network, which is only found in Mexico's second-largest city."
+       3. THIS ONE. Fifty characters, a ten-year-old's register.
+
+     Fifty characters fits only the first half of (2) — the visible
+     thing, not the inference. That is the deliberate trade: the hint
+     points and names, and the player works out the rest.
+
+     Beyond length, nothing about a hint is checked in code. A word cap
+     produced the captions in (1). A "must name something identifiable"
+     rule rejected a hint describing the Sydney Harbour Bridge exactly
+     and deliberately without naming it — which was the format working.
+     Avoiding the answer and naming something identifiable pull in
+     opposite directions, and no regex tells them apart.
 
 ---------------------------------------------------------------------
 8. FILENAMES AND DELIVERY (STEP D)

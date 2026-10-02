@@ -26,15 +26,11 @@ def _reply(payload):
     return lambda system, user, *, model=None, image=None: json.dumps(payload)
 
 
+# Fifty characters each, in the voice of someone telling a ten-year-old.
 GOOD = {
-    "clues": ["The blue road sign carries Hangul lettering, the alphabet "
-              "invented in the 1440s and used nowhere outside the Korean "
-              "peninsula.",
-              "A Taegukgi flies beside the gate — that red-and-blue circle "
-              "with its four black trigrams belongs to one country's flag "
-              "and no other.",
-              "Those yellow-and-white striped kerbs are a Korean road "
-              "marking, and they mean no stopping here at any hour."],
+    "clues": ["Those blue signs are written in Hangul",
+              "That flag has a red and blue circle",
+              "The kerb is painted yellow and white"],
     "clue_words": ["sign", "flag", "kerb"],
     "names_the_place": False,
 }
@@ -45,7 +41,7 @@ def test_it_returns_clues_taken_from_the_image(tmp_path):
     Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
     out = inspect_render(img, city="Seoul", country="South Korea",
                            difficulty=2, caller=_reply(GOOD))
-    assert out["clues"][0].startswith("The blue road sign")
+    assert out["clues"][0].startswith("Those blue signs")
     assert out["clue_words"] == ["sign", "flag", "kerb"]
 
 
@@ -178,11 +174,6 @@ def _asked(tmp_path):
 
 
 
-def test_the_bracket_convention_is_stated(tmp_path):
-    asked = _asked(tmp_path)
-    assert "[" in asked and "square bracket" in asked.lower()
-
-
 
 def test_the_three_clues_have_their_assigned_jobs(tmp_path):
     """Strongest first, something different second, a subtle one third."""
@@ -190,28 +181,6 @@ def test_the_three_clues_have_their_assigned_jobs(tmp_path):
     assert "strongest" in asked
     assert "semi-hidden" in asked or "less obvious" in asked
 
-
-def test_an_overlong_clue_is_rejected():
-    """The cap guards against a paragraph. It moved from 32 to 48 words when
-    32 threw away a good 33-word hint, so the fixture has to be a real
-    paragraph rather than a long sentence."""
-    long_clue = ("A narrow street paved with rounded cobblestones and a smooth "
-                 "flagstone walkway running straight down the middle, with "
-                 "shuttered windows above and washing strung between the "
-                 "balconies, while a scooter leans against the wall and a cat "
-                 "watches from a doorway in the warm late afternoon light that "
-                 "falls along one side of the lane and leaves the other in "
-                 "deep shade for most of the day.")
-    with pytest.raises(I.InspectError):
-        I.check_clues([long_clue, "A Peruvian flag flies.", "c"])
-
-
-def test_clues_within_the_limit_pass():
-    I.check_clues([
-        "Landmark: The [Eiffel Tower] rises behind the fountains.",
-        "Flag: A blue-white-red [French flag] flies from the pole.",
-        "Street furniture: Green cast-iron [Wallace fountains] mark [Paris].",
-    ])
 
 
 # --------------------------------------------------------------------------
@@ -237,66 +206,10 @@ def test_the_hint_must_narrow_the_place_down(tmp_path):
     assert "narrow" in asked or "where" in asked
 
 
-def test_the_hint_must_not_hand_over_the_answer(tmp_path):
-    """"Mexico's second-largest city", never "Guadalajara"."""
-    asked = _asked(tmp_path)
-    assert "second-largest" in asked or "without naming" in asked.lower()
 
 
-def test_the_worked_example_is_shown(tmp_path):
-    """One good example teaches the shape better than any list of rules."""
-    asked = _asked(tmp_path)
-    assert "MiBici" in asked
 
 
-def test_the_tone_is_conversational(tmp_path):
-    asked = _asked(tmp_path).lower()
-    assert "conversational" in asked or "like a person" in asked
-
-
-def test_brackets_and_category_labels_are_forbidden(tmp_path):
-    """The prompt must ban the old format, not demand it."""
-    asked = _asked(tmp_path).lower()
-    assert "no square brackets" in asked
-    assert "no category prefixes" in asked
-
-
-def test_a_caption_is_no_longer_refused_by_the_checker():
-    """Retired rule, kept as a record of why.
-
-    This used to assert that "A curved bay is lined with white high-rises"
-    was rejected, via a check requiring a proper noun somewhere in the hint.
-    On the Sydney render of 2026-10-01 that same check threw away a hint
-    describing the Harbour Bridge precisely and deliberately without naming
-    it — which is the format working — and cost the render its whole clue
-    pass. Avoiding the answer and naming something identifiable pull in
-    opposite directions, and no regex tells them apart.
-
-    A caption is now prevented by the instructions and the worked example,
-    and caught by the operator reading the clues on the tile.
-    """
-    I.check_clues([
-        "A curved bay is lined with white high-rises and moored boats.",
-        "Those teal rental bikes belong to the MiBici network, found only "
-        "in Mexico's second-largest city.",
-        "The pavement lettering is Hangul, which means you are in Korea.",
-    ])
-
-
-def test_a_hint_that_names_something_identifiable_passes():
-    I.check_clues([
-        "Those teal rental bikes on the sidewalk belong to the MiBici network, "
-        "which is only found in Mexico's second-largest city.",
-        "The blue road signs use Hangul, the alphabet invented in the 1440s and "
-        "used nowhere but the Korean peninsula.",
-        "Those orange flexible bollards with reflective bands are a fixture of "
-        "South Korean streets.",
-    ])
-
-
-def test_room_to_actually_say_something():
-    """The 12-word cap is what forced the captions. Caglar's own example is 25."""
-    assert I.MAX_CLUE_WORDS >= 25
 
 
 # --------------------------------------------------------------------------
@@ -384,34 +297,6 @@ def test_a_reply_without_the_new_fields_still_works(tmp_path):
 # took the identity and clue verdicts down with it.
 # --------------------------------------------------------------------------
 
-def test_a_hint_one_word_over_is_not_thrown_away():
-    """Cape Town, 33 words, rejected by a 32-word cap. It is a good hint.
-
-    The cap is a guard against a paragraph, not a style rule; Caglar's own
-    exemplar runs to 25 and there is nothing magic about 32.
-    """
-    I.check_clues([
-        "That flat-topped mountain behind the rooftops, its summit trailing a "
-        "cloud like a tablecloth, is Table Mountain — a natural landmark that "
-        "rises directly over the downtown of one specific African coastal city.",
-        "The blue road signs use Hangul, used nowhere but the Korean peninsula.",
-        "Those orange bollards are a South Korean fixture.",
-    ])
-
-
-def test_a_hint_may_be_diagnostic_without_naming_a_proper_noun():
-    """Sydney: "steel arch bridge ... electric train ... granite pylons".
-
-    Requiring a capitalised word contradicted the rule that matters more —
-    a hint must NOT hand over the answer. Describing an unmistakable structure
-    precisely, without naming it, is the format working, not failing.
-    """
-    I.check_clues([
-        "The steel arch bridge overhead carries an electric train on its lower "
-        "deck between two giant granite pylons, a rare road-and-rail design.",
-        "The blue road signs use Hangul, used nowhere but the Korean peninsula.",
-        "Those orange bollards are a South Korean fixture.",
-    ])
 
 
 def test_a_paragraph_is_still_refused():
@@ -431,4 +316,73 @@ def test_json_after_a_line_of_prose_is_still_read(tmp_path):
              "JSON:\n\n```json\n" + json.dumps(GOOD) + "\n```")
     out = inspect_render(img, city="Venice", country="Italy", difficulty=2,
                          caller=lambda s, u, *, model=None, image=None: noisy)
-    assert out["clues"][0].startswith("The blue road sign")
+    assert out["clues"][0].startswith("Those blue signs")
+
+
+# --------------------------------------------------------------------------
+# The hint format, third revision (Caglar, 2026-10-02): max 50 CHARACTERS,
+# and the voice of a person telling a ten-year-old something.
+#
+#     "that church was baroque architecture"        -- 36 characters
+#
+# The MiBici shape this replaces ran to about 130 characters and carried two
+# halves: the thing you can see, and what it narrows the place down to. Fifty
+# characters only fits the first half. The hint now points at the thing and
+# names it, and the player does the rest.
+# --------------------------------------------------------------------------
+
+def test_a_fifty_character_hint_passes():
+    I.check_clues(["That church was baroque architecture",
+                   "Those blue signs are written in Hangul",
+                   "The plates are yellow, that means Dutch"])
+
+
+def test_a_hint_over_fifty_characters_is_refused():
+    with pytest.raises(I.InspectError) as exc:
+        I.check_clues([
+            "Those teal rental bikes belong to the MiBici network, which is "
+            "only found in Mexico's second-largest city.",
+            "short one", "another short one"])
+    assert "50" in str(exc.value)
+
+
+def test_exactly_fifty_is_allowed_and_fifty_one_is_not():
+    I.check_clues(["x" * 50, "a", "b"])
+    with pytest.raises(I.InspectError):
+        I.check_clues(["x" * 51, "a", "b"])
+
+
+def test_the_limit_is_stated_in_characters_not_words(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "50 characters" in asked
+    assert "thirty words" not in asked
+
+
+def test_the_ten_year_old_voice_and_example_are_shown(tmp_path):
+    asked = _asked(tmp_path)
+    assert "baroque architecture" in asked
+    assert "10-year-old" in asked or "ten-year-old" in asked
+
+
+# --------------------------------------------------------------------------
+# Twelve tests were removed here on 2026-10-02, when the hint format changed
+# for the third time. They asserted the two formats that came before:
+#
+#   1. Twelve words with [brackets] round the key nouns. It produced captions
+#      — "Bay: A curved [bay] is lined with white high-rises" — because twelve
+#      words has no room to name a thing AND say anything about it, so it kept
+#      the describing half and dropped the helping half.
+#   2. Up to about thirty words, conversational, naming a diagnostic feature
+#      and what it narrowed the place down to. Roughly 130 characters.
+#
+# The current rule is fifty characters in the voice of someone telling a
+# ten-year-old, which only fits the first half of (2). What those tests
+# guarded is now guarded by the character cap and the worked example; keeping
+# them would have meant asserting three incompatible formats at once.
+#
+# Two checks beyond length were tried and are gone for good: a word cap, which
+# produced the captions above, and a "must contain a proper noun" rule, which
+# rejected a Sydney hint describing the Harbour Bridge precisely and
+# deliberately without naming it. Avoiding the answer and naming something
+# identifiable pull in opposite directions, and no regex tells them apart.
+# --------------------------------------------------------------------------

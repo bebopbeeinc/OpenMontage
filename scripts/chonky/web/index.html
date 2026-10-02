@@ -611,21 +611,6 @@ function render(row, job, body) {
   right.appendChild(vfim);
   imgs.appendChild(right);
 
-  // The model sheet, beside the render. Size and zone are measured; likeness
-  // is not and cannot be, so the one judgement only a person can make is the
-  // one that was being made from memory. A plausible ginger cat passes every
-  // automated check in this pipeline.
-  const ref = el('div', 'pane');
-  ref.appendChild(el('div', 'cap', 'Chonky — is the cat in the render THIS cat?'));
-  const refim = new Image();
-  refim.src = 'api/reference';
-  refim.style.maxHeight = '260px';
-  refim.alt = 'Chonky model sheet';
-  ref.appendChild(refim);
-  ref.appendChild(el('div', 'hint',
-    'Body shape, markings and face come from here. An ordinary ginger cat is a failed render.'));
-  imgs.appendChild(ref);
-
   body.appendChild(imgs);
 
   if (row.prompt) {
@@ -644,25 +629,6 @@ function render(row, job, body) {
 
   const badges = el('div', 'badges');
   body.appendChild(badges);
-
-  const clues = [0, 1, 2].map(i => {
-    const wrap = el('div');
-    const inp = el('input', 'clue');
-    inp.placeholder = `Clue ${i + 1} — max 12 words, [bracket] the key nouns`;
-    const wc = el('div', 'wc', '0 words');
-    inp.oninput = () => {
-      const n = inp.value.trim() ? inp.value.trim().split(/\s+/).length : 0;
-      wc.textContent = `${n} words`;
-      wc.className = 'wc' + (n > 12 ? ' over' : '');
-    };
-    wrap.append(inp, wc);
-    body.appendChild(wrap);
-    return inp;
-  });
-
-  const words = el('input', 'clue');
-  words.placeholder = 'Three one-word features for the filename, comma separated (arch, calcada, clock)';
-  body.appendChild(words);
 
   const actions = el('div', 'row');
   const approve = el('button', null, 'Approve → Drive + sheet');
@@ -719,8 +685,11 @@ function render(row, job, body) {
     const res = await api('api/approve', {
       image_id: job.image_id, difficulty: row.difficulty,
       city: row.city, country: row.country,
-      clue_words: words.value.split(',').map(s => s.trim()).filter(Boolean),
-      measurement: current, clues: clues.map(c => c.value), prompt: row.prompt,
+      // Written by STEP C from the finished render. Typing them here meant
+      // describing the picture from memory while looking at it — which is
+      // how a plate nobody could read got cited as a clue.
+      clue_words: row.clue_words || [],
+      measurement: current, clues: row.clues || [], prompt: row.prompt,
     });
     out.textContent = res.error ? ('✗ ' + res.error)
                                 : `✓ ${res.filename} — ${res.kb} KB`;
