@@ -164,3 +164,14 @@ def test_a_failed_pull_never_restarts(monkeypatch):
 def test_the_boot_commit_is_recorded_at_import():
     """If this is not captured at start-up there is nothing to compare against."""
     assert hasattr(server, "_BOOT_HEAD")
+
+
+def test_the_launcher_page_is_not_cached():
+    """Same fault as the Chonky UI: inline JS, served from disk, cached anyway.
+
+    This is the page carrying the Deploy button, so a stale copy of it is a
+    stale copy of the control used to un-stale everything else.
+    """
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "").lower()

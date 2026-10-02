@@ -124,9 +124,30 @@ def _parse_tsv(tsv: str) -> list[dict]:
 # Routes
 # --------------------------------------------------------------------------
 
+# The page carries all of its JavaScript inline and the file is read from disk
+# on every request, so a deploy always lands here. The browser was free to keep
+# the old copy anyway, because nothing on the response said not to — which
+# shows up as a feature that works against the server and does not exist in
+# the operator's tab. Cheap to send, and this page is never hot.
+_NO_STORE = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    return HTMLResponse((HERE / "index.html").read_text())
+    return HTMLResponse((HERE / "index.html").read_text(), headers=_NO_STORE)
+
+
+@app.middleware("http")
+async def _never_cache_the_api(request, call_next):
+    """Same rule for the JSON. A stale render list is the same bug.
+
+    Applied as middleware rather than per-route so a new endpoint cannot
+    quietly opt itself back into being cached.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api/") or request.url.path == "/":
+        response.headers.update(_NO_STORE)
+    return response
 
 
 def _mask(value: str) -> str:

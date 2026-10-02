@@ -216,3 +216,27 @@ def test_the_model_sheet_is_servable_for_comparison():
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
     assert len(r.content) > 10_000
+
+
+# --------------------------------------------------------------------------
+# The UI must not be cached by the browser.
+#
+# index.html carries all of the page's JavaScript inline, and the server reads
+# it from disk on every request — so a deploy always lands server-side. The
+# browser was free to keep serving the old copy anyway, because nothing on the
+# response said otherwise. The visible symptom is a feature that works on the
+# server and does not exist for the operator: on 2026-10-02 the per-level
+# emphasis dropdowns switched correctly when driven against the live server
+# and did nothing at all in Caglar's tab.
+# --------------------------------------------------------------------------
+
+def test_the_ui_is_served_uncacheable():
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "").lower()
+
+
+def test_the_api_is_not_cached_either():
+    """A stale render list is the same bug wearing different clothes."""
+    r = client.get("/api/renders")
+    assert "no-store" in r.headers.get("cache-control", "").lower()

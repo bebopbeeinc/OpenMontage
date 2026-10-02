@@ -224,12 +224,18 @@ for _pipeline_id, _module in PIPELINE_MODULES.items():
 
 @app.get("/")
 async def home():
-    return FileResponse(WEB_DIR / "index.html")
+    # Inline JS, read from disk per request, and cached by the browser anyway
+    # because nothing said otherwise — the same fault that made the Chonky
+    # UI's new controls invisible in the operator's tab. This is the page with
+    # the Deploy button on it, so a stale copy is a stale copy of the cure.
+    return FileResponse(WEB_DIR / "index.html",
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @app.get("/archive")
 async def archive():
-    return FileResponse(WEB_DIR / "archive.html")
+    return FileResponse(WEB_DIR / "archive.html",
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 @app.get("/api/pipelines")
