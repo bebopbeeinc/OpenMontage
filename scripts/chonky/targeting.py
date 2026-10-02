@@ -7,7 +7,7 @@ to lean.
 from __future__ import annotations
 
 
-def next_zone(rows: list[dict], viewframe_pct: int = 70) -> dict:
+def next_zone(rows: list[dict], viewframe_pct: int = 10) -> dict:
     vf = sum(1 for r in rows if r.get("chonky_zone") == "viewframe")
     margin = sum(1 for r in rows if r.get("chonky_zone") == "margin")
     total = vf + margin

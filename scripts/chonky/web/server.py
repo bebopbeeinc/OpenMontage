@@ -48,7 +48,7 @@ from scripts.chonky.imaging import viewframe_crop  # noqa: E402
 from scripts.chonky.measure import detector_status, verify  # noqa: E402
 from scripts.chonky.render import (  # noqa: E402
     ASPECT, ASPECT_RATIOS, CHARACTER, MODEL, RESOLUTION, RESOLUTION_TIERS,
-    normalise_aspect, normalise_tier, render_once, sizes_for,
+    ASPECT, DEFAULT_SIZE, normalise_aspect, normalise_tier, render_once, sizes_for,
 )
 # Imported under another name: the TSV route below is also called
 # `prompts`, and being defined later it silently replaced the module.
@@ -255,7 +255,7 @@ def health() -> dict:
         "model": MODEL,
         "default_aspect": ASPECT,
         "default_resolution": RESOLUTION,
-        "default_size": [geo.IMG_W, geo.IMG_H],
+        "default_size": list(DEFAULT_SIZE),
         "clue_families": prompt_writer.CLUE_FAMILIES,
         "all_ready": all(c["ok"] for c in ready.values()),
         "ready": ready,
@@ -271,7 +271,7 @@ def prompts(payload: dict) -> dict:
     landing in the majority zone.
     """
     rows = _parse_tsv(payload.get("tsv", ""))
-    pct = int(payload.get("viewframe_pct", 70))
+    pct = int(payload.get("viewframe_pct", 10))
 
     out: list[dict] = []
     history: list[dict] = []
@@ -413,7 +413,7 @@ def draft_only(payload: dict) -> dict:
     """
     used = _used_locations()
     zone = payload.get("target_zone") or next_zone([], int(
-        payload.get("viewframe_pct", 70)))["target_zone"]
+        payload.get("viewframe_pct", 10)))["target_zone"]
     spec = payload.get("city")
     city, country = _split_location(spec) if spec else (None, None)
     try:
@@ -459,7 +459,7 @@ def generate(payload: dict) -> dict:
                 status_code=400)
         levels = [level]
     cities = payload.get("cities") or []
-    pct = int(payload.get("viewframe_pct", 70))
+    pct = int(payload.get("viewframe_pct", 10))
     weights = payload.get("weights") or {}
     width = payload.get("width")
     height = payload.get("height")
@@ -468,6 +468,14 @@ def generate(payload: dict) -> dict:
         resolution = normalise_tier(payload.get("resolution"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # A caller that names no size gets the default one, in pixels, rather than
+    # whatever the tier happens to mean for this ratio — 2k on 4:5 returns
+    # 1344x1680, which is not what "2k" leads anyone to expect. Only applied
+    # at the default ratio: a square size on a 16:9 request would be a
+    # contradiction, and there the tier is the honest answer.
+    if width is None and height is None and aspect == ASPECT:
+        width, height = DEFAULT_SIZE
 
     used = _used_locations()
     history: list[dict] = []

@@ -22,7 +22,7 @@ def test_renders_once_with_the_authored_settings(tmp_path):
     assert result == out
     assert len(calls) == 1, "exactly one render call per image"
     assert calls[0]["model"] == MODEL == "GPT Image 2.5 Sunburst"
-    assert calls[0]["aspect"] == ASPECT == "4:5"
+    assert calls[0]["aspect"] == ASPECT == "1:1"
     # Lowercase: OpenArt's resolutionTier enum is 1k/2k/4k, and "4K" sent
     # under the wrong field name was silently dropped for a day.
     assert calls[0]["resolution"] == RESOLUTION == "4k"

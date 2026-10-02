@@ -135,19 +135,32 @@ Do not invent or approximate a location.
      generic stretch of forest is NOT an acceptable level 5 image, no
      matter how unfamiliar the place is: with nothing to reason from,
      the player is guessing, not playing.
-3.3  THE FRAME. Every image is one 4:5 PORTRAIT source, 2048 x 2560,
-     inside which a 9:16 VIEWFRAME of 1200 x 2133 sits centred. The
-     ViewFrame is what the player opens on. Everything outside it is
-     exploration canvas reached by panning.
+3.3  THE FRAME. Every image is one square source, 2560 x 2560, inside
+     which a 9:16 VIEWFRAME of 1200 x 2133 sits centred. The ViewFrame
+     is what the player opens on. Everything outside it is exploration
+     canvas reached by panning.
 
-                        2048 wide
+                        2560 wide
            +------+---------------+------+
-           | 424  |   VIEWFRAME   | 424  |     top margin    213
+           | 680  |   VIEWFRAME   | 680  |     top margin    213
            |      |   1200x2133   |      |     bottom margin 214
-           | pan  |  x 424-1624   | pan  |
+           | pan  |  x 680-1880   | pan  |
            |      |  y 213-2346   |      |
            +------+---------------+------+
                         2560 tall
+
+     SQUARE SINCE 2026-10-02. It was 4:5 at 2048 x 2560, and the change
+     costs nothing: at 2560 square the ViewFrame comes out at exactly
+     the same 1200 x 2133, so the size band is unchanged at 110-210 px
+     and every figure quoted in this manual still reads true. What grows
+     is the side margin, 424 px to 680 px — which is pan reward, the
+     thing the margins exist for.
+
+     The authored reference in geometry.py remains 4:5 at 2048 x 2560,
+     because that is what the band is defined against. The rules are
+     proportional and the code takes whatever frame actually arrives, so
+     a render at any other size gets its ViewFrame and its band in
+     proportion without anything here changing.
 
      Compose FOR the ViewFrame. It must read as a deliberate portrait
      photograph in its own right, not as a crop out of a panorama. The
@@ -538,12 +551,15 @@ Do not invent or approximate a location.
 Render each prompt as its own OpenArt job, with exactly these settings:
 
   model             GPT Image 2.5 Sunburst
-  aspect            4:5        <-- PORTRAIT. Returns 2048 x 2560.
-  resolution        4K
+  aspect            1:1        <-- SQUARE. 2560 x 2560 by default.
+  resolution        4K         <-- a size in pixels overrides the tier
   character         Chonky     <-- the model sheet in character_library/chonky/
 
   MEASURED BEHAVIOUR, so it does not surprise you:
-    - customWidth / customHeight are IGNORED. 4:5 always returns 2048 x 2560.
+    - customWidth / customHeight ARE honoured: 2048x2048 asked for on a
+      4:5 aspect came back 2048x2048. An earlier note here said they were
+      ignored; that was measured before the tier was being sent under the
+      right field name, and the two failures looked identical.
     - outputFormat is IGNORED. You get a ~9 MB PNG. The pipeline converts it
       to JPEG locally before delivery; nothing you can pass changes this.
 

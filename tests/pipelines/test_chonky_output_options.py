@@ -121,3 +121,53 @@ def test_no_exact_size_means_no_custom_fields_are_sent():
 
     assert "customWidth" not in captured
     assert "lockAspectRatio" not in captured
+
+
+# --------------------------------------------------------------------------
+# Defaults changed 2026-10-02 (Caglar): square frames, and a ViewFrame share
+# of 10%.
+#
+# The authored reference stays 4:5 at 2048x2560 — that is what the 110-210 px
+# band is defined against, and moving it would silently rescale every rule in
+# the manual. What changes is what the tool renders by default. The geometry
+# functions already take the frame they are judging, so a square frame gets
+# its ViewFrame and its band in proportion without any new arithmetic.
+# --------------------------------------------------------------------------
+
+def test_the_default_ratio_is_square():
+    from scripts.chonky.render import ASPECT
+    assert ASPECT == "1:1"
+
+
+def test_the_default_size_is_2560_square():
+    from scripts.chonky.render import DEFAULT_SIZE
+    assert DEFAULT_SIZE == (2560, 2560)
+
+
+def test_that_size_is_offered_for_a_square_frame():
+    """It has to be selectable in the UI, not only the default."""
+    from scripts.chonky.render import sizes_for
+    assert (2560, 2560) in sizes_for("1:1")
+
+
+def test_the_reference_frame_is_untouched():
+    """Moving it would rescale the size band and every number in the manual."""
+    from scripts.chonky import geometry as geo
+    assert (geo.IMG_W, geo.IMG_H) == (2048, 2560)
+    assert geo.size_band() == (110, 210)
+
+
+def test_a_square_frame_gets_its_viewframe_in_proportion():
+    from scripts.chonky import geometry as geo
+    # 2560 square is the happy number: the ViewFrame comes out at exactly the
+    # authored 1200x2133, so the band is unchanged at 110-210 and every figure
+    # quoted in the manual still reads true. What grows is the side margin —
+    # 680 px against 424 — which is pan reward, the thing the margins are for.
+    assert geo.viewframe_box((2560, 2560)) == (680, 213, 1880, 2346)
+    assert geo.size_band((2560, 2560)) == (110, 210)
+
+
+def test_the_default_viewframe_share_is_ten_percent():
+    from scripts.chonky.targeting import next_zone
+    import inspect as _inspect
+    assert _inspect.signature(next_zone).parameters["viewframe_pct"].default == 10

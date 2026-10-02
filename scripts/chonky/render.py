@@ -36,8 +36,17 @@ def normalise_model(model: Optional[str]) -> str:
         f"a per-render setting: Chonky's identity and the measured geometry "
         f"both depend on it")
 
-ASPECT = "4:5"
+# Square by default (Caglar, 2026-10-02). The authored reference in
+# geometry.py stays 4:5 at 2048x2560 — that is what the size band is defined
+# against — and the geometry functions take whatever frame actually arrives,
+# so a square render gets its ViewFrame and band in proportion.
+ASPECT = "1:1"
 RESOLUTION = "4k"
+
+# The size a render gets when none is asked for. Stated in pixels because a
+# tier means different pixels for every ratio — 2k on 4:5 is 1344x1680, which
+# is not what anybody reading "2k" expects.
+DEFAULT_SIZE = (2560, 2560)
 
 # Straight from the model's own form schema (openart_model_form_get for
 # gpt-image-2-5-sunburst/image2image), not from memory. The schema forbids
