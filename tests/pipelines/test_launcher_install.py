@@ -175,3 +175,24 @@ def test_the_launcher_page_is_not_cached():
     r = client.get("/")
     assert r.status_code == 200
     assert "no-store" in r.headers.get("cache-control", "").lower()
+
+
+def test_the_mounted_api_is_uncacheable_too():
+    """Through the launcher, the way production actually serves it.
+
+    The Chonky app's own TestClient mounts it at root, so a path check written
+    as startswith("/api/") passes there and fails in production, where the app
+    is mounted at /chonky and the path is "/chonky/api/renders". That is
+    exactly what happened: page uncacheable, JSON still cached.
+    """
+    r = client.get("/chonky/api/health")
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "").lower()
+
+
+def test_render_images_stay_cacheable():
+    """No-store on a 9 MB PNG would re-download the gallery on every paint."""
+    r = client.get("/chonky/api/reference")
+    if r.status_code != 200:
+        return                      # no model sheet in this environment
+    assert "no-store" not in r.headers.get("cache-control", "").lower()

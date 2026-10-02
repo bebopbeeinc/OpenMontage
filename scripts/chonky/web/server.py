@@ -141,11 +141,19 @@ def index() -> HTMLResponse:
 async def _never_cache_the_api(request, call_next):
     """Same rule for the JSON. A stale render list is the same bug.
 
-    Applied as middleware rather than per-route so a new endpoint cannot
-    quietly opt itself back into being cached.
+    Keyed on what came back rather than on the path. The first version of this
+    tested `path.startswith("/api/")`, which is true under the app's own
+    TestClient and false in production, where the app is mounted at /chonky and
+    the path is "/chonky/api/renders" — so the test passed and the JSON stayed
+    cacheable. What a response IS does not depend on where it was mounted.
+
+    Images are left alone deliberately: a render is a 9 MB PNG that never
+    changes under its id, and no-store there would re-download the gallery on
+    every repaint.
     """
     response = await call_next(request)
-    if request.url.path.startswith("/api/") or request.url.path == "/":
+    kind = response.headers.get("content-type", "")
+    if not kind.startswith(("image/", "video/", "font/")):
         response.headers.update(_NO_STORE)
     return response
 
