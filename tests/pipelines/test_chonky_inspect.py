@@ -253,9 +253,9 @@ def test_the_identity_verdict_is_returned(tmp_path):
     img = tmp_path / "r.png"
     Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
     out = inspect_render(img, city="Seoul", country="South Korea", difficulty=2,
-                         caller=_reply(dict(GOOD, is_chonky=False,
+                         caller=_reply(dict(GOOD, is_chonky="no",
                                             identity_note="ordinary tabby, no bib")))
-    assert out["is_chonky"] is False
+    assert out["is_chonky"] == "no"
     assert out["identity_note"] == "ordinary tabby, no bib"
 
 
@@ -386,3 +386,73 @@ def test_the_ten_year_old_voice_and_example_are_shown(tmp_path):
 # deliberately without naming it. Avoiding the answer and naming something
 # identifiable pull in opposite directions, and no regex tells them apart.
 # --------------------------------------------------------------------------
+
+
+# --------------------------------------------------------------------------
+# The identity verdict is three-valued, because a boolean had nowhere to put
+# "I cannot tell".
+#
+# Measured on the live batch of 2026-10-02: a Riga render whose cat is an
+# unresolvable orange speck beside the bollards — 16 px, YOLO could not find
+# it at all — came back is_chonky TRUE. A Mexico City cat at 91 px, where the
+# bib simply does not resolve, also came back TRUE. Both checked against the
+# images; both wrong or over-claimed.
+#
+# The pass had been told "if he is too small to tell, say so in the note
+# rather than guessing", but the field it had to answer in was a boolean, so
+# uncertainty rounded to a confident answer. That is a schema error, not a
+# model error. Verified in the other direction the verdict is sound: Hanoi at
+# 152 px said "ordinary orange-and-white cat, visible normal legs" and that is
+# exactly what the picture shows.
+# --------------------------------------------------------------------------
+
+def test_unsure_is_offered_and_explained(tmp_path):
+    asked = _asked(tmp_path).lower()
+    assert "unsure" in asked
+    assert "too small" in asked
+
+
+def test_an_unsure_verdict_survives_as_unsure(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Riga", country="Latvia", difficulty=2,
+                         caller=_reply(dict(GOOD, is_chonky="unsure",
+                                            identity_note="a speck, cannot resolve the bib")))
+    assert out["is_chonky"] == "unsure"
+    assert "cannot resolve" in out["identity_note"]
+
+
+def test_yes_and_no_come_back_as_themselves(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    for given, expected in (("yes", "yes"), ("no", "no")):
+        out = inspect_render(img, city="Riga", country="Latvia", difficulty=2,
+                             caller=_reply(dict(GOOD, is_chonky=given)))
+        assert out["is_chonky"] == expected
+
+
+def test_a_legacy_boolean_is_read_as_yes_or_no(tmp_path):
+    """Sidecars written before 2026-10-02 hold true/false."""
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    for given, expected in ((True, "yes"), (False, "no")):
+        out = inspect_render(img, city="Riga", country="Latvia", difficulty=2,
+                             caller=_reply(dict(GOOD, is_chonky=given)))
+        assert out["is_chonky"] == expected
+
+
+def test_an_unrecognised_verdict_is_treated_as_unsure(tmp_path):
+    """Never invent confidence out of a word nobody defined."""
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Riga", country="Latvia", difficulty=2,
+                         caller=_reply(dict(GOOD, is_chonky="probably?")))
+    assert out["is_chonky"] == "unsure"
+
+
+def test_not_asked_stays_none(tmp_path):
+    img = tmp_path / "r.png"
+    Image.new("RGB", (64, 80), (120, 120, 120)).save(img)
+    out = inspect_render(img, city="Riga", country="Latvia", difficulty=2,
+                         caller=_reply(GOOD))
+    assert out["is_chonky"] is None

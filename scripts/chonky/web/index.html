@@ -65,6 +65,7 @@
   .state{font-size:12px;margin:2px 0 8px}
   .ok-txt{color:var(--ok)}
   .bad-txt{color:var(--bad)}
+  .warn-txt{color:var(--warn)}
   .actions{display:flex;gap:8px;align-items:center;margin-top:auto;flex-wrap:wrap}
   .actions button{padding:6px 12px;font-size:12px}
 
@@ -329,11 +330,18 @@ function tile(r) {
   // failed image, and until 2026-10-01 nothing in the pipeline ever said so —
   // the measurement records a box and a height, and YOLO only knows "cat".
   // null means the question was never asked, which is not the same as "no".
-  if (r.is_chonky === false) {
+  // Three-valued since 2026-10-02. A boolean had nowhere to put "I cannot
+  // tell", so a 16px speck came back as a confident yes. "unsure" is not a
+  // failure — it means nobody could verify him at that size, which is itself
+  // worth seeing, because a player cannot recognise him there either.
+  if (r.is_chonky === 'no') {
     t.appendChild(el('div', 'state bad-txt',
       '⚠ not Chonky — ' + (r.identity_note || 'reads as an ordinary cat')));
-  } else if (r.is_chonky === true) {
+  } else if (r.is_chonky === 'yes') {
     t.appendChild(el('div', 'state ok-txt', '✓ reads as Chonky'));
+  } else if (r.is_chonky === 'unsure') {
+    t.appendChild(el('div', 'state warn-txt',
+      '? could not tell — ' + (r.identity_note || 'too small or unclear to judge')));
   }
 
   // Clue coverage. Section 3.2b sets a floor of two real clues at EVERY
@@ -652,7 +660,11 @@ function render(row, job, body) {
       badges.append(el('span', 'b bad',
         'box from the colour fallback — check it and drag if wrong'));
     }
-    approve.disabled = !(sizeOk && zoneOk);
+    // Never disabled. The band is the pipeline's opinion; the reviewer's is
+    // the deciding one. The red badges above already say what is wrong, and
+    // a failing render needs a second, deliberate confirmation below.
+    approve.title = (sizeOk && zoneOk) ? ''
+      : `This render failed: ${v.height_px} px ${v.size}, zone ${v.zone}.`;
     current = v;
   }
   let current = null;
@@ -680,9 +692,20 @@ function render(row, job, body) {
   };
 
   approve.onclick = async () => {
+    const bad = current && !(current.size === 'ok' && current.zone === row.target_zone);
+    if (bad) {
+      const band = current.band_px ? `${current.band_px[0]}–${current.band_px[1]} px` : 'the band';
+      if (!window.confirm(
+        `This render failed its checks:\n\n` +
+        `  Chonky is ${current.height_px} px (${current.size}) against ${band}\n` +
+        `  Zone: ${current.zone} (assigned ${row.target_zone})\n\n` +
+        `Approving files it anyway. The sheet will record that it was ` +
+        `approved despite this, not that it passed.\n\nFile it?`)) return;
+    }
     approve.disabled = true;
     out.textContent = 'delivering…';
     const res = await api('api/approve', {
+      override: !!bad,
       image_id: job.image_id, difficulty: row.difficulty,
       city: row.city, country: row.country,
       // Written by STEP C from the finished render. Typing them here meant

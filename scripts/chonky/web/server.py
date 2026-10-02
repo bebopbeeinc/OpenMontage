@@ -785,7 +785,10 @@ def renders():
             "names_the_place_detail": side.get("names_the_place_detail"),
             "broken_text": side.get("broken_text", False),
             "broken_text_detail": side.get("broken_text_detail"),
-            "is_chonky": side.get("is_chonky"),
+            # Sidecars written before the verdict went three-valued hold a
+            # boolean, including every render from the live batch that found
+            # the problem. Normalise on read so one shape reaches the UI.
+            "is_chonky": render_inspector._identity(side.get("is_chonky")),
             "identity_note": side.get("identity_note"),
             "clue_count": side.get("clue_count"),
             "clue_families": side.get("clue_families") or [],

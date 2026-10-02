@@ -164,10 +164,25 @@ a small head against a huge body, ginger tabby striping over the orange.
 
 An ordinary ginger tabby in the right place at the right size is a FAILED
 image, exactly as a wrongly-sized one is — so say so plainly when that is what
-you see. Judge only what is legible at the size he appears: if he is too small
-to tell, say so in the note rather than guessing. Report `is_chonky` and, when
-it is false or uncertain, `identity_note` saying what is wrong in a few words
-("ordinary tabby, no bib", "legs too long", "too small to tell").
+you see.
+
+Answer `is_chonky` with exactly one of three words:
+
+  "yes"     you can see the silhouette and it is his
+  "no"      you can see the silhouette and it is an ordinary cat
+  "unsure"  you cannot see the silhouette well enough to say
+
+"unsure" IS A REAL ANSWER AND IS OFTEN THE RIGHT ONE. If he is too small, too
+distant, turned away, or blurred, the honest answer is that you cannot tell.
+A 16-pixel cat at the far end of a promenade cannot be confirmed as Chonky by
+anyone — guessing "yes" there is worse than useless, because it reports a
+check that was never actually made. Do not reason from the prompt, from the
+reference sheet, or from what the picture was supposed to contain: judge only
+what you can actually resolve in these pixels.
+
+Give `identity_note` whenever the answer is not "yes", saying in a few words
+what is wrong or what stopped you ("ordinary tabby, no bib", "legs too long",
+"a speck at this distance, no bib resolvable").
 
 HOW MANY CLUES ARE REALLY THERE? Count the independent, concrete, human-made
 pieces of evidence a player could actually reason from — signage, script,
@@ -202,7 +217,7 @@ Reply with JSON only, no prose around it:
 
 {{"clues": ["...", "...", "..."],
  "clue_words": ["...", "...", "..."],
- "is_chonky": true or false,
+ "is_chonky": "yes" or "no" or "unsure",
  "identity_note": "what is wrong with the cat, or empty",
  "clue_count": a whole number,
  "clue_families": ["...", "..."],
@@ -230,6 +245,31 @@ become the filename, so no spaces and no punctuation.
 # first half, which is the deliberate trade: the hint points and names, and the
 # player makes the inference.
 MAX_CLUE_CHARS = 50
+
+
+_IDENTITY = ("yes", "no", "unsure")
+
+
+def _identity(value):
+    """Three-valued, because a boolean had nowhere to put "I cannot tell".
+
+    On the live batch of 2026-10-02 a Riga render whose cat is an unresolvable
+    speck — 16 px, YOLO could not find it at all — came back True, and a
+    Mexico City cat at 91 px where the bib does not resolve came back True as
+    well. The pass had been told to say so in the note when it could not tell,
+    but the field it answered in was a boolean, so uncertainty rounded to a
+    confident answer.
+
+    None still means "never asked". Anything unrecognised becomes "unsure",
+    because a word nobody defined is not evidence of anything. Booleans are
+    accepted for sidecars written before this existed.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    text = str(value).strip().lower()
+    return text if text in _IDENTITY else "unsure"
 
 
 def check_clues(clues: list[str]) -> None:
@@ -302,7 +342,7 @@ def inspect_render(image_path, *, city: str, country: str, difficulty: int,
     return {
         "clues": [str(c) for c in data["clues"]],
         "clue_words": [str(w) for w in data["clue_words"]],
-        "is_chonky": None if data.get("is_chonky") is None else bool(data["is_chonky"]),
+        "is_chonky": _identity(data.get("is_chonky")),
         "identity_note": str(data.get("identity_note") or ""),
         "clue_count": count,
         "clue_families": families,
