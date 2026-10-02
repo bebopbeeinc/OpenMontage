@@ -124,6 +124,7 @@
   </div>
   <details id="weights-box">
     <summary class="geo">Clue emphasis — leave any at Default to keep the manual's own weighting</summary>
+    <div id="weights-note" class="hint" style="margin:6px 0 2px"></div>
     <div id="weights" class="weights"></div>
   </details>
   <div class="row">
@@ -189,6 +190,7 @@ function fillControls(h) {
   fillSizes(h.default_aspect);
   aspect.onchange = () => fillSizes(aspect.value);
 
+  DEFAULT_WEIGHTS = h.default_weights || {};
   const host = document.getElementById('weights');
   host.innerHTML = '';
   Object.entries(h.clue_families || {}).forEach(([key, label]) => {
@@ -207,6 +209,45 @@ function fillControls(h) {
     wrap.appendChild(sel);
     host.appendChild(wrap);
   });
+
+  // Pre-fill from the level the moment it is picked, so the emphasis going
+  // into the prompt is visible before a render is paid for. These are a
+  // starting point, not a rule — every one can be set back to Default, which
+  // leaves that family out of the request entirely.
+  const diff = document.getElementById('difficulty');
+  diff.addEventListener('change', applyLevelWeights);
+  applyLevelWeights();
+}
+
+let DEFAULT_WEIGHTS = {};
+
+function applyLevelWeights() {
+  const diff = document.getElementById('difficulty');
+  const note = document.getElementById('weights-note');
+  const raw = (diff.value || '').toString();
+  const table = DEFAULT_WEIGHTS[raw];
+  const selects = document.querySelectorAll('#weights select');
+
+  if (!table) {
+    // "All" spans every level and they do not agree, so filling anything in
+    // would be a lie about one of them.
+    selects.forEach(sel => { sel.value = ''; });
+    if (note) note.textContent =
+      'All levels — emphasis left at Default, since the levels differ. '
+      + 'Pick one level to see its starting weights.';
+    return;
+  }
+  selects.forEach(sel => {
+    const w = table[sel.dataset.family];
+    sel.value = w ? String(w) : '';
+  });
+  const dropped = Array.from(selects).filter(s => !table[s.dataset.family])
+    .map(s => s.previousSibling && s.previousSibling.textContent).filter(Boolean);
+  if (note) note.textContent =
+    `Level ${raw} starting weights, from the manual's ranking (5.3) and its `
+    + `landmark rule (3.2). Change any of them; Default leaves that family out `
+    + `of the request.`
+    + (dropped.length ? `  Left out at this level: ${dropped.join(', ')}.` : '');
 }
 
 function collectWeights() {
