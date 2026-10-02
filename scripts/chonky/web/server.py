@@ -41,7 +41,6 @@ REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from scripts.chonky import emphasis  # noqa: E402
 from scripts.chonky import geometry as geo  # noqa: E402
 from scripts.chonky.deliver import deliver  # noqa: E402
 from scripts.chonky.deliver import remove as remove_delivery  # noqa: E402
@@ -287,11 +286,6 @@ def health() -> dict:
         "default_resolution": RESOLUTION,
         "default_size": list(DEFAULT_SIZE),
         "clue_families": prompt_writer.CLUE_FAMILIES,
-        # Per-level starting weights, so the UI can pre-fill the
-        # emphasis dropdowns the moment a level is picked. Authored
-        # in emphasis.py from 5.3's ranking and 3.2's landmark gate;
-        # the operator overrides any of them.
-        "default_weights": {str(k): v for k, v in emphasis.all_levels().items()},
         "all_ready": all(c["ok"] for c in ready.values()),
         "ready": ready,
     }
